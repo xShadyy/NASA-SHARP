@@ -16,7 +16,6 @@ export type CaptureResult = {
   image: Blob
 }
 
-/** CSS pixels measured from the map container's top-left corner. */
 export type CaptureRegion = { x: number; y: number; width: number; height: number }
 
 const BASE_CREDITS = 'OpenFreeMap · © OpenMapTiles · © OpenStreetMap contributors · Natural Earth'
@@ -51,7 +50,6 @@ function wrappedLines(context: CanvasRenderingContext2D, value: string, width: n
   return lines
 }
 
-/** In globe mode, unproject clamps space to the horizon; reject those samples. */
 function groundAt(map: MapLibreMap, x: number, y: number) {
   const location = map.unproject([x, y])
   const projected = map.project(location)
@@ -60,7 +58,6 @@ function groundAt(map: MapLibreMap, x: number, y: number) {
   return location
 }
 
-/** A local ellipsoidal scale, sampled in the captured region, not a Mercator guess. */
 function localScale(map: MapLibreMap, region: CaptureRegion) {
   const miles = map.getContainer().dataset.distanceUnit === 'mi'
   const conversion = miles ? 1.609344 : 1
@@ -98,7 +95,6 @@ function localScale(map: MapLibreMap, region: CaptureRegion) {
       return { width: (lower + upper) / 2, label }
     }
   }
-  // A region containing only space has no meaningful ground scale.
   return null
 }
 
@@ -120,8 +116,6 @@ function visibleOpacity(element: Element, container: HTMLElement) {
   return opacity
 }
 
-/** Pin geometry is already local Phosphor SVG; resolve its inherited color so
- * the standalone SVG image does not depend on the surrounding document CSS. */
 async function preparePins(map: MapLibreMap): Promise<PreparedPin[]> {
   const container = map.getContainer()
   const pins = [...container.querySelectorAll<SVGSVGElement>('.destination-pin-symbol')]
@@ -159,9 +153,6 @@ async function preparePins(map: MapLibreMap): Promise<PreparedPin[]> {
   return prepared.filter((pin): pin is PreparedPin => pin !== null)
 }
 
-/** Draw only geographic DOM fallbacks, never pin cards or tool windows. Native
- * vector labels are already in the WebGL canvas; these markers cover the polar
- * region that MapLibre's Mercator symbol pipeline cannot represent. */
 function drawGeographicOverlays(
   context: CanvasRenderingContext2D,
   map: MapLibreMap,
@@ -191,7 +182,6 @@ function drawGeographicOverlays(
     return { x, y, width: bounds.width, height: bounds.height, opacity }
   }
 
-  // These are z-index 4, below the z-index 5 polar measurement values.
   for (const { element, image } of pins) {
     const bounds = boundsFor(element)
     if (!bounds) continue
@@ -211,8 +201,6 @@ function drawGeographicOverlays(
     const text = element.textContent
     if (!bounds || !text) continue
     const style = getComputedStyle(element)
-    // Composite a label as one group so its halo and glyph share the marker's
-    // exact fade opacity, including MapLibre's fade behind the globe.
     const padding = 5
     const label = document.createElement('canvas')
     label.width = Math.ceil((bounds.width + padding * 2) * ratioX)
@@ -234,11 +222,9 @@ function drawGeographicOverlays(
       const offsets = shadow.match(/-?[\d.]+px/g)?.map(Number.parseFloat)
       if (!color || !offsets || offsets.length < 2) continue
       labelContext.shadowColor = color
-      // Canvas shadow lengths use device pixels independently of its transform.
       labelContext.shadowOffsetX = (offsets[0] + 10_000) * ratioX
       labelContext.shadowOffsetY = offsets[1] * ratioY
       labelContext.shadowBlur = (offsets[2] ?? 0) * Math.sqrt(ratioX * ratioY)
-      // The glyph is outside this tiny canvas; only its shadow is painted.
       labelContext.fillText(text, padding - 10_000, baseline)
     }
     labelContext.shadowColor = 'transparent'
@@ -284,6 +270,7 @@ function annotate(
     BASE_CREDITS,
     ...(nasaVisible ? ['NASA GIBS · Blue Marble / NASA Earth Observatory'] : []),
     ...overlayCredits,
+    ...(container.dataset.analysisCredits ? [container.dataset.analysisCredits] : []),
     ...(map.getZoom() >= 4 &&
     map.getLayer('context-protected-areas') &&
     map.getLayoutProperty('context-protected-areas', 'visibility') !== 'none' &&
@@ -369,10 +356,6 @@ function annotate(
   return { headerHeight, footerHeight }
 }
 
-/** Capture during MapLibre's next render, while the WebGL buffer is valid.
- * Geographic measurement layers, visible polar label fallbacks and the selected
- * pin symbol are included. Pin cards and interface panels are excluded.
- * No permanently preserved WebGL drawing buffer or extra renderer is needed. */
 export async function captureMapImage(
   map: MapLibreMap,
   settings: CaptureSettings,
