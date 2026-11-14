@@ -19,7 +19,6 @@ import {
   CornersInIcon,
   CornersOutIcon,
   CrosshairIcon,
-  GlobeHemisphereWestIcon,
   InfoIcon,
   MinusIcon,
   MoonIcon,
@@ -714,17 +713,20 @@ function App() {
           <header className="app-header">
             <div
               className="header-brand"
-              aria-label="SHARP - Satellite Harmonization and Activity Records Platform"
-              title="SHARP - Satellite Harmonization and Activity Records Platform"
+              aria-label="Satellite Harmonization and Activity Records Platform"
+              title="Satellite Harmonization and Activity Records Platform"
             >
-              <span className="brand-symbol">
-                <GlobeHemisphereWestIcon size={19} weight="regular" />
+              <span className="brand-symbol" aria-hidden="true">
+                <img
+                  className="brand-logo"
+                  src={`${import.meta.env.BASE_URL}brand/sharp-logo.svg`}
+                  alt=""
+                  width={76}
+                  height={40}
+                  draggable={false}
+                />
               </span>
               <span className="brand-copy">
-                <span className="brand-title">SHARP</span>
-                <span className="brand-separator" aria-hidden="true">
-                  -
-                </span>
                 <span className="brand-subtitle">
                   Satellite Harmonization and Activity Records Platform
                 </span>
