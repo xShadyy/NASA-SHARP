@@ -11,6 +11,7 @@ dist
 dist-ssr
 *.local
 
+*__pychache__*
 .vscode/*
 !.vscode/extensions.json
 .idea
