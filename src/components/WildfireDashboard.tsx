@@ -2,21 +2,13 @@ import { useEffect, useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   aggregateDailyActivity,
-  aggregateHourlyActivity,
   compareActivity,
-  confidenceBuckets,
-  countBy,
   detectionsToCsv,
   filterDetections,
-  frpBuckets,
   getDashboardWindows,
-  highestFrp,
   isHotspotResponse,
-  latestDetection,
-  medianFrp,
   peakActivity,
   shiftUtcDate,
-  topDetectionCells,
   type DetectionCell,
   type CountBucket,
   type HotspotDetection,
@@ -25,6 +17,8 @@ import {
 import './WildfireDashboard.css'
 
 const API_BASE = (import.meta.env.VITE_FIRMS_API_BASE_URL || '/api').replace(/\/$/, '')
+const DASHBOARD_AREA = 'netherlands'
+const DASHBOARD_AREA_LABEL = 'Netherlands (European part)'
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat().format(value)
@@ -51,22 +45,79 @@ function errorMessage(value: unknown) {
   return value instanceof Error ? value.message : 'The hotspot request failed.'
 }
 
-async function fetchWindow(startDate: string, days: number, signal: AbortSignal) {
+function hotspotErrorDetail(detail: unknown) {
+  if (typeof detail === 'string') return detail
+  if (!detail || typeof detail !== 'object' || !('sources' in detail)) return null
+  const sources = (detail as { sources?: unknown }).sources
+  if (!Array.isArray(sources)) return null
+  const failures = sources.flatMap((source) => {
+    if (!source || typeof source !== 'object') return []
+    const report = source as {
+      source?: unknown
+      failed_days?: unknown
+    }
+    if (typeof report.source !== 'string' || !Array.isArray(report.failed_days)) return []
+    const details = report.failed_days.flatMap((day) => {
+      if (!day || typeof day !== 'object' || !('detail' in day)) return []
+      const message = (day as { detail: unknown }).detail
+      return typeof message === 'string' ? [message] : []
+    })
+    return details.length ? [`${report.source}: ${[...new Set(details)].join(', ')}`] : []
+  })
+  return failures.length ? `FIRMS could not provide detections. ${failures.join('; ')}` : null
+}
+
+async function fetchWindow(
+  startDate: string,
+  days: number,
+  sensor: 'all' | 'MODIS' | 'VIIRS',
+  daynight: 'all' | 'day' | 'night',
+  signal: AbortSignal,
+) {
   const query = new URLSearchParams({
-    area: 'world',
+    area: DASHBOARD_AREA,
     start_date: startDate,
     days: String(days),
   })
+  if (daynight !== 'all') query.set('daynight', daynight)
+  const sources =
+    sensor === 'MODIS'
+      ? ['MODIS_NRT']
+      : sensor === 'VIIRS'
+        ? ['VIIRS_NOAA20_NRT', 'VIIRS_NOAA21_NRT']
+        : []
+  for (const source of sources) query.append('source', source)
+  query.set('summary', 'true')
   return fetchHotspots(query, signal)
 }
 
 async function fetchHotspots(query: URLSearchParams, signal: AbortSignal) {
-  const response = await fetch(`${API_BASE}/hotspots?${query}`, { signal })
-  let payload: unknown
+  let response: Response
   try {
-    payload = await response.json()
-  } catch {
-    throw new Error(`Hotspot service returned invalid JSON (HTTP ${response.status}).`)
+    response = await fetch(`${API_BASE}/hotspots?${query}`, { signal })
+  } catch (error) {
+    if (signal.aborted) throw error
+    throw new Error(
+      'Cannot reach the hotspot API. Check that the Vite server and FIRMS backend are running.',
+      { cause: error },
+    )
+  }
+  const contentType = response.headers.get('content-type') ?? ''
+  let payload: unknown
+  if (contentType.includes('application/json')) {
+    try {
+      payload = await response.json()
+    } catch {
+      throw new Error(`Hotspot API returned malformed JSON (HTTP ${response.status}).`)
+    }
+  } else {
+    await response.text()
+    if (response.status === 502 || response.status === 503 || response.status === 504) {
+      throw new Error(
+        `The Vite API proxy cannot reach the FIRMS backend at 127.0.0.1:8000 (HTTP ${response.status}). Start the backend from src/backend_api; see its README for setup.`,
+      )
+    }
+    throw new Error(`Hotspot API returned a non-JSON response (HTTP ${response.status}).`)
   }
   if (!response.ok) {
     const detail =
@@ -74,9 +125,7 @@ async function fetchHotspots(query: URLSearchParams, signal: AbortSignal) {
         ? (payload as { detail: unknown }).detail
         : null
     throw new Error(
-      typeof detail === 'string'
-        ? detail
-        : `Hotspot service request failed (HTTP ${response.status}).`,
+      hotspotErrorDetail(detail) ?? `Hotspot service request failed (HTTP ${response.status}).`,
     )
   }
   if (!isHotspotResponse(payload))
@@ -151,8 +200,12 @@ function ActivityChart({
         <span>{formatNumber(max)} detections</span>
       </div>
       <div className="wildfire-legend">
-        <span><i className="wildfire-legend-current" /> Selected interval</span>
-        <span><i className="wildfire-legend-previous" /> Previous interval</span>
+        <span>
+          <i className="wildfire-legend-current" /> Selected interval
+        </span>
+        <span>
+          <i className="wildfire-legend-previous" /> Previous interval
+        </span>
       </div>
     </figure>
   )
@@ -209,8 +262,7 @@ function BreakdownChart({
   )
 }
 
-function HourlyChart({ features }: { features: HotspotDetection[] }) {
-  const hours = aggregateHourlyActivity(features)
+function HourlyChart({ hours }: { hours: Array<{ hour: number; count: number }> }) {
   const max = Math.max(1, ...hours.map(({ count }) => count))
   return (
     <section className="wildfire-card wildfire-analysis-card">
@@ -234,7 +286,10 @@ function HourlyChart({ features }: { features: HotspotDetection[] }) {
           </div>
         ))}
       </div>
-      <div className="wildfire-chart-axis"><span>00:00 UTC</span><span>24:00 UTC</span></div>
+      <div className="wildfire-chart-axis">
+        <span>00:00 UTC</span>
+        <span>24:00 UTC</span>
+      </div>
     </section>
   )
 }
@@ -246,7 +301,9 @@ function TopDetectionCells({ cells }: { cells: DetectionCell[] }) {
       <div className="wildfire-section-heading">
         <div>
           <h2>Highest-detection grid cells</h2>
-          <p>Approximate 2° cells ranked by observations; not incident clusters or fire perimeters.</p>
+          <p>
+            Approximate 2° cells ranked by observations; not incident clusters or fire perimeters.
+          </p>
         </div>
       </div>
       {cells.length ? (
@@ -277,7 +334,13 @@ function TopDetectionCells({ cells }: { cells: DetectionCell[] }) {
   )
 }
 
-function RecentDetections({ features }: { features: HotspotDetection[] }) {
+function RecentDetections({
+  features,
+  totalCount,
+}: {
+  features: HotspotDetection[]
+  totalCount: number
+}) {
   const [sort, setSort] = useState<'newest' | 'frp'>('newest')
   const rows = [...features]
     .sort((left, right) =>
@@ -292,13 +355,17 @@ function RecentDetections({ features }: { features: HotspotDetection[] }) {
         <div>
           <h2>Detection records</h2>
           <p>
-            Latest {formatNumber(Math.min(50, features.length))} of {formatNumber(features.length)}{' '}
-            filtered observations
+            Up to {formatNumber(Math.min(50, features.length))} rows from the latest{' '}
+            {formatNumber(features.length)} sampled records; {formatNumber(totalCount)} detections
+            in the interval
           </p>
         </div>
         <label className="wildfire-sort">
           Sort
-          <select value={sort} onChange={(event) => setSort(event.currentTarget.value as 'newest' | 'frp')}>
+          <select
+            value={sort}
+            onChange={(event) => setSort(event.currentTarget.value as 'newest' | 'frp')}
+          >
             <option value="newest">Newest first</option>
             <option value="frp">Highest FRP</option>
           </select>
@@ -322,17 +389,35 @@ function RecentDetections({ features }: { features: HotspotDetection[] }) {
                 const properties = feature.properties
                 const [longitude, latitude] = feature.geometry.coordinates
                 return (
-                  <tr key={`${properties.source}-${properties.acquired_at}-${longitude}-${latitude}-${index}`}>
-                    <td>{new Intl.DateTimeFormat('en-GB', {
-                      dateStyle: 'medium',
-                      timeStyle: 'short',
-                      timeZone: 'UTC',
-                    }).format(new Date(properties.acquired_at))}</td>
-                    <td>{properties.sensor} · {properties.satellite}<small>{properties.source}</small></td>
-                    <td>{properties.confidence_class ?? properties.confidence} <small>{properties.confidence_scale}</small></td>
+                  <tr
+                    key={`${properties.source}-${properties.acquired_at}-${longitude}-${latitude}-${index}`}
+                  >
+                    <td>
+                      {new Intl.DateTimeFormat('en-GB', {
+                        dateStyle: 'medium',
+                        timeStyle: 'short',
+                        timeZone: 'UTC',
+                      }).format(new Date(properties.acquired_at))}
+                    </td>
+                    <td>
+                      {properties.sensor} · {properties.satellite}
+                      <small>{properties.source}</small>
+                    </td>
+                    <td>
+                      {properties.confidence_class ?? properties.confidence}{' '}
+                      <small>{properties.confidence_scale}</small>
+                    </td>
                     <td>{properties.frp_mw === null ? '—' : properties.frp_mw.toFixed(1)}</td>
-                    <td>{properties.daynight === 'D' ? 'Day' : properties.daynight === 'N' ? 'Night' : 'Unknown'}</td>
-                    <td>{latitude.toFixed(3)}, {longitude.toFixed(3)}</td>
+                    <td>
+                      {properties.daynight === 'D'
+                        ? 'Day'
+                        : properties.daynight === 'N'
+                          ? 'Night'
+                          : 'Unknown'}
+                    </td>
+                    <td>
+                      {latitude.toFixed(3)}, {longitude.toFixed(3)}
+                    </td>
                   </tr>
                 )
               })}
@@ -347,12 +432,13 @@ function RecentDetections({ features }: { features: HotspotDetection[] }) {
 }
 
 export function WildfireDashboard({ onClose }: { onClose: () => void }) {
-  const [days, setDays] = useState(30)
+  const [days, setDays] = useState(1)
   const [sensor, setSensor] = useState<'all' | 'MODIS' | 'VIIRS'>('all')
   const [daynight, setDaynight] = useState<'all' | 'day' | 'night'>('all')
   const [data, setData] = useState<HotspotResponse | null>(null)
   const [previousData, setPreviousData] = useState<HotspotResponse | null>(null)
   const [loading, setLoading] = useState(true)
+  const [comparisonLoading, setComparisonLoading] = useState(true)
   const [error, setError] = useState('')
   const [previousError, setPreviousError] = useState('')
   const [attempt, setAttempt] = useState(0)
@@ -362,67 +448,64 @@ export function WildfireDashboard({ onClose }: { onClose: () => void }) {
     () => filterDetections(data?.features ?? [], sensor, daynight),
     [data, daynight, sensor],
   )
-  const filteredPrevious = useMemo(
-    () => filterDetections(previousData?.features ?? [], sensor, daynight),
-    [daynight, previousData, sensor],
-  )
   const daily = useMemo(
-    () => aggregateDailyActivity(filtered, windows.currentStart, days),
-    [days, filtered, windows.currentStart],
+    () => data?.summary.daily ?? aggregateDailyActivity([], windows.currentStart, days),
+    [data, days, windows.currentStart],
   )
   const previousDaily = useMemo(
-    () => aggregateDailyActivity(filteredPrevious, windows.previousStart, days),
-    [days, filteredPrevious, windows.previousStart],
+    () => previousData?.summary.daily ?? aggregateDailyActivity([], windows.previousStart, days),
+    [days, previousData, windows.previousStart],
   )
   const peak = useMemo(() => peakActivity(daily), [daily])
-  const sensorBuckets = useMemo(
-    () => countBy(filtered, ({ properties }) => properties.source),
-    [filtered],
-  )
-  const dayNightBuckets = useMemo(
-    () =>
-      countBy(filtered, ({ properties }) =>
-        properties.daynight === 'D'
-          ? 'Day'
-          : properties.daynight === 'N'
-            ? 'Night'
-            : 'Unknown',
-      ),
-    [filtered],
-  )
-  const confidenceDistribution = useMemo(() => confidenceBuckets(filtered), [filtered])
-  const frpDistribution = useMemo(() => frpBuckets(filtered), [filtered])
-  const medianFrpValue = useMemo(() => medianFrp(filtered), [filtered])
-  const highestFrpDetection = useMemo(() => highestFrp(filtered), [filtered])
-  const latest = useMemo(() => latestDetection(filtered), [filtered])
-  const topCells = useMemo(() => topDetectionCells(filtered), [filtered])
+  const sensorBuckets = data?.summary.products ?? []
+  const dayNightBuckets = data?.summary.daynight ?? []
+  const confidenceDistribution = data?.summary.confidence ?? []
+  const frpDistribution = data?.summary.frp ?? []
+  const medianFrpValue = data?.summary.medianFrp ?? null
+  const highestFrpDetection = data?.summary.highestFrp ?? null
+  const latest = data?.summary.latest ?? null
+  const topCells = data?.summary.topCells ?? []
 
   useEffect(() => {
     const controller = new AbortController()
     const timer = window.setTimeout(() => {
       setLoading(true)
+      setComparisonLoading(true)
       setError('')
       setPreviousError('')
       setData(null)
       setPreviousData(null)
       const comparison = getDashboardWindows(days, today)
-      void Promise.allSettled([
-        fetchWindow(comparison.currentStart, days, controller.signal),
-        fetchWindow(comparison.previousStart, days, controller.signal),
-      ]).then(([current, previous]) => {
-        if (controller.signal.aborted) return
-        if (current.status === 'fulfilled') setData(current.value)
-        else setError(errorMessage(current.reason))
-        if (previous.status === 'fulfilled') setPreviousData(previous.value)
-        else setPreviousError(errorMessage(previous.reason))
-        setLoading(false)
-      })
+      void fetchWindow(comparison.currentStart, days, sensor, daynight, controller.signal).then(
+        (current) => {
+          if (controller.signal.aborted) return
+          setLoading(false)
+          setData(current)
+        },
+        (reason: unknown) => {
+          if (controller.signal.aborted) return
+          setLoading(false)
+          setError(errorMessage(reason))
+        },
+      )
+      void fetchWindow(comparison.previousStart, days, sensor, daynight, controller.signal).then(
+        (previous) => {
+          if (controller.signal.aborted) return
+          setPreviousData(previous)
+          setComparisonLoading(false)
+        },
+        (reason: unknown) => {
+          if (controller.signal.aborted) return
+          setPreviousError(errorMessage(reason))
+          setComparisonLoading(false)
+        },
+      )
     }, 500)
     return () => {
       window.clearTimeout(timer)
       controller.abort()
     }
-  }, [attempt, days, today])
+  }, [attempt, daynight, days, sensor, today])
 
   const comparison =
     data &&
@@ -431,7 +514,7 @@ export function WildfireDashboard({ onClose }: { onClose: () => void }) {
     previousData &&
     !previousData.partial &&
     previousData.sources.every((source) => source.status === 'ok')
-      ? compareActivity(filtered.length, filteredPrevious.length)
+      ? compareActivity(data.count, previousData.count)
       : null
   const partial = Boolean(data?.partial || data?.sources.some((source) => source.status !== 'ok'))
 
@@ -443,7 +526,7 @@ export function WildfireDashboard({ onClose }: { onClose: () => void }) {
     const url = URL.createObjectURL(blob)
     const anchor = document.createElement('a')
     anchor.href = url
-    anchor.download = `wildfire-hotspots-global-${windows.currentStart}-to-${windows.endDate}.csv`
+    anchor.download = `wildfire-hotspots-netherlands-${windows.currentStart}-to-${windows.endDate}-recent-sample.csv`
     document.body.append(anchor)
     anchor.click()
     anchor.remove()
@@ -470,8 +553,10 @@ export function WildfireDashboard({ onClose }: { onClose: () => void }) {
         <section className="wildfire-controls" aria-label="Dashboard query">
           <div className="wildfire-scope">
             <span className="wildfire-control-label">Area</span>
-            <strong>Global</strong>
-            <span className="wildfire-control-note">Regional analysis is not available yet</span>
+            <strong>{DASHBOARD_AREA_LABEL}</strong>
+            <span className="wildfire-control-note">
+              Generalized boundary · Caribbean Netherlands not included
+            </span>
           </div>
           <div className="wildfire-range">
             <div className="wildfire-range-heading">
@@ -529,8 +614,8 @@ export function WildfireDashboard({ onClose }: { onClose: () => void }) {
               </select>
             </label>
             <span className="wildfire-filter-count">
-              Showing {formatNumber(filtered.length)} of {formatNumber(data?.features.length ?? 0)}{' '}
-              detections
+              Showing {formatNumber(filtered.length)} recent records from{' '}
+              {formatNumber(data?.count ?? 0)} total detections
             </span>
           </div>
         </section>
@@ -542,7 +627,11 @@ export function WildfireDashboard({ onClose }: { onClose: () => void }) {
               <p>{error}</p>
               <p>Check that the FIRMS backend is running and retry.</p>
             </div>
-            <Button type="button" variant="outline" onClick={() => setAttempt((value) => value + 1)}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setAttempt((value) => value + 1)}
+            >
               Retry
             </Button>
           </div>
@@ -556,14 +645,15 @@ export function WildfireDashboard({ onClose }: { onClose: () => void }) {
         )}
 
         {(previousError ||
-        (previousData &&
-          (previousData.partial || previousData.sources.some((source) => source.status !== 'ok')))) &&
-        data && (
-        <div className="wildfire-warning" role="status">
-          The comparison period is incomplete or unavailable. Current-period detections remain
-          available.
-        </div>
-        )}
+          (previousData &&
+            (previousData.partial ||
+              previousData.sources.some((source) => source.status !== 'ok')))) &&
+          data && (
+            <div className="wildfire-warning" role="status">
+              The comparison period is incomplete or unavailable. Current-period detections remain
+              available.
+            </div>
+          )}
 
         <section
           className={`wildfire-glance ${partial ? 'is-incomplete' : ''}`}
@@ -572,7 +662,7 @@ export function WildfireDashboard({ onClose }: { onClose: () => void }) {
         >
           <div className="wildfire-glance-main">
             <p className="wildfire-eyebrow">
-              GLOBAL · {days} DAYS · {formatDay(windows.currentStart, { year: 'numeric' })} –{' '}
+              NETHERLANDS · {days} DAYS · {formatDay(windows.currentStart, { year: 'numeric' })} –{' '}
               {formatDay(windows.endDate, { year: 'numeric' })} UTC
             </p>
             <h2 id="wildfire-glance-title">Fire Activity at a Glance</h2>
@@ -592,23 +682,15 @@ export function WildfireDashboard({ onClose }: { onClose: () => void }) {
                   Retry selected interval
                 </Button>
               </div>
-            ) : partial ? (
+            ) : partial && data ? (
               <div>
                 <p className="wildfire-glance-status">Incomplete satellite data</p>
                 <p className="wildfire-glance-copy">
-                  {formatNumber(filtered.length)} detections returned for {days} days; one or more
+                  {formatNumber(data.count)} detections returned for {days} days; one or more
                   products or dates could not be loaded.
                 </p>
               </div>
-            ) : data && filtered.length === 0 && data.features.length > 0 ? (
-              <div>
-                <p className="wildfire-glance-status">No detections match these filters</p>
-                <p className="wildfire-glance-copy">
-                  FIRMS returned {formatNumber(data.features.length)} detections in the selected
-                  interval, but none match the current sensor and day/night filters.
-                </p>
-              </div>
-            ) : data && filtered.length === 0 ? (
+            ) : data && data.count === 0 ? (
               <div>
                 <p className="wildfire-glance-status">No detections reported</p>
                 <p className="wildfire-glance-copy">
@@ -628,8 +710,7 @@ export function WildfireDashboard({ onClose }: { onClose: () => void }) {
                         : 'Same detection count as the previous interval'}
                 </p>
                 <p className="wildfire-glance-copy">
-                  {formatNumber(filtered.length)} hotspot detections in the selected {days}-day
-                  interval
+                  {formatNumber(data.count)} hotspot detections in the selected {days}-day interval
                   {comparison &&
                     ` · ${comparison.difference > 0 ? '+' : ''}${formatNumber(comparison.difference)} (${comparison.percentage === null ? 'percentage unavailable: previous count was zero' : `${comparison.percentage > 0 ? '+' : ''}${comparison.percentage.toFixed(1)}%`}) versus the preceding ${days} days`}
                 </p>
@@ -681,8 +762,10 @@ export function WildfireDashboard({ onClose }: { onClose: () => void }) {
               <span>Compared with</span>
               <strong>
                 {comparison
-                  ? `${formatNumber(filteredPrevious.length)} detections · ${formatDay(windows.previousStart, { year: 'numeric' })}–${formatDay(shiftUtcDate(windows.currentStart, -1), { year: 'numeric' })} UTC`
-                  : 'Previous interval unavailable'}
+                  ? `${formatNumber(previousData?.count ?? 0)} detections · ${formatDay(windows.previousStart, { year: 'numeric' })}–${formatDay(shiftUtcDate(windows.currentStart, -1), { year: 'numeric' })} UTC`
+                  : comparisonLoading
+                    ? 'Loading equal-length comparison…'
+                    : 'Previous interval unavailable'}
               </strong>
             </div>
             <p className="wildfire-glance-caveat">
@@ -697,7 +780,7 @@ export function WildfireDashboard({ onClose }: { onClose: () => void }) {
           <article className="wildfire-card">
             <span className="wildfire-card-label">Hotspot detections</span>
             <strong className="wildfire-card-value">
-              {data ? formatNumber(filtered.length) : loading ? '…' : '—'}
+              {data ? formatNumber(data.count) : loading ? '…' : '—'}
             </strong>
             <span className="wildfire-card-note">Satellite observations · {days} days</span>
           </article>
@@ -718,7 +801,9 @@ export function WildfireDashboard({ onClose }: { onClose: () => void }) {
                 : 'Equal-length period immediately before the selected interval'}
             </span>
             {comparison?.percentage === null && (
-              <span className="wildfire-card-note">Percentage unavailable: prior count was zero.</span>
+              <span className="wildfire-card-note">
+                Percentage unavailable: prior count was zero.
+              </span>
             )}
           </article>
           <article className="wildfire-card">
@@ -727,7 +812,9 @@ export function WildfireDashboard({ onClose }: { onClose: () => void }) {
               {peak ? formatDay(peak.date) : data ? 'No detections' : loading ? '…' : '—'}
             </strong>
             <span className="wildfire-card-note">
-              {peak ? `${formatNumber(peak.count)} detections · UTC` : 'Highest daily total in this interval'}
+              {peak
+                ? `${formatNumber(peak.count)} detections · UTC`
+                : 'Highest daily total in this interval'}
             </span>
           </article>
           <article className="wildfire-card">
@@ -735,7 +822,9 @@ export function WildfireDashboard({ onClose }: { onClose: () => void }) {
             <strong className="wildfire-card-value wildfire-card-value-small">
               Baseline unavailable
             </strong>
-            <span className="wildfire-card-note">Waiting for the harmonized historical dataset</span>
+            <span className="wildfire-card-note">
+              Waiting for the harmonized historical dataset
+            </span>
           </article>
           <article className="wildfire-card">
             <span className="wildfire-card-label">Latest observation</span>
@@ -781,18 +870,21 @@ export function WildfireDashboard({ onClose }: { onClose: () => void }) {
           </article>
         </section>
 
-        <section className="wildfire-card wildfire-chart-card" aria-labelledby="wildfire-activity-title">
+        <section
+          className="wildfire-card wildfire-chart-card"
+          aria-labelledby="wildfire-activity-title"
+        >
           <div className="wildfire-section-heading">
             <div>
               <h2 id="wildfire-activity-title">Recent activity</h2>
               <p>
                 {data
-                  ? `${formatNumber(filtered.length)} filtered detections from ${formatDay(windows.currentStart, { year: 'numeric' })} to ${formatDay(windows.endDate, { year: 'numeric' })}`
+                  ? `${formatNumber(data.count)} filtered detections from ${formatDay(windows.currentStart, { year: 'numeric' })} to ${formatDay(windows.endDate, { year: 'numeric' })}`
                   : 'Daily hotspot detections in the selected interval'}
               </p>
             </div>
             <Button type="button" variant="outline" onClick={downloadCsv} disabled={!data}>
-              Download CSV
+              Download recent sample CSV
             </Button>
           </div>
           {loading && !data ? (
@@ -834,7 +926,7 @@ export function WildfireDashboard({ onClose }: { onClose: () => void }) {
             buckets={frpDistribution}
           />
           <TopDetectionCells cells={topCells} />
-          <HourlyChart features={filtered} />
+          <HourlyChart hours={data?.summary.hourly ?? []} />
           <section className="wildfire-card wildfire-analysis-card">
             <div className="wildfire-section-heading">
               <div>
@@ -846,8 +938,8 @@ export function WildfireDashboard({ onClose }: { onClose: () => void }) {
               {medianFrpValue === null ? '—' : `${medianFrpValue.toFixed(1)} MW`}
             </strong>
             <span className="wildfire-card-note">
-              Median FRP · {formatNumber(filtered.filter(({ properties }) => properties.frp_mw !== null).length)}{' '}
-              of {formatNumber(filtered.length)} observations reported FRP
+              Median FRP · {formatNumber(data?.summary.frpReported ?? 0)} of{' '}
+              {formatNumber(data?.count ?? 0)} observations reported FRP
             </span>
             <p className="wildfire-footnote">
               FRP is a satellite-derived observation of radiative power, not a direct measure of
@@ -856,9 +948,12 @@ export function WildfireDashboard({ onClose }: { onClose: () => void }) {
           </section>
         </section>
 
-        <RecentDetections features={filtered} />
+        <RecentDetections features={filtered} totalCount={data?.count ?? 0} />
 
-        <section className="wildfire-card wildfire-coverage" aria-labelledby="wildfire-coverage-title">
+        <section
+          className="wildfire-card wildfire-coverage"
+          aria-labelledby="wildfire-coverage-title"
+        >
           <div className="wildfire-section-heading">
             <div>
               <h2 id="wildfire-coverage-title">Data coverage</h2>
@@ -883,7 +978,9 @@ export function WildfireDashboard({ onClose }: { onClose: () => void }) {
             </ul>
           ) : (
             <p className="wildfire-empty">
-              {error ? 'Coverage details unavailable because the request failed.' : 'Coverage details will appear with the results.'}
+              {error
+                ? 'Coverage details unavailable because the request failed.'
+                : 'Coverage details will appear with the results.'}
             </p>
           )}
           {data && (
@@ -915,14 +1012,17 @@ export function WildfireDashboard({ onClose }: { onClose: () => void }) {
           </p>
         </section>
 
-        <section className="wildfire-card wildfire-roadmap" aria-labelledby="wildfire-history-title">
+        <section
+          className="wildfire-card wildfire-roadmap"
+          aria-labelledby="wildfire-history-title"
+        >
           <div>
             <p className="wildfire-eyebrow">HISTORICAL ANALYTICS</p>
             <h2 id="wildfire-history-title">Burning-activity calendar</h2>
             <p>
               Month-by-year heatmaps, monthly and annual summaries, seasonal patterns, and
-              historical anomaly comparisons will be enabled after MODIS and VIIRS harmonization
-              is implemented and validated.
+              historical anomaly comparisons will be enabled after MODIS and VIIRS harmonization is
+              implemented and validated.
             </p>
           </div>
           <span className="wildfire-status">Not available yet</span>
