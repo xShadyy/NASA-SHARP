@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from dashboard_summary import DashboardSummary
+from area_analytics_summary import AreaAnalyticsSummary
 
 
 def detection(day, hour, source, sensor, confidence, frp, longitude=-68.1, latitude=-13.1, daynight="D"):
@@ -25,9 +25,9 @@ def detection(day, hour, source, sensor, confidence, frp, longitude=-68.1, latit
     }
 
 
-class DashboardSummaryTest(unittest.TestCase):
+class AreaAnalyticsSummaryTest(unittest.TestCase):
     def test_summary_covers_full_data_but_caps_recent_feature_sample(self):
-        summary = DashboardSummary(sample_limit=2)
+        summary = AreaAnalyticsSummary(sample_limit=2)
         summary.add_many([
             detection("2026-11-13", 23, "MODIS_NRT", "MODIS", 90, 0),
             detection("2026-11-14", 1, "VIIRS_NOAA20_NRT", "VIIRS", "h", 10),
@@ -57,8 +57,8 @@ class DashboardSummaryTest(unittest.TestCase):
         self.assertIn("acquired_at_local", payload["features"][0]["properties"])
 
     def test_merge_preserves_totals_and_global_recent_sample(self):
-        earlier = DashboardSummary(sample_limit=2)
-        later = DashboardSummary(sample_limit=2)
+        earlier = AreaAnalyticsSummary(sample_limit=2)
+        later = AreaAnalyticsSummary(sample_limit=2)
         earlier.add_many([
             detection("2026-11-13", 1, "MODIS_NRT", "MODIS", 80, 5),
             detection("2026-11-13", 2, "MODIS_NRT", "MODIS", 80, 15),
@@ -81,14 +81,14 @@ class DashboardSummaryTest(unittest.TestCase):
         ))
 
     def test_summary_cache_round_trip_keeps_exact_median_and_recent_sample(self):
-        summary = DashboardSummary(sample_limit=2)
+        summary = AreaAnalyticsSummary(sample_limit=2)
         summary.add_many([
             detection("2026-11-14", 1, "MODIS_NRT", "MODIS", 90, 1),
             detection("2026-11-14", 2, "MODIS_NRT", "MODIS", 90, 3),
             detection("2026-11-14", 3, "MODIS_NRT", "MODIS", 90, 5),
         ])
 
-        restored = DashboardSummary.from_cache(summary.to_cache())
+        restored = AreaAnalyticsSummary.from_cache(summary.to_cache())
         payload = restored.payload([date(2026, 11, 14)], ZoneInfo("UTC"))
 
         self.assertEqual(restored.count, 3)
@@ -105,7 +105,7 @@ class DashboardSummaryTest(unittest.TestCase):
         before["properties"]["acquired_at"] = "2026-11-14T01:30:00Z"
         at_upper = detection("2026-11-14", 1, "VIIRS_NOAA20_NRT", "VIIRS", "n", 1)
         at_upper["properties"]["acquired_at"] = "2026-11-14T01:30:01Z"
-        summary = DashboardSummary()
+        summary = AreaAnalyticsSummary()
 
         summary.add_filtered(
             [before, at_upper],
@@ -123,7 +123,7 @@ class DashboardSummaryTest(unittest.TestCase):
             detection("2026-11-14", 1, "VIIRS_NOAA20_NRT", "VIIRS", "l", 1, daynight="D"),
             detection("2026-11-14", 2, "VIIRS_NOAA20_NRT", "VIIRS", "h", 1, daynight="N"),
         ]
-        summary = DashboardSummary()
+        summary = AreaAnalyticsSummary()
 
         summary.add_filtered(
             features,

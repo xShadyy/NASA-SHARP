@@ -13,6 +13,7 @@ import tempfile
 import time as clock
 import zlib
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from enum import Enum
@@ -25,11 +26,12 @@ from fastapi import FastAPI, HTTPException, Query, Request
 
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from fastapi.responses import StreamingResponse
 from fastapi.responses import JSONResponse
 from starlette.requests import ClientDisconnect
 
 from cache import BatchCache
-from dashboard_summary import DashboardSummary
+from area_analytics_summary import AreaAnalyticsSummary
 from harmonize import (
     CanonicalStore,
     Coverage,
@@ -89,8 +91,27 @@ class Source(str, Enum):
     VIIRS_SNPP_SP = "VIIRS_SNPP_SP"
 
 
+@dataclass
+class InFlightBatch:
+    task: asyncio.Task
+    started: asyncio.Event
+    waiters: int = 0
+
+
 class AreaHotspotsQuery(BaseModel):
     geometry: dict
+    start_date: date
+    days: int = Field(ge=1, le=31)
+    daynight: Literal["all", "day", "night"] = "all"
+    source: list[Source] | None = Field(default=None, max_length=8)
+    modis_min_confidence: int = Field(default=0, ge=0, le=100)
+    viirs_min_confidence: Literal["l", "n", "h"] = "l"
+    summary: bool = True
+
+
+class AreaAnalyticsHotspotsQuery(BaseModel):
+    area: Literal["netherlands"] = "netherlands"
+    geometry: dict | None = None
     start_date: date
     days: int = Field(ge=1, le=31)
     daynight: Literal["all", "day", "night"] = "all"
@@ -116,6 +137,7 @@ async def lifespan(app: FastAPI):
         BatchCache, Path(os.getenv("FIRMS_CACHE_PATH", str(default_path)))
     )
     app.state.batch_locks = [asyncio.Lock() for _ in range(64)]
+    app.state.batch_fetches = {}
     async with httpx.AsyncClient(
         base_url=FIRMS_URL,
         timeout=httpx.Timeout(120, connect=10),
@@ -124,7 +146,14 @@ async def lifespan(app: FastAPI):
     ) as client:
         app.state.firms = client
         app.state.slots = asyncio.Semaphore(8)
-        yield
+        try:
+            yield
+        finally:
+            pending_fetches = [fetch.task for fetch in app.state.batch_fetches.values()]
+            for task in pending_fetches:
+                task.cancel()
+            if pending_fetches:
+                await asyncio.gather(*pending_fetches, return_exceptions=True)
 app = FastAPI(title="FIRMS Hotspots", lifespan=lifespan)
 
 app = FastAPI(title="FIRMS Hotspots", lifespan=lifespan)
@@ -141,9 +170,13 @@ def require_firms_key(request: Request) -> None:
         raise HTTPException(503, "Set FIRMS_MAP_KEY before using FIRMS routes.")
 
 
-async def fetch_csv(app: FastAPI, path: str) -> str:
+async def fetch_csv(
+    app: FastAPI, path: str, started: asyncio.Event | None = None
+) -> str:
     try:
-        async with app.state.slots, asyncio.timeout(150):
+        async with asyncio.timeout(150), app.state.slots:
+            if started is not None:
+                started.set()
             async with app.state.firms.stream("GET", path) as response:
                 if response.status_code in (401, 403):
                     raise FIRMSFailure("FIRMS rejected the map key or access.")
@@ -357,9 +390,43 @@ async def availability(request: Request):
         raise HTTPException(502, "FIRMS returned malformed availability CSV.") from None
 
 
+async def fetch_and_cache_batch(
+    app: FastAPI,
+    product: Source,
+    bounds: str,
+    day: date,
+    today: date,
+    key: str,
+    started: asyncio.Event,
+):
+    path = f"/api/area/csv/{app.state.key}/{product.value}/{bounds}/1"
+    if day != today or product.value.endswith("_SP"):
+        path += f"/{day.isoformat()}"
+    text = await fetch_csv(app, path, started)
+    fetched = clock.time()
+    features = await asyncio.to_thread(parse_features, text, product)
+    # Keep a rolling-day request made across midnight out of the wrong cache entry.
+    if any(feature["properties"]["acquired_at"][:10] != day.isoformat() for feature in features):
+        raise FIRMSFailure("FIRMS returned data outside the requested UTC day; retry the query.")
+    if day == today and datetime.fromtimestamp(fetched, UTC).date() != today:
+        raise FIRMSFailure("The UTC day changed during retrieval; retry the query.")
+    if product.value.endswith("_SP"):
+        ttl = 7 * 86400
+    elif day >= today - timedelta(days=1):
+        ttl = 300
+    else:
+        ttl = 86400
+    try:
+        await asyncio.to_thread(app.state.cache.put, key, features, fetched, ttl)
+    except sqlite3.Error:
+        logging.warning("Could not write FIRMS cache; serving data from NASA.")
+    return features, fetched
+
+
 async def load_batch(app: FastAPI, product: Source, bounds: str, day: date, today: date):
     key = app.state.cache.key(product.value, bounds, day.isoformat())
-    async with app.state.batch_locks[hash(key) % len(app.state.batch_locks)]:
+    lock = app.state.batch_locks[hash(key) % len(app.state.batch_locks)]
+    async with lock:
         try:
             cached = await asyncio.to_thread(app.state.cache.get, key)
             if cached is not None:
@@ -368,28 +435,34 @@ async def load_batch(app: FastAPI, product: Source, bounds: str, day: date, toda
         except (sqlite3.Error, ValueError, zlib.error):
             logging.warning("Could not read FIRMS cache; fetching from NASA.")
 
-        path = f"/api/area/csv/{app.state.key}/{product.value}/{bounds}/1"
-        if day != today or product.value.endswith("_SP"):
-            path += f"/{day.isoformat()}"
-        text = await fetch_csv(app, path)
-        fetched = clock.time()
-        features = await asyncio.to_thread(parse_features, text, product)
-        # Keep a rolling-day request made across midnight out of the wrong cache entry.
-        if any(feature["properties"]["acquired_at"][:10] != day.isoformat() for feature in features):
-            raise FIRMSFailure("FIRMS returned data outside the requested UTC day; retry the query.")
-        if day == today and datetime.fromtimestamp(fetched, UTC).date() != today:
-            raise FIRMSFailure("The UTC day changed during retrieval; retry the query.")
-        if product.value.endswith("_SP"):
-            ttl = 7 * 86400
-        elif day >= today - timedelta(days=1):
-            ttl = 300
-        else:
-            ttl = 86400
-        try:
-            await asyncio.to_thread(app.state.cache.put, key, features, fetched, ttl)
-        except sqlite3.Error:
-            logging.warning("Could not write FIRMS cache; serving data from NASA.")
-        return features, fetched, False
+        fetch = app.state.batch_fetches.get(key)
+        shared_fetch = fetch is not None
+        if fetch is None:
+            started = asyncio.Event()
+            task = asyncio.create_task(
+                fetch_and_cache_batch(app, product, bounds, day, today, key, started)
+            )
+            fetch = InFlightBatch(task=task, started=started)
+            app.state.batch_fetches[key] = fetch
+
+            def clear_fetch(completed: asyncio.Task):
+                if app.state.batch_fetches.get(key) is fetch:
+                    del app.state.batch_fetches[key]
+                if not completed.cancelled():
+                    error = completed.exception()
+                    if error is not None:
+                        logging.warning("Shared FIRMS batch fetch failed: %s", error)
+
+            task.add_done_callback(clear_fetch)
+        fetch.waiters += 1
+
+    try:
+        features, fetched = await asyncio.shield(fetch.task)
+        return features, fetched, shared_fetch
+    finally:
+        fetch.waiters -= 1
+        if fetch.waiters == 0 and not fetch.started.is_set() and not fetch.task.done():
+            fetch.task.cancel()
 
 
 def filter_features(
@@ -465,13 +538,26 @@ async def hotspots(
     sources = list(dict.fromkeys(source or LIVE_SOURCES))
     if start_date is None and start is None and any(s.value.endswith("_SP") for s in sources):
         raise HTTPException(422, "Provide start_date or start and end for standard-processing products.")
+    completed_sources: dict[date, set[str]] = {day: set() for day in dates}
+
+    async def report_day_processed(day: date, product: Source):
+        progress_callback = getattr(request.state, "area_analytics_progress", None)
+        if progress_callback is None:
+            return
+        completed_sources[day].add(product.value)
+        processed_days = sum(
+            1 for completed in completed_sources.values() if len(completed) == len(sources)
+        )
+        await progress_callback(
+            {"processed_days": processed_days, "total_days": len(dates)}
+        )
 
     async def load_product(product: Source):
         batches = []
         fetched_at = []
         cache_hits = 0
         failures = []
-        product_summary = DashboardSummary() if summary else None
+        product_summary = AreaAnalyticsSummary() if summary else None
 
         async def load_summary_day(day: date):
             batch_keys = [
@@ -505,12 +591,13 @@ async def hotspots(
                     if cached_summary is not None:
                         summary_json, fetched = cached_summary
                         try:
-                            daily_summary = DashboardSummary.from_cache(summary_json)
+                            daily_summary = AreaAnalyticsSummary.from_cache(summary_json)
+                            await report_day_processed(day, product)
                             return day, daily_summary, [fetched], 1, None
                         except (KeyError, TypeError, ValueError):
-                            logging.warning("Could not read dashboard summary cache; recalculating.")
+                            logging.warning("Could not read Area Analytics summary cache; recalculating.")
                 except sqlite3.Error:
-                    logging.warning("Could not read dashboard summary cache; recalculating.")
+                    logging.warning("Could not read Area Analytics summary cache; recalculating.")
 
             features = []
             fetched_values = []
@@ -521,11 +608,12 @@ async def hotspots(
                         request.app, product, bounds, day, today
                     )
                 except FIRMSFailure as exc:
+                    await report_day_processed(day, product)
                     return day, None, None, 0, str(exc)
                 features.extend(batch)
                 fetched_values.append(fetched)
                 cache_hits_for_day += batch_cached
-            daily_summary = DashboardSummary()
+            daily_summary = AreaAnalyticsSummary()
             lower_key = lower.astimezone(UTC).isoformat(timespec="microseconds").replace(
                 "+00:00", "Z"
             )
@@ -552,7 +640,8 @@ async def hotspots(
                         min(fetched_values),
                     )
                 except sqlite3.Error:
-                    logging.warning("Could not write dashboard summary cache; serving calculated data.")
+                    logging.warning("Could not write Area Analytics summary cache; serving calculated data.")
+            await report_day_processed(day, product)
             return day, daily_summary, fetched_values, cache_hits_for_day, None
 
         if summary:
@@ -622,7 +711,7 @@ async def hotspots(
         raise HTTPException(502, detail={"sources": reports})
 
     if summary:
-        combined_summary = DashboardSummary()
+        combined_summary = AreaAnalyticsSummary()
         for product_summary, _ in results:
             combined_summary.merge(product_summary)
         results.clear()
@@ -670,6 +759,71 @@ async def hotspots_for_analysis_area(request: Request, query: AreaHotspotsQuery)
         viirs_min_confidence=query.viirs_min_confidence,
         summary=query.summary,
         geometry_json=json.dumps(query.geometry, separators=(",", ":")),
+    )
+
+
+@app.post("/hotspots/stream")
+async def stream_area_analytics_hotspots(
+    request: Request, query: AreaAnalyticsHotspotsQuery
+):
+    if not query.summary:
+        raise HTTPException(422, "Streaming Area Analytics requests require summary=true.")
+    require_firms_key(request)
+    events: asyncio.Queue[dict | None] = asyncio.Queue()
+
+    async def publish_progress(progress: dict):
+        await events.put({"type": "progress", **progress})
+
+    request.state.area_analytics_progress = publish_progress
+
+    async def load_result():
+        try:
+            result = await hotspots(
+                request,
+                area="custom" if query.geometry is not None else query.area,
+                days=query.days,
+                start_date=query.start_date,
+                start=None,
+                end=None,
+                tz=None,
+                daynight=query.daynight,
+                source=query.source,
+                modis_min_confidence=query.modis_min_confidence,
+                viirs_min_confidence=query.viirs_min_confidence,
+                summary=True,
+                geometry_json=(
+                    json.dumps(query.geometry, separators=(",", ":"))
+                    if query.geometry is not None
+                    else None
+                ),
+            )
+            await events.put({"type": "result", "data": result})
+        except HTTPException as exc:
+            await events.put({"type": "error", "detail": exc.detail})
+        except Exception:
+            logging.exception("Area Analytics progress stream failed.")
+            await events.put({"type": "error", "detail": "Hotspot processing failed unexpectedly."})
+        finally:
+            await events.put(None)
+
+    task = asyncio.create_task(load_result())
+
+    async def event_stream():
+        try:
+            while True:
+                event = await events.get()
+                if event is None:
+                    break
+                yield json.dumps(event, separators=(",", ":")) + "\n"
+        finally:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache"},
     )
 
 

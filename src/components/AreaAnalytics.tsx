@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { CheckCircleIcon, CircleNotchIcon } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import type { AnalysisArea } from '@/lib/analysis-area'
 import {
@@ -6,7 +7,7 @@ import {
   compareActivity,
   detectionsToCsv,
   filterDetections,
-  getDashboardWindows,
+  getAreaAnalyticsWindows,
   isHotspotResponse,
   peakActivity,
   shiftUtcDate,
@@ -14,12 +15,39 @@ import {
   type CountBucket,
   type HotspotDetection,
   type HotspotResponse,
-} from '@/lib/wildfire-dashboard'
-import './WildfireDashboard.css'
+} from '@/lib/area-analytics'
+import './AreaAnalytics.css'
 
 const API_BASE = (import.meta.env.VITE_FIRMS_API_BASE_URL || '/api').replace(/\/$/, '')
-const DASHBOARD_AREA = 'netherlands'
-const DASHBOARD_AREA_LABEL = 'Netherlands (European part)'
+const AREA_ANALYTICS_DEFAULT_AREA = 'netherlands'
+const AREA_ANALYTICS_DEFAULT_AREA_LABEL = 'Netherlands (European part)'
+
+type ActivityProgress = { processedDays: number; totalDays: number }
+type ActivityProgressHandler = (progress: ActivityProgress) => void
+type ActivityQuery = {
+  analysisArea: AnalysisArea | null
+  days: number
+  sensor: 'all' | 'MODIS' | 'VIIRS'
+  daynight: 'all' | 'day' | 'night'
+  attempt: number
+  today: string
+}
+type ActivityProgressState = {
+  query: ActivityQuery
+  progress: ActivityProgress
+  complete: boolean
+}
+
+function sameActivityQuery(left: ActivityQuery, right: ActivityQuery) {
+  return (
+    left.analysisArea === right.analysisArea &&
+    left.days === right.days &&
+    left.sensor === right.sensor &&
+    left.daynight === right.daynight &&
+    left.attempt === right.attempt &&
+    left.today === right.today
+  )
+}
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat().format(value)
@@ -75,46 +103,46 @@ async function fetchWindow(
   daynight: 'all' | 'day' | 'night',
   analysisArea: AnalysisArea | null,
   signal: AbortSignal,
+  onProgress: ActivityProgressHandler,
 ) {
-  const query = new URLSearchParams({
-    area: DASHBOARD_AREA,
+  const query = {
+    area: AREA_ANALYTICS_DEFAULT_AREA,
+    geometry: analysisArea?.geometry ?? null,
     start_date: startDate,
-    days: String(days),
-  })
-  if (daynight !== 'all') query.set('daynight', daynight)
+    days,
+    daynight,
+    summary: true,
+  }
   const sources =
     sensor === 'MODIS'
       ? ['MODIS_NRT']
       : sensor === 'VIIRS'
         ? ['VIIRS_NOAA20_NRT', 'VIIRS_NOAA21_NRT']
         : []
-  for (const source of sources) query.append('source', source)
-  query.set('summary', 'true')
-  return fetchHotspots(query, signal, analysisArea)
+  return fetchHotspots({ ...query, source: sources }, signal, onProgress)
 }
 
 async function fetchHotspots(
-  query: URLSearchParams,
+  query: {
+    area: string
+    geometry: AnalysisArea['geometry'] | null
+    start_date: string
+    days: number
+    daynight: 'all' | 'day' | 'night'
+    source: string[]
+    summary: boolean
+  },
   signal: AbortSignal,
-  analysisArea: AnalysisArea | null,
+  onProgress: ActivityProgressHandler,
 ) {
   let response: Response
   try {
-    response = analysisArea
-      ? await fetch(`${API_BASE}/hotspots/area`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            geometry: analysisArea.geometry,
-            start_date: query.get('start_date'),
-            days: Number(query.get('days')),
-            daynight: query.get('daynight') ?? 'all',
-            source: query.getAll('source'),
-            summary: query.get('summary') === 'true',
-          }),
-          signal,
-        })
-      : await fetch(`${API_BASE}/hotspots?${query}`, { signal })
+    response = await fetch(`${API_BASE}/hotspots/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(query),
+      signal,
+    })
   } catch (error) {
     if (signal.aborted) throw error
     throw new Error(
@@ -123,34 +151,130 @@ async function fetchHotspots(
     )
   }
   const contentType = response.headers.get('content-type') ?? ''
-  let payload: unknown
-  if (contentType.includes('application/json')) {
-    try {
-      payload = await response.json()
-    } catch {
-      throw new Error(`Hotspot API returned malformed JSON (HTTP ${response.status}).`)
-    }
-  } else {
-    await response.text()
-    if (response.status === 502 || response.status === 503 || response.status === 504) {
-      throw new Error(
-        `The Vite API proxy cannot reach the FIRMS backend at 127.0.0.1:8000 (HTTP ${response.status}). Start the backend from src/backend_api; see its README for setup.`,
-      )
-    }
-    throw new Error(`Hotspot API returned a non-JSON response (HTTP ${response.status}).`)
-  }
   if (!response.ok) {
-    const detail =
-      payload && typeof payload === 'object' && 'detail' in payload
-        ? (payload as { detail: unknown }).detail
-        : null
+    let detail: unknown = null
+    if (contentType.includes('application/json')) {
+      try {
+        const payload: unknown = await response.json()
+        detail =
+          payload && typeof payload === 'object' && 'detail' in payload ? payload.detail : null
+      } catch {
+        throw new Error(`Hotspot API returned malformed JSON (HTTP ${response.status}).`)
+      }
+    } else {
+      await response.text()
+      if (response.status === 502 || response.status === 503 || response.status === 504) {
+        throw new Error(
+          `The Vite API proxy cannot reach the FIRMS backend at 127.0.0.1:8000 (HTTP ${response.status}). Start the backend from src/backend_api; see its README for setup.`,
+        )
+      }
+    }
     throw new Error(
-      hotspotErrorDetail(detail) ?? `Hotspot service request failed (HTTP ${response.status}).`,
+      hotspotErrorDetail(detail) ??
+        (typeof detail === 'string'
+          ? detail
+          : `Hotspot service request failed (HTTP ${response.status}).`),
     )
   }
-  if (!isHotspotResponse(payload))
-    throw new Error('Hotspot service returned data in an unexpected format.')
-  return payload
+  if (!contentType.includes('application/x-ndjson'))
+    throw new Error(`Hotspot API returned an unexpected response type (HTTP ${response.status}).`)
+
+  const reader = response.body?.getReader()
+  if (!reader) throw new Error('Hotspot API did not provide a progress stream.')
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let result: HotspotResponse | null = null
+  const consumeLine = (line: string) => {
+    if (!line.trim()) return
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(line)
+    } catch {
+      throw new Error('Hotspot progress stream returned malformed JSON.')
+    }
+    if (!parsed || typeof parsed !== 'object' || !('type' in parsed))
+      throw new Error('Hotspot progress stream returned an unexpected event.')
+    const event = parsed as Record<string, unknown>
+    if (
+      event.type === 'progress' &&
+      typeof event.processed_days === 'number' &&
+      typeof event.total_days === 'number'
+    ) {
+      onProgress({
+        processedDays: event.processed_days,
+        totalDays: event.total_days,
+      })
+    } else if (event.type === 'result' && isHotspotResponse(event.data)) {
+      result = event.data
+    } else if (event.type === 'error') {
+      const message =
+        hotspotErrorDetail(event.detail) ??
+        (typeof event.detail === 'string' ? event.detail : 'Hotspot processing failed.')
+      throw new Error(message)
+    } else {
+      throw new Error('Hotspot progress stream returned an unexpected event.')
+    }
+  }
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (value) buffer += decoder.decode(value, { stream: !done })
+      if (done) {
+        if (!value) buffer += decoder.decode()
+        consumeLine(buffer)
+        break
+      }
+      const lines = buffer.split(/\r?\n/)
+      buffer = lines.pop() ?? ''
+      for (const line of lines) consumeLine(line)
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  if (!result) throw new Error('Hotspot progress stream ended before returning data.')
+  return result
+}
+
+function ActivityProgressBar({
+  progress,
+  complete,
+}: {
+  progress: ActivityProgress
+  complete: boolean
+}) {
+  const totalDays = Math.max(1, progress.totalDays)
+  const processedDays = Math.max(0, Math.min(totalDays, progress.processedDays))
+  const percentage = complete ? 100 : (processedDays / totalDays) * 100
+  const description = `${formatNumber(processedDays)} of ${formatNumber(totalDays)} days processed`
+  return (
+    <div className={`area-analytics-progress ${complete ? 'is-complete' : ''}`}>
+      <div
+        className="area-analytics-progress-track"
+        role="progressbar"
+        aria-label="Days processed in the selected interval"
+        aria-valuemin={0}
+        aria-valuemax={totalDays}
+        aria-valuenow={complete ? totalDays : processedDays}
+        aria-valuetext={description}
+      >
+        <div className="area-analytics-progress-fill" style={{ width: `${percentage}%` }} />
+        <span className="area-analytics-progress-marker" style={{ left: `${percentage}%` }}>
+          {complete ? (
+            <CheckCircleIcon size={20} weight="fill" aria-hidden="true" />
+          ) : (
+            <CircleNotchIcon
+              className="area-analytics-progress-spinner"
+              size={18}
+              aria-hidden="true"
+            />
+          )}
+        </span>
+      </div>
+      <span className="area-analytics-progress-label" aria-live="polite">
+        {complete ? `${description} · complete` : description}
+      </span>
+    </div>
+  )
 }
 
 function ActivityChart({
@@ -169,24 +293,24 @@ function ActivityChart({
   )
   const labelStep = Math.max(1, Math.ceil(days.length / 7))
   return (
-    <figure className="wildfire-chart" aria-busy={busy}>
-      <figcaption className="wildfire-chart-caption">
+    <figure className="area-analytics-chart" aria-busy={busy}>
+      <figcaption className="area-analytics-chart-caption">
         <span>Detections per day</span>
         <span>UTC · {formatNumber(max)} max</span>
       </figcaption>
-      <div className="wildfire-chart-scroll">
+      <div className="area-analytics-chart-scroll">
         <div
-          className="wildfire-bars"
+          className="area-analytics-bars"
           role="group"
           aria-label="Daily hotspot detections; current interval compared with the previous interval"
         >
           {days.map(({ date, count }, index) => (
-            <div className="wildfire-bar-column" key={date}>
-              <div className="wildfire-bar-pair">
+            <div className="area-analytics-bar-column" key={date}>
+              <div className="area-analytics-bar-pair">
                 {previousDays[index] && (
                   <button
                     type="button"
-                    className="wildfire-bar is-previous"
+                    className="area-analytics-bar is-previous"
                     style={{
                       height: `${Math.max(2, (previousDays[index].count / max) * 100)}%`,
                     }}
@@ -196,18 +320,18 @@ function ActivityChart({
                 )}
                 <button
                   type="button"
-                  className="wildfire-bar"
+                  className="area-analytics-bar"
                   style={{ height: `${Math.max(2, (count / max) * 100)}%` }}
                   aria-label={`${formatDay(date, { year: 'numeric' })}: ${formatNumber(count)} detections`}
                   title={`${formatDay(date, { year: 'numeric' })}: ${formatNumber(count)} detections`}
                 />
               </div>
               {index % labelStep === 0 || index === days.length - 1 ? (
-                <span className="wildfire-bar-label" aria-hidden="true">
+                <span className="area-analytics-bar-label" aria-hidden="true">
                   {formatDay(date)}
                 </span>
               ) : (
-                <span className="wildfire-bar-label" aria-hidden="true">
+                <span className="area-analytics-bar-label" aria-hidden="true">
                   &nbsp;
                 </span>
               )}
@@ -215,16 +339,16 @@ function ActivityChart({
           ))}
         </div>
       </div>
-      <div className="wildfire-chart-axis" aria-hidden="true">
+      <div className="area-analytics-chart-axis" aria-hidden="true">
         <span>0</span>
         <span>{formatNumber(max)} detections</span>
       </div>
-      <div className="wildfire-legend">
+      <div className="area-analytics-legend">
         <span>
-          <i className="wildfire-legend-current" /> Selected interval
+          <i className="area-analytics-legend-current" /> Selected interval
         </span>
         <span>
-          <i className="wildfire-legend-previous" /> Previous interval
+          <i className="area-analytics-legend-previous" /> Previous interval
         </span>
       </div>
     </figure>
@@ -245,30 +369,30 @@ function BreakdownChart({
   const max = Math.max(1, ...buckets.map(({ count }) => count))
   const total = buckets.reduce((sum, bucket) => sum + bucket.count, 0)
   return (
-    <section className="wildfire-card wildfire-analysis-card">
-      <div className="wildfire-section-heading">
+    <section className="area-analytics-card area-analytics-analysis-card">
+      <div className="area-analytics-section-heading">
         <div>
           <h2>{title}</h2>
           <p>{description}</p>
         </div>
       </div>
       {total ? (
-        <ul className="wildfire-breakdown">
+        <ul className="area-analytics-breakdown">
           {buckets.map(({ label, count }, index) => (
             <li key={label}>
-              <div className="wildfire-breakdown-heading">
+              <div className="area-analytics-breakdown-heading">
                 <span>{label}</span>
                 <strong>
                   {formatNumber(count)} <small>({((count / total) * 100).toFixed(1)}%)</small>
                 </strong>
               </div>
               <div
-                className="wildfire-breakdown-track"
+                className="area-analytics-breakdown-track"
                 role="img"
                 aria-label={`${label}: ${formatNumber(count)} detections, ${((count / total) * 100).toFixed(1)} percent`}
               >
                 <span
-                  className={`wildfire-breakdown-fill wildfire-fill-${index % 5}`}
+                  className={`area-analytics-breakdown-fill area-analytics-fill-${index % 5}`}
                   style={{ width: `${(count / max) * 100}%` }}
                 />
               </div>
@@ -276,7 +400,7 @@ function BreakdownChart({
           ))}
         </ul>
       ) : (
-        <p className="wildfire-empty">{emptyLabel}</p>
+        <p className="area-analytics-empty">{emptyLabel}</p>
       )}
     </section>
   )
@@ -285,19 +409,19 @@ function BreakdownChart({
 function HourlyChart({ hours }: { hours: Array<{ hour: number; count: number }> }) {
   const max = Math.max(1, ...hours.map(({ count }) => count))
   return (
-    <section className="wildfire-card wildfire-analysis-card">
-      <div className="wildfire-section-heading">
+    <section className="area-analytics-card area-analytics-analysis-card">
+      <div className="area-analytics-section-heading">
         <div>
           <h2>Observation time of day</h2>
           <p>Detections grouped by acquisition hour in UTC; not local fire-start time.</p>
         </div>
       </div>
-      <div className="wildfire-hourly" role="group" aria-label="Detections by UTC hour">
+      <div className="area-analytics-hourly" role="group" aria-label="Detections by UTC hour">
         {hours.map(({ hour, count }) => (
-          <div className="wildfire-hour" key={hour}>
+          <div className="area-analytics-hour" key={hour}>
             <button
               type="button"
-              className="wildfire-hour-bar"
+              className="area-analytics-hour-bar"
               style={{ height: `${Math.max(2, (count / max) * 100)}%` }}
               title={`${String(hour).padStart(2, '0')}:00 UTC · ${formatNumber(count)} detections`}
               aria-label={`${String(hour).padStart(2, '0')}:00 UTC: ${formatNumber(count)} detections`}
@@ -306,7 +430,7 @@ function HourlyChart({ hours }: { hours: Array<{ hour: number; count: number }> 
           </div>
         ))}
       </div>
-      <div className="wildfire-chart-axis">
+      <div className="area-analytics-chart-axis">
         <span>00:00 UTC</span>
         <span>24:00 UTC</span>
       </div>
@@ -317,8 +441,8 @@ function HourlyChart({ hours }: { hours: Array<{ hour: number; count: number }> 
 function TopDetectionCells({ cells }: { cells: DetectionCell[] }) {
   const max = Math.max(1, ...cells.map(({ count }) => count))
   return (
-    <section className="wildfire-card wildfire-analysis-card">
-      <div className="wildfire-section-heading">
+    <section className="area-analytics-card area-analytics-analysis-card">
+      <div className="area-analytics-section-heading">
         <div>
           <h2>Highest-detection grid cells</h2>
           <p>
@@ -327,20 +451,20 @@ function TopDetectionCells({ cells }: { cells: DetectionCell[] }) {
         </div>
       </div>
       {cells.length ? (
-        <ol className="wildfire-breakdown wildfire-cell-list">
+        <ol className="area-analytics-breakdown area-analytics-cell-list">
           {cells.map((cell) => (
             <li key={cell.label}>
-              <div className="wildfire-breakdown-heading">
+              <div className="area-analytics-breakdown-heading">
                 <span>{cell.label}</span>
                 <strong>{formatNumber(cell.count)} detections</strong>
               </div>
               <div
-                className="wildfire-breakdown-track"
+                className="area-analytics-breakdown-track"
                 role="img"
                 aria-label={`${cell.label}: ${formatNumber(cell.count)} detections`}
               >
                 <span
-                  className="wildfire-breakdown-fill"
+                  className="area-analytics-breakdown-fill"
                   style={{ width: `${(cell.count / max) * 100}%` }}
                 />
               </div>
@@ -348,7 +472,7 @@ function TopDetectionCells({ cells }: { cells: DetectionCell[] }) {
           ))}
         </ol>
       ) : (
-        <p className="wildfire-empty">No detections to group into grid cells.</p>
+        <p className="area-analytics-empty">No detections to group into grid cells.</p>
       )}
     </section>
   )
@@ -370,8 +494,8 @@ function RecentDetections({
     )
     .slice(0, 50)
   return (
-    <section className="wildfire-card wildfire-table-card">
-      <div className="wildfire-section-heading">
+    <section className="area-analytics-card area-analytics-table-card">
+      <div className="area-analytics-section-heading">
         <div>
           <h2>Detection records</h2>
           <p>
@@ -380,7 +504,7 @@ function RecentDetections({
             in the interval
           </p>
         </div>
-        <label className="wildfire-sort">
+        <label className="area-analytics-sort">
           Sort
           <select
             value={sort}
@@ -392,7 +516,7 @@ function RecentDetections({
         </label>
       </div>
       {rows.length ? (
-        <div className="wildfire-table-scroll">
+        <div className="area-analytics-table-scroll">
           <table>
             <thead>
               <tr>
@@ -445,13 +569,13 @@ function RecentDetections({
           </table>
         </div>
       ) : (
-        <p className="wildfire-empty">No records match the selected filters.</p>
+        <p className="area-analytics-empty">No records match the selected filters.</p>
       )}
     </section>
   )
 }
 
-export function WildfireDashboard({
+export function AreaAnalytics({
   analysisArea,
   onClose,
 }: {
@@ -468,9 +592,26 @@ export function WildfireDashboard({
   const [error, setError] = useState('')
   const [previousError, setPreviousError] = useState('')
   const [attempt, setAttempt] = useState(0)
-  const areaLabel = analysisArea?.name ?? DASHBOARD_AREA_LABEL
+  const [activityProgressState, setActivityProgressState] = useState<ActivityProgressState | null>(
+    null,
+  )
+  const areaLabel = analysisArea?.name ?? AREA_ANALYTICS_DEFAULT_AREA_LABEL
   const today = new Date().toISOString().slice(0, 10)
-  const windows = getDashboardWindows(days, today)
+  const currentQuery: ActivityQuery = {
+    analysisArea,
+    days,
+    sensor,
+    daynight,
+    attempt,
+    today,
+  }
+  const currentProgressState =
+    activityProgressState && sameActivityQuery(activityProgressState.query, currentQuery)
+      ? activityProgressState
+      : null
+  const activityProgress = currentProgressState?.progress ?? { processedDays: 0, totalDays: days }
+  const progressComplete = currentProgressState?.complete ?? false
+  const windows = getAreaAnalyticsWindows(days, today)
   const filtered = useMemo(
     () => filterDetections(data?.features ?? [], sensor, daynight),
     [data, daynight, sensor],
@@ -501,7 +642,34 @@ export function WildfireDashboard({
       setPreviousError('')
       setData(null)
       setPreviousData(null)
-      const comparison = getDashboardWindows(days, today)
+      const query: ActivityQuery = {
+        analysisArea,
+        days,
+        sensor,
+        daynight,
+        attempt,
+        today,
+      }
+      setActivityProgressState({
+        query,
+        progress: { processedDays: 0, totalDays: days },
+        complete: false,
+      })
+      const comparison = getAreaAnalyticsWindows(days, today)
+      const updateCurrentProgress: ActivityProgressHandler = (progress) => {
+        if (controller.signal.aborted) return
+        setActivityProgressState((current) =>
+          current?.query === query
+            ? {
+                ...current,
+                progress: {
+                  processedDays: Math.max(0, Math.min(progress.totalDays, progress.processedDays)),
+                  totalDays: Math.max(1, progress.totalDays),
+                },
+              }
+            : current,
+        )
+      }
       void fetchWindow(
         comparison.currentStart,
         days,
@@ -509,9 +677,13 @@ export function WildfireDashboard({
         daynight,
         analysisArea,
         controller.signal,
+        updateCurrentProgress,
       ).then(
         (current) => {
           if (controller.signal.aborted) return
+          setActivityProgressState((progress) =>
+            progress?.query === query ? { ...progress, complete: true } : progress,
+          )
           setLoading(false)
           setData(current)
         },
@@ -528,6 +700,7 @@ export function WildfireDashboard({
         daynight,
         analysisArea,
         controller.signal,
+        () => undefined,
       ).then(
         (previous) => {
           if (controller.signal.aborted) return
@@ -579,12 +752,12 @@ export function WildfireDashboard({
   }
 
   return (
-    <section className="wildfire-dashboard" aria-labelledby="wildfire-dashboard-title">
-      <header className="wildfire-dashboard-header">
+    <section className="area-analytics" aria-labelledby="area-analytics-title">
+      <header className="area-analytics-header">
         <div>
-          <p className="wildfire-eyebrow">ETHEREAL SHARP · BURNING ACTIVITY</p>
-          <h1 id="wildfire-dashboard-title">Area Analytics</h1>
-          <p className="wildfire-description">
+          <p className="area-analytics-eyebrow">ETHEREAL SHARP · BURNING ACTIVITY</p>
+          <h1 id="area-analytics-title">Area Analytics</h1>
+          <p className="area-analytics-description">
             Satellite hotspot detections show observed thermal activity, not confirmed fire
             incidents.
           </p>
@@ -594,46 +767,46 @@ export function WildfireDashboard({
         </Button>
       </header>
 
-      <div className="wildfire-dashboard-content">
-        <section className="wildfire-controls" aria-label="Area Analytics query">
-          <div className="wildfire-scope">
-            <span className="wildfire-control-label">Area</span>
+      <div className="area-analytics-content">
+        <section className="area-analytics-controls" aria-label="Area Analytics query">
+          <div className="area-analytics-scope">
+            <span className="area-analytics-control-label">Area</span>
             <strong>{areaLabel}</strong>
-            <span className="wildfire-control-note">
+            <span className="area-analytics-control-note">
               {analysisArea
                 ? 'Confirmed area from Analysis · detections are clipped to its boundary'
                 : 'Generalized boundary · Caribbean Netherlands not included'}
             </span>
           </div>
-          <div className="wildfire-range">
-            <div className="wildfire-range-heading">
-              <label htmlFor="wildfire-days">Recent interval</label>
+          <div className="area-analytics-range">
+            <div className="area-analytics-range-heading">
+              <label htmlFor="area-analytics-days">Recent interval</label>
               <strong>{days} days</strong>
             </div>
             <input
-              id="wildfire-days"
+              id="area-analytics-days"
               type="range"
               min="1"
               max="30"
               step="1"
               value={days}
               onChange={(event) => setDays(Number(event.currentTarget.value))}
-              aria-describedby="wildfire-range-dates"
+              aria-describedby="area-analytics-range-dates"
             />
-            <div className="wildfire-range-foot">
+            <div className="area-analytics-range-foot">
               <span>1 day</span>
-              <span id="wildfire-range-dates">
+              <span id="area-analytics-range-dates">
                 {formatDay(windows.currentStart, { year: 'numeric' })} –{' '}
                 {formatDay(windows.endDate, { year: 'numeric' })} UTC
               </span>
               <span>30 days</span>
             </div>
-            <span className="wildfire-control-note">
+            <span className="area-analytics-control-note">
               The current UTC day is still in progress; satellite overpass and processing delays
               mean recent observations may be incomplete.
             </span>
           </div>
-          <div className="wildfire-filters" aria-label="Detection filters">
+          <div className="area-analytics-filters" aria-label="Detection filters">
             <label>
               Sensor
               <select
@@ -660,7 +833,7 @@ export function WildfireDashboard({
                 <option value="night">Night</option>
               </select>
             </label>
-            <span className="wildfire-filter-count">
+            <span className="area-analytics-filter-count">
               Showing {formatNumber(filtered.length)} recent records from{' '}
               {formatNumber(data?.count ?? 0)} total detections
             </span>
@@ -668,7 +841,7 @@ export function WildfireDashboard({
         </section>
 
         {error ? (
-          <div className="wildfire-alert" role="alert">
+          <div className="area-analytics-alert" role="alert">
             <div>
               <strong>Could not load hotspot detections</strong>
               <p>{error}</p>
@@ -685,7 +858,7 @@ export function WildfireDashboard({
         ) : null}
 
         {partial && data && (
-          <div className="wildfire-warning" role="status">
+          <div className="area-analytics-warning" role="status">
             Partial results: some FIRMS products or dates could not be loaded. Counts may be
             incomplete.
           </div>
@@ -696,32 +869,32 @@ export function WildfireDashboard({
             (previousData.partial ||
               previousData.sources.some((source) => source.status !== 'ok')))) &&
           data && (
-            <div className="wildfire-warning" role="status">
+            <div className="area-analytics-warning" role="status">
               The comparison period is incomplete or unavailable. Current-period detections remain
               available.
             </div>
           )}
 
         <section
-          className={`wildfire-glance ${partial ? 'is-incomplete' : ''}`}
-          aria-labelledby="wildfire-glance-title"
+          className={`area-analytics-glance ${partial ? 'is-incomplete' : ''}`}
+          aria-labelledby="area-analytics-glance-title"
           aria-busy={loading}
         >
-          <div className="wildfire-glance-main">
-            <p className="wildfire-eyebrow">
+          <div className="area-analytics-glance-main">
+            <p className="area-analytics-eyebrow">
               {areaLabel.toUpperCase()} · {days} DAYS ·{' '}
               {formatDay(windows.currentStart, { year: 'numeric' })} –{' '}
               {formatDay(windows.endDate, { year: 'numeric' })} UTC
             </p>
-            <h2 id="wildfire-glance-title">Fire Activity at a Glance</h2>
+            <h2 id="area-analytics-glance-title">Fire Activity at a Glance</h2>
             {loading && !data ? (
-              <p className="wildfire-glance-status" role="status">
+              <p className="area-analytics-glance-status" role="status">
                 Loading satellite activity for the selected interval…
               </p>
             ) : error ? (
               <div>
-                <p className="wildfire-glance-status">Activity status unavailable</p>
-                <p className="wildfire-glance-copy">{error}</p>
+                <p className="area-analytics-glance-status">Activity status unavailable</p>
+                <p className="area-analytics-glance-copy">{error}</p>
                 <Button
                   type="button"
                   variant="outline"
@@ -732,23 +905,23 @@ export function WildfireDashboard({
               </div>
             ) : partial && data ? (
               <div>
-                <p className="wildfire-glance-status">Incomplete satellite data</p>
-                <p className="wildfire-glance-copy">
+                <p className="area-analytics-glance-status">Incomplete satellite data</p>
+                <p className="area-analytics-glance-copy">
                   {formatNumber(data.count)} detections returned for {days} days; one or more
                   products or dates could not be loaded.
                 </p>
               </div>
             ) : data && data.count === 0 ? (
               <div>
-                <p className="wildfire-glance-status">No detections reported</p>
-                <p className="wildfire-glance-copy">
+                <p className="area-analytics-glance-status">No detections reported</p>
+                <p className="area-analytics-glance-copy">
                   FIRMS returned no hotspot observations in the selected {days}-day interval. This
                   does not confirm there is no active fire or threat.
                 </p>
               </div>
             ) : data ? (
               <div>
-                <p className="wildfire-glance-status">
+                <p className="area-analytics-glance-status">
                   {comparison === null
                     ? 'Satellite activity observed'
                     : comparison.difference > 0
@@ -757,17 +930,20 @@ export function WildfireDashboard({
                         ? 'Fewer detections than the previous interval'
                         : 'Same detection count as the previous interval'}
                 </p>
-                <p className="wildfire-glance-copy">
+                <p className="area-analytics-glance-copy">
                   {formatNumber(data.count)} hotspot detections in the selected {days}-day interval
                   {comparison &&
                     ` · ${comparison.difference > 0 ? '+' : ''}${formatNumber(comparison.difference)} (${comparison.percentage === null ? 'percentage unavailable: previous count was zero' : `${comparison.percentage > 0 ? '+' : ''}${comparison.percentage.toFixed(1)}%`}) versus the preceding ${days} days`}
                 </p>
               </div>
             ) : (
-              <p className="wildfire-glance-status">Activity status unavailable</p>
+              <p className="area-analytics-glance-status">Activity status unavailable</p>
+            )}
+            {((loading && !data) || progressComplete) && (
+              <ActivityProgressBar progress={activityProgress} complete={progressComplete} />
             )}
           </div>
-          <div className="wildfire-glance-details">
+          <div className="area-analytics-glance-details">
             <div>
               <span>Last observation in this window</span>
               <strong>
@@ -816,7 +992,7 @@ export function WildfireDashboard({
                     : 'Previous interval unavailable'}
               </strong>
             </div>
-            <p className="wildfire-glance-caveat">
+            <p className="area-analytics-glance-caveat">
               FIRMS near-real-time satellite observations for the selected interval are not a
               fire-threat rating. Overpass, cloud, and processing gaps apply; a lack of detections
               is not an all-clear. The current UTC day may be incomplete.
@@ -824,17 +1000,17 @@ export function WildfireDashboard({
           </div>
         </section>
 
-        <section className="wildfire-summary-grid" aria-label="Recent activity summary">
-          <article className="wildfire-card">
-            <span className="wildfire-card-label">Hotspot detections</span>
-            <strong className="wildfire-card-value">
+        <section className="area-analytics-summary-grid" aria-label="Recent activity summary">
+          <article className="area-analytics-card">
+            <span className="area-analytics-card-label">Hotspot detections</span>
+            <strong className="area-analytics-card-value">
               {data ? formatNumber(data.count) : loading ? '…' : '—'}
             </strong>
-            <span className="wildfire-card-note">Satellite observations · {days} days</span>
+            <span className="area-analytics-card-note">Satellite observations · {days} days</span>
           </article>
-          <article className="wildfire-card">
-            <span className="wildfire-card-label">Change vs prior period</span>
-            <strong className="wildfire-card-value">
+          <article className="area-analytics-card">
+            <span className="area-analytics-card-label">Change vs prior period</span>
+            <strong className="area-analytics-card-value">
               {comparison
                 ? comparison.percentage === null
                   ? `${comparison.difference > 0 ? '+' : ''}${formatNumber(comparison.difference)}`
@@ -843,40 +1019,40 @@ export function WildfireDashboard({
                   ? '…'
                   : '—'}
             </strong>
-            <span className="wildfire-card-note">
+            <span className="area-analytics-card-note">
               {comparison
                 ? `${formatNumber(Math.abs(comparison.difference))} detections ${comparison.difference >= 0 ? 'more' : 'fewer'} · previous ${days} days`
                 : 'Equal-length period immediately before the selected interval'}
             </span>
             {comparison?.percentage === null && (
-              <span className="wildfire-card-note">
+              <span className="area-analytics-card-note">
                 Percentage unavailable: prior count was zero.
               </span>
             )}
           </article>
-          <article className="wildfire-card">
-            <span className="wildfire-card-label">Peak activity day</span>
-            <strong className="wildfire-card-value">
+          <article className="area-analytics-card">
+            <span className="area-analytics-card-label">Peak activity day</span>
+            <strong className="area-analytics-card-value">
               {peak ? formatDay(peak.date) : data ? 'No detections' : loading ? '…' : '—'}
             </strong>
-            <span className="wildfire-card-note">
+            <span className="area-analytics-card-note">
               {peak
                 ? `${formatNumber(peak.count)} detections · UTC`
                 : 'Highest daily total in this interval'}
             </span>
           </article>
-          <article className="wildfire-card">
-            <span className="wildfire-card-label">Historical anomaly</span>
-            <strong className="wildfire-card-value wildfire-card-value-small">
+          <article className="area-analytics-card">
+            <span className="area-analytics-card-label">Historical anomaly</span>
+            <strong className="area-analytics-card-value area-analytics-card-value-small">
               Baseline unavailable
             </strong>
-            <span className="wildfire-card-note">
+            <span className="area-analytics-card-note">
               Waiting for the harmonized historical dataset
             </span>
           </article>
-          <article className="wildfire-card">
-            <span className="wildfire-card-label">Latest observation</span>
-            <strong className="wildfire-card-value wildfire-card-value-small">
+          <article className="area-analytics-card">
+            <span className="area-analytics-card-label">Latest observation</span>
+            <strong className="area-analytics-card-value area-analytics-card-value-small">
               {latest
                 ? new Intl.DateTimeFormat('en-GB', {
                     dateStyle: 'medium',
@@ -889,15 +1065,15 @@ export function WildfireDashboard({
                     ? '…'
                     : '—'}
             </strong>
-            <span className="wildfire-card-note">
+            <span className="area-analytics-card-note">
               {latest
                 ? `${formatObservationAge(latest.properties.acquired_at)} · ${latest.properties.sensor} · ${latest.properties.satellite} · UTC`
                 : 'Latest observation time in the selected interval'}
             </span>
           </article>
-          <article className="wildfire-card">
-            <span className="wildfire-card-label">Highest reported FRP</span>
-            <strong className="wildfire-card-value">
+          <article className="area-analytics-card">
+            <span className="area-analytics-card-label">Highest reported FRP</span>
+            <strong className="area-analytics-card-value">
               {highestFrpDetection
                 ? `${highestFrpDetection.properties.frp_mw?.toFixed(1)} MW`
                 : data
@@ -906,7 +1082,7 @@ export function WildfireDashboard({
                     ? '…'
                     : '—'}
             </strong>
-            <span className="wildfire-card-note">
+            <span className="area-analytics-card-note">
               {highestFrpDetection
                 ? `${highestFrpDetection.properties.sensor} · ${new Intl.DateTimeFormat('en-GB', {
                     dateStyle: 'medium',
@@ -919,12 +1095,12 @@ export function WildfireDashboard({
         </section>
 
         <section
-          className="wildfire-card wildfire-chart-card"
-          aria-labelledby="wildfire-activity-title"
+          className="area-analytics-card area-analytics-chart-card"
+          aria-labelledby="area-analytics-activity-title"
         >
-          <div className="wildfire-section-heading">
+          <div className="area-analytics-section-heading">
             <div>
-              <h2 id="wildfire-activity-title">Recent activity</h2>
+              <h2 id="area-analytics-activity-title">Recent activity</h2>
               <p>
                 {data
                   ? `${formatNumber(data.count)} filtered detections from ${formatDay(windows.currentStart, { year: 'numeric' })} to ${formatDay(windows.endDate, { year: 'numeric' })}`
@@ -936,11 +1112,13 @@ export function WildfireDashboard({
             </Button>
           </div>
           {loading && !data ? (
-            <p className="wildfire-loading" role="status">
+            <p className="area-analytics-loading" role="status">
               Loading recent FIRMS detections…
             </p>
           ) : error && !data ? (
-            <p className="wildfire-empty">Chart unavailable until hotspot data can be loaded.</p>
+            <p className="area-analytics-empty">
+              Chart unavailable until hotspot data can be loaded.
+            </p>
           ) : data ? (
             <ActivityChart
               days={daily}
@@ -948,11 +1126,11 @@ export function WildfireDashboard({
               busy={loading}
             />
           ) : (
-            <p className="wildfire-empty">No data is available for this interval.</p>
+            <p className="area-analytics-empty">No data is available for this interval.</p>
           )}
         </section>
 
-        <section className="wildfire-analysis-grid" aria-label="Detection analytics">
+        <section className="area-analytics-analysis-grid" aria-label="Detection analytics">
           <BreakdownChart
             title="Detections by product"
             description="Sensor/product provenance in the selected interval."
@@ -970,21 +1148,21 @@ export function WildfireDashboard({
           />
           <TopDetectionCells cells={topCells} />
           <HourlyChart hours={data?.summary.hourly ?? []} />
-          <section className="wildfire-card wildfire-analysis-card">
-            <div className="wildfire-section-heading">
+          <section className="area-analytics-card area-analytics-analysis-card">
+            <div className="area-analytics-section-heading">
               <div>
                 <h2>FRP summary</h2>
                 <p>Fire radiative power per hotspot observation, where reported.</p>
               </div>
             </div>
-            <strong className="wildfire-card-value">
+            <strong className="area-analytics-card-value">
               {medianFrpValue === null ? '—' : `${medianFrpValue.toFixed(1)} MW`}
             </strong>
-            <span className="wildfire-card-note">
+            <span className="area-analytics-card-note">
               Median FRP · {formatNumber(data?.summary.frpReported ?? 0)} of{' '}
               {formatNumber(data?.count ?? 0)} observations reported FRP
             </span>
-            <p className="wildfire-footnote">
+            <p className="area-analytics-footnote">
               FRP is a satellite-derived observation of radiative power, not a direct measure of
               burned area, fire size, or impact.
             </p>
@@ -994,20 +1172,20 @@ export function WildfireDashboard({
         <RecentDetections features={filtered} totalCount={data?.count ?? 0} />
 
         <section
-          className="wildfire-card wildfire-coverage"
-          aria-labelledby="wildfire-coverage-title"
+          className="area-analytics-card area-analytics-coverage"
+          aria-labelledby="area-analytics-coverage-title"
         >
-          <div className="wildfire-section-heading">
+          <div className="area-analytics-section-heading">
             <div>
-              <h2 id="wildfire-coverage-title">Data coverage</h2>
+              <h2 id="area-analytics-coverage-title">Data coverage</h2>
               <p>NASA FIRMS near-real-time products · query dates use UTC calendar days</p>
             </div>
-            <span className={`wildfire-status ${partial ? 'is-partial' : ''}`}>
+            <span className={`area-analytics-status ${partial ? 'is-partial' : ''}`}>
               {data ? (partial ? 'Partial' : 'Complete') : loading ? 'Loading' : 'Unavailable'}
             </span>
           </div>
           {data ? (
-            <ul className="wildfire-source-list">
+            <ul className="area-analytics-source-list">
               {data.sources.map((source) => (
                 <li key={source.source}>
                   <span>{source.source}</span>
@@ -1020,14 +1198,14 @@ export function WildfireDashboard({
               ))}
             </ul>
           ) : (
-            <p className="wildfire-empty">
+            <p className="area-analytics-empty">
               {error
                 ? 'Coverage details unavailable because the request failed.'
                 : 'Coverage details will appear with the results.'}
             </p>
           )}
           {data && (
-            <p className="wildfire-footnote">
+            <p className="area-analytics-footnote">
               Oldest contributing data fetch:{' '}
               {data.sources
                 .map((source) => source.oldest_fetched_at)
@@ -1048,7 +1226,7 @@ export function WildfireDashboard({
                 : 'not reported'}
             </p>
           )}
-          <p className="wildfire-footnote">
+          <p className="area-analytics-footnote">
             A hotspot is a satellite observation and may represent wildfire, agricultural burning,
             industrial heat, or another thermal anomaly. Observation counts are not unique fire
             counts.
@@ -1056,19 +1234,19 @@ export function WildfireDashboard({
         </section>
 
         <section
-          className="wildfire-card wildfire-roadmap"
-          aria-labelledby="wildfire-history-title"
+          className="area-analytics-card area-analytics-roadmap"
+          aria-labelledby="area-analytics-history-title"
         >
           <div>
-            <p className="wildfire-eyebrow">HISTORICAL ANALYTICS</p>
-            <h2 id="wildfire-history-title">Burning-activity calendar</h2>
+            <p className="area-analytics-eyebrow">HISTORICAL ANALYTICS</p>
+            <h2 id="area-analytics-history-title">Burning-activity calendar</h2>
             <p>
               Month-by-year heatmaps, monthly and annual summaries, seasonal patterns, and
               historical anomaly comparisons will be enabled after MODIS and VIIRS harmonization is
               implemented and validated.
             </p>
           </div>
-          <span className="wildfire-status">Not available yet</span>
+          <span className="area-analytics-status">Not available yet</span>
         </section>
       </div>
     </section>
