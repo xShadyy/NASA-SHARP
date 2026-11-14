@@ -21,8 +21,11 @@ export function maximumZoomForView(view: MapView) {
 }
 
 export function globeMinimumZoom(width: number, height: number) {
-  const diameterRatio = width <= 600 ? 0.65 : 0.60
-  return Math.max(MIN_ZOOM, Math.min(3, Math.log2(Math.max(1, Math.min(width, height)) * diameterRatio / 140)))
+  const diameterRatio = width <= 600 ? 0.65 : 0.6
+  return Math.max(
+    MIN_ZOOM,
+    Math.min(3, Math.log2((Math.max(1, Math.min(width, height)) * diameterRatio) / 140)),
+  )
 }
 
 function configuredMinimumZoom(map: MapLibreMap, view: MapView) {
@@ -31,18 +34,21 @@ function configuredMinimumZoom(map: MapLibreMap, view: MapView) {
   const height = Math.max(1, map.getContainer().clientHeight - top - bottom)
   return view === 'globe'
     ? globeMinimumZoom(width, height)
-    : Math.min(Math.max(MIN_FLAT_ZOOM, Math.log2(height / 512)), analysisZoomFloors.get(map) ?? Infinity)
+    : Math.min(
+        Math.max(MIN_FLAT_ZOOM, Math.log2(height / 512)),
+        analysisZoomFloors.get(map) ?? Infinity,
+      )
 }
 
 export function minimumZoomForView(map: MapLibreMap, view: MapView) {
   const minimum = configuredMinimumZoom(map, view)
   if (view === 'map') return minimum
   const latitude = Math.min(85.0511287798066, Math.abs(map.getCenter().lat))
-  return minimum + Math.log2(Math.cos(latitude * Math.PI / 180))
+  return minimum + Math.log2(Math.cos((latitude * Math.PI) / 180))
 }
 
 export function overviewZoom(width: number, height: number) {
-  return Math.max(MIN_ZOOM, Math.min(3, Math.log2(Math.min(width, height) * 0.78 / 140)))
+  return Math.max(MIN_ZOOM, Math.min(3, Math.log2((Math.min(width, height) * 0.78) / 140)))
 }
 
 export function setMapView(map: MapLibreMap, view: MapView) {
@@ -51,9 +57,8 @@ export function setMapView(map: MapLibreMap, view: MapView) {
     'sky-color': '#02050d',
     'horizon-color': '#91b9e3',
     'sky-horizon-blend': 0.08,
-    'atmosphere-blend': view === 'globe'
-      ? ['interpolate', ['linear'], ['zoom'], 0, 0.55, 4, 0.4, 7, 0]
-      : 0,
+    'atmosphere-blend':
+      view === 'globe' ? ['interpolate', ['linear'], ['zoom'], 0, 0.55, 4, 0.4, 7, 0] : 0,
   })
 }
 
@@ -62,7 +67,7 @@ export class ProjectionController {
   private view: MapView
   private globeCamera: JumpToOptions | undefined
   private flatNavigated = false
-  private flatEntryCamera: { longitude: number, latitude: number, zoom: number } | undefined
+  private flatEntryCamera: { longitude: number; latitude: number; zoom: number } | undefined
 
   constructor(map: MapLibreMap, initialView: MapView = 'globe') {
     this.map = map
@@ -78,7 +83,7 @@ export class ProjectionController {
     if (this.view === 'map') this.flatNavigated = true
   }
 
-refreshZoomLimits(): void {
+  refreshZoomLimits(): void {
     const minimum = configuredMinimumZoom(this.map, this.view)
     if (this.map.getMinZoom() !== minimum) this.map.setMinZoom(minimum)
     const maximum = maximumZoomForView(this.view)
@@ -94,12 +99,13 @@ refreshZoomLimits(): void {
 
     this.map.stop()
 
-const flatCenter = this.map.getCenter()
-    const flatMoved = this.flatNavigated || !!this.flatEntryCamera && (
-      Math.abs(flatCenter.lng - this.flatEntryCamera.longitude) > 1e-7 ||
-      Math.abs(flatCenter.lat - this.flatEntryCamera.latitude) > 1e-7 ||
-      Math.abs(this.map.getZoom() - this.flatEntryCamera.zoom) > 1e-5
-    )
+    const flatCenter = this.map.getCenter()
+    const flatMoved =
+      this.flatNavigated ||
+      (!!this.flatEntryCamera &&
+        (Math.abs(flatCenter.lng - this.flatEntryCamera.longitude) > 1e-7 ||
+          Math.abs(flatCenter.lat - this.flatEntryCamera.latitude) > 1e-7 ||
+          Math.abs(this.map.getZoom() - this.flatEntryCamera.zoom) > 1e-5))
     if (view === 'map') {
       this.globeCamera = {
         center: this.map.getCenter().toArray(),
@@ -115,18 +121,21 @@ const flatCenter = this.map.getCenter()
 
     this.view = view
 
-this.map.setMinZoom(MIN_ZOOM)
+    this.map.setMinZoom(MIN_ZOOM)
     this.map.setMaxZoom(maximumZoomForView(view))
     setMapView(this.map, view)
     this.refreshZoomLimits()
     if (view === 'map') {
       const center = this.map.getCenter()
-      this.flatEntryCamera = { longitude: center.lng, latitude: center.lat, zoom: this.map.getZoom() }
+      this.flatEntryCamera = {
+        longitude: center.lng,
+        latitude: center.lat,
+        zoom: this.map.getZoom(),
+      }
     }
     if (view === 'globe') {
       if (this.globeCamera && !flatMoved) {
-
-this.map.jumpTo(this.globeCamera)
+        this.map.jumpTo(this.globeCamera)
       }
       this.globeCamera = undefined
       this.flatNavigated = false
@@ -135,6 +144,9 @@ this.map.jumpTo(this.globeCamera)
   }
 }
 
-export function createProjectionController(map: MapLibreMap, initialView: MapView = 'globe'): ProjectionController {
+export function createProjectionController(
+  map: MapLibreMap,
+  initialView: MapView = 'globe',
+): ProjectionController {
   return new ProjectionController(map, initialView)
 }

@@ -1,10 +1,10 @@
-@import "tailwindcss";
+@import 'tailwindcss';
 
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 @theme inline {
-  --font-sans: "Fira Sans", sans-serif;
-  --font-mono: "Fira Sans", sans-serif;
+  --font-sans: 'Fira Sans', sans-serif;
+  --font-mono: 'Fira Sans', sans-serif;
   --font-weight-normal: 400;
   --font-weight-medium: 700;
   --font-weight-semibold: 700;

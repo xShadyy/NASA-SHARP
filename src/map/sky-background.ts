@@ -3,8 +3,10 @@ import { GLOBE_PROJECTION, HOME_CENTER } from './projection'
 
 export const SKY_BACKGROUND_LAYER_ID = 'sky-background'
 export const SKY_BACKGROUND_IMAGE = '/sky/starmap-2020-4k.webp'
-export const SKY_BACKGROUND_ERROR = 'The sky image could not load. Earth is still available; you can retry.'
-export const SKY_BACKGROUND_CAPTURE_CREDIT = 'Sky: NASA/Goddard Space Flight Center Scientific Visualization Studio · Gaia DR2: ESA/Gaia/DPAC · display-converted panorama'
+export const SKY_BACKGROUND_ERROR =
+  'The sky image could not load. Earth is still available; you can retry.'
+export const SKY_BACKGROUND_CAPTURE_CREDIT =
+  'Sky: NASA/Goddard Space Flight Center Scientific Visualization Studio · Gaia DR2: ESA/Gaia/DPAC · display-converted panorama'
 
 const vertexSource = `#version 300 es
 out vec2 screen;
@@ -74,13 +76,15 @@ function createResources(gl: WebGL2RenderingContext): Resources {
     gl.attachShader(program, vertex)
     gl.attachShader(program, fragment)
     gl.linkProgram(program)
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program) ?? 'Could not link the sky program.')
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS))
+      throw new Error(gl.getProgramInfoLog(program) ?? 'Could not link the sky program.')
     texture = gl.createTexture()
     vertexArray = gl.createVertexArray()
     const camera = gl.getUniformLocation(program, 'camera')
     const aspect = gl.getUniformLocation(program, 'aspect')
     const panorama = gl.getUniformLocation(program, 'panorama')
-    if (!texture || !vertexArray || !camera || !aspect || !panorama) throw new Error('Could not initialize the sky renderer.')
+    if (!texture || !vertexArray || !camera || !aspect || !panorama)
+      throw new Error('Could not initialize the sky renderer.')
     return { program, texture, vertexArray, camera, aspect, panorama }
   } catch (error) {
     if (program) gl.deleteProgram(program)
@@ -93,7 +97,11 @@ function createResources(gl: WebGL2RenderingContext): Resources {
   }
 }
 
-export function createSkyBackgroundLayer(options: { onError: () => void, onReady: () => void, visible?: boolean }): CustomLayerInterface & { retry: () => void, setVisible: (visible: boolean) => void } {
+export function createSkyBackgroundLayer(options: {
+  onError: () => void
+  onReady: () => void
+  visible?: boolean
+}): CustomLayerInterface & { retry: () => void; setVisible: (visible: boolean) => void } {
   let map: MapLibreMap | null = null
   let context: WebGL2RenderingContext | null = null
   let resources: Resources | null = null
@@ -124,7 +132,10 @@ export function createSkyBackgroundLayer(options: { onError: () => void, onReady
   function load() {
     if (!map) return
     failed = false
-    if (image) { image.onload = null; image.onerror = null }
+    if (image) {
+      image.onload = null
+      image.onerror = null
+    }
     map.getContainer().dataset.skyBackground = 'loading'
     const next = new Image()
     image = next
@@ -148,10 +159,18 @@ export function createSkyBackgroundLayer(options: { onError: () => void, onReady
       if (visible) load()
     },
     render(gl) {
-      if (!map || !visible || failed || gl.isContextLost() || map.getProjection().type !== GLOBE_PROJECTION || !image?.complete || !image.naturalWidth) return
+      if (
+        !map ||
+        !visible ||
+        failed ||
+        gl.isContextLost() ||
+        map.getProjection().type !== GLOBE_PROJECTION ||
+        !image?.complete ||
+        !image.naturalWidth
+      )
+        return
       try {
-
-if (!resources || !gl.isProgram(resources.program)) {
+        if (!resources || !gl.isProgram(resources.program)) {
           release()
           resources = createResources(gl)
           uploadPending = true
@@ -164,7 +183,14 @@ if (!resources || !gl.isProgram(resources.program)) {
           try {
             gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false)
             gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false)
-            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, imageWithinTextureLimit(gl, image))
+            gl.texImage2D(
+              gl.TEXTURE_2D,
+              0,
+              gl.RGBA,
+              gl.RGBA,
+              gl.UNSIGNED_BYTE,
+              imageWithinTextureLimit(gl, image),
+            )
           } finally {
             gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, flip)
             gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, premultiply)
@@ -184,10 +210,14 @@ if (!resources || !gl.isProgram(resources.program)) {
         const latitude = (center.lat - HOME_CENTER[1]) * radians
         const bearing = (map.getBearing() + map.getRoll()) * radians
         const pitch = map.getPitch() * radians
-        const sinLongitude = Math.sin(longitude), cosLongitude = Math.cos(longitude)
-        const sinLatitude = Math.sin(latitude), cosLatitude = Math.cos(latitude)
-        const sinBearing = Math.sin(bearing), cosBearing = Math.cos(bearing)
-        const sinPitch = Math.sin(pitch), cosPitch = Math.cos(pitch)
+        const sinLongitude = Math.sin(longitude),
+          cosLongitude = Math.cos(longitude)
+        const sinLatitude = Math.sin(latitude),
+          cosLatitude = Math.cos(latitude)
+        const sinBearing = Math.sin(bearing),
+          cosBearing = Math.cos(bearing)
+        const sinPitch = Math.sin(pitch),
+          cosPitch = Math.cos(pitch)
         const right = [-sinLongitude, cosLongitude, 0]
         const up = [-sinLatitude * cosLongitude, -sinLatitude * sinLongitude, cosLatitude]
         const forward = [cosLatitude * cosLongitude, cosLatitude * sinLongitude, sinLatitude]
@@ -204,7 +234,7 @@ if (!resources || !gl.isProgram(resources.program)) {
         gl.uniform1f(resources.aspect, gl.drawingBufferWidth / Math.max(1, gl.drawingBufferHeight))
         gl.uniformMatrix3fv(resources.camera, false, basis)
 
-gl.enable(gl.DEPTH_TEST)
+        gl.enable(gl.DEPTH_TEST)
         gl.depthFunc(gl.LEQUAL)
         gl.depthMask(false)
         gl.depthRange(0, 1)
@@ -213,10 +243,15 @@ gl.enable(gl.DEPTH_TEST)
         gl.disable(gl.BLEND)
         gl.colorMask(true, true, true, true)
         gl.drawArrays(gl.TRIANGLES, 0, 3)
-      } catch (error) { fail(error) }
+      } catch (error) {
+        fail(error)
+      }
     },
     retry() {
-      if (failed && map) { release(); load() }
+      if (failed && map) {
+        release()
+        load()
+      }
     },
     setVisible(next) {
       if (next === visible) return
@@ -227,7 +262,11 @@ gl.enable(gl.DEPTH_TEST)
       map.triggerRepaint()
     },
     onRemove() {
-      if (image) { image.onload = null; image.onerror = null; image = null }
+      if (image) {
+        image.onload = null
+        image.onerror = null
+        image = null
+      }
       if (map) {
         delete map.getContainer().dataset.skyBackground
         delete map.getContainer().dataset.skyBackgroundEnabled
@@ -239,7 +278,10 @@ gl.enable(gl.DEPTH_TEST)
   }
 }
 
-function imageWithinTextureLimit(gl: WebGL2RenderingContext, image: HTMLImageElement): TexImageSource {
+function imageWithinTextureLimit(
+  gl: WebGL2RenderingContext,
+  image: HTMLImageElement,
+): TexImageSource {
   const maximum = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number
   if (image.naturalWidth <= maximum && image.naturalHeight <= maximum) return image
   const scale = maximum / Math.max(image.naturalWidth, image.naturalHeight)
@@ -255,5 +297,9 @@ function imageWithinTextureLimit(gl: WebGL2RenderingContext, image: HTMLImageEle
 
 export function skyBackgroundVisible(map: MapLibreMap) {
   const { skyBackground, skyBackgroundEnabled } = map.getContainer().dataset
-  return map.getProjection().type === GLOBE_PROJECTION && skyBackgroundEnabled !== 'false' && skyBackground === 'ready'
+  return (
+    map.getProjection().type === GLOBE_PROJECTION &&
+    skyBackgroundEnabled !== 'false' &&
+    skyBackground === 'ready'
+  )
 }

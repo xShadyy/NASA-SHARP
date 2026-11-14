@@ -64,30 +64,50 @@ export function DraggablePanel({
   const instructionsId = useId()
   const titleId = `${id}-title`
 
-  const movePanel = useCallback((requestedPosition?: Position) => {
-    const panel = panelRef.current
-    const container = containerRef.current
-    if (!panel || !container) return
+  const movePanel = useCallback(
+    (requestedPosition?: Position) => {
+      const panel = panelRef.current
+      const container = containerRef.current
+      if (!panel || !container) return
 
-    const containerWidth = container.clientWidth
-    const containerHeight = container.clientHeight
-    const panelWidth = panel.offsetWidth
-    const panelHeight = panel.offsetHeight
-    const horizontalGap = Math.min(EDGE_GAP, Math.max(0, (containerWidth - panelWidth) / 2))
-    const verticalGap = Math.min(EDGE_GAP, Math.max(0, (containerHeight - panelHeight) / 2))
-    const nextPosition = requestedPosition ?? positionRef.current ?? {
-      x: initialPlacement === 'top-right' ? containerWidth - panelWidth - EDGE_GAP : initialPlacement === 'left-center' ? EDGE_GAP : (containerWidth - panelWidth) / 2,
-      y: initialPlacement === 'top-right' ? EDGE_GAP : initialPlacement === 'left-center' ? (containerHeight - panelHeight) / 2 : containerHeight - panelHeight - (containerWidth <= 540 ? 100 : TOOLBAR_CLEARANCE),
-    }
-    const position = {
-      x: Math.max(horizontalGap, Math.min(nextPosition.x, containerWidth - panelWidth - horizontalGap)),
-      y: Math.max(verticalGap, Math.min(nextPosition.y, containerHeight - panelHeight - verticalGap)),
-    }
+      const containerWidth = container.clientWidth
+      const containerHeight = container.clientHeight
+      const panelWidth = panel.offsetWidth
+      const panelHeight = panel.offsetHeight
+      const horizontalGap = Math.min(EDGE_GAP, Math.max(0, (containerWidth - panelWidth) / 2))
+      const verticalGap = Math.min(EDGE_GAP, Math.max(0, (containerHeight - panelHeight) / 2))
+      const nextPosition = requestedPosition ??
+        positionRef.current ?? {
+          x:
+            initialPlacement === 'top-right'
+              ? containerWidth - panelWidth - EDGE_GAP
+              : initialPlacement === 'left-center'
+                ? EDGE_GAP
+                : (containerWidth - panelWidth) / 2,
+          y:
+            initialPlacement === 'top-right'
+              ? EDGE_GAP
+              : initialPlacement === 'left-center'
+                ? (containerHeight - panelHeight) / 2
+                : containerHeight - panelHeight - (containerWidth <= 540 ? 100 : TOOLBAR_CLEARANCE),
+        }
+      const position = {
+        x: Math.max(
+          horizontalGap,
+          Math.min(nextPosition.x, containerWidth - panelWidth - horizontalGap),
+        ),
+        y: Math.max(
+          verticalGap,
+          Math.min(nextPosition.y, containerHeight - panelHeight - verticalGap),
+        ),
+      }
 
-    positionRef.current = position
-    panel.style.transform = `translate3d(${position.x}px, ${position.y}px, 0)`
-    panel.style.visibility = 'visible'
-  }, [containerRef, initialPlacement])
+      positionRef.current = position
+      panel.style.transform = `translate3d(${position.x}px, ${position.y}px, 0)`
+      panel.style.visibility = 'visible'
+    },
+    [containerRef, initialPlacement],
+  )
 
   useLayoutEffect(() => {
     const panel = panelRef.current
@@ -204,7 +224,9 @@ export function DraggablePanel({
           onLostPointerCapture={finishDrag}
           onKeyDown={moveWithKeyboard}
         >
-          <span id={titleId} className="draggable-panel__title">{title}</span>
+          <span id={titleId} className="draggable-panel__title">
+            {title}
+          </span>
           <span className="draggable-panel__grip" aria-hidden="true" />
         </Button>
         <Button

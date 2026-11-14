@@ -1,15 +1,39 @@
 import { useEffect, useEffectEvent, useImperativeHandle, useRef, useState, type Ref } from 'react'
-import { Map as MapLibreMap, setWorkerUrl, type GeoJSONSource, type MapMouseEvent } from 'maplibre-gl'
+import {
+  Map as MapLibreMap,
+  setWorkerUrl,
+  type GeoJSONSource,
+  type MapMouseEvent,
+} from 'maplibre-gl'
 import mapWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
 import { GlobeHemisphereWestIcon, MapTrifoldIcon } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { applyLayerVisibility, createEarthStyle, getReferenceLayerAvailability, NASA_LAYER_ID, NASA_SOURCE_ID, registerGeographicImages, type MapBackground, type MapReferenceLayers, type ReferenceLayerAvailability } from '@/map/basemaps'
+import {
+  applyLayerVisibility,
+  createEarthStyle,
+  getReferenceLayerAvailability,
+  NASA_LAYER_ID,
+  NASA_SOURCE_ID,
+  registerGeographicImages,
+  type MapBackground,
+  type MapReferenceLayers,
+  type ReferenceLayerAvailability,
+} from '@/map/basemaps'
 import { createNonFireOverlayController, type OverlayStatus } from '@/map/non-fire-overlays'
 import { createGraticuleController } from '@/map/graticule'
 import { createScaleBar } from '@/map/scale-bar'
-import { createMeasurementController, type MeasurementController, type MeasurementState, type MeasurementTarget } from '@/map/measurement-controller'
-import { createSkyBackgroundLayer, SKY_BACKGROUND_ERROR, SKY_BACKGROUND_LAYER_ID } from '@/map/sky-background'
+import {
+  createMeasurementController,
+  type MeasurementController,
+  type MeasurementState,
+  type MeasurementTarget,
+} from '@/map/measurement-controller'
+import {
+  createSkyBackgroundLayer,
+  SKY_BACKGROUND_ERROR,
+  SKY_BACKGROUND_LAYER_ID,
+} from '@/map/sky-background'
 import type { MeasurementMode, MeasurementUnit } from '@/lib/measurement-units'
 import type { MeasurementColor, MeasurementColors } from '@/map/measurement-colors'
 import type { LocationTarget } from '@/lib/locations'
@@ -19,11 +43,29 @@ import { MapLayersControl } from '@/components/LayerSettings'
 import { MapContextMenu } from '@/components/MapContextMenu'
 import { MeasurementNameDialog } from '@/components/MeasurementNameDialog'
 import { downloadMapCapture, type CaptureRegion, type CaptureSettings } from '@/lib/map-capture'
-import { createProjectionController, HOME_CENTER, MIN_ZOOM, maximumZoomForView, minimumZoomForView, overviewZoom, setMapView, type MapView, type ProjectionController } from '@/map/projection'
+import {
+  createProjectionController,
+  HOME_CENTER,
+  MIN_ZOOM,
+  maximumZoomForView,
+  minimumZoomForView,
+  overviewZoom,
+  setMapView,
+  type MapView,
+  type ProjectionController,
+} from '@/map/projection'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import './EarthMap.css'
 
-export type MapCameraState = { ready: boolean, zoom: number, minZoom: number, maxZoom: number, longitude: number, latitude: number, view: MapView }
+export type MapCameraState = {
+  ready: boolean
+  zoom: number
+  minZoom: number
+  maxZoom: number
+  longitude: number
+  latitude: number
+  view: MapView
+}
 export type EarthMapHandle = {
   zoomBy: (delta: number) => void
   resetView: () => void
@@ -64,23 +106,63 @@ type EarthMapProps = {
 
 const SLOW_LOADING_NOTICE = 'Imagery is taking longer to load. You can keep navigating or retry.'
 const NASA_TILE_NOTICE = 'Some NASA tiles could not load. Base map detail fills gaps as it loads.'
-type NasaTileRetry = { attempts: number, timer?: ReturnType<typeof setTimeout> }
+type NasaTileRetry = { attempts: number; timer?: ReturnType<typeof setTimeout> }
 function cameraState(map: MapLibreMap, view: MapView): MapCameraState {
   const center = map.getCenter().wrap()
-  return { ready: true, zoom: map.getZoom(), minZoom: minimumZoomForView(map, view), maxZoom: map.getMaxZoom(), longitude: center.lng, latitude: center.lat, view }
+  return {
+    ready: true,
+    zoom: map.getZoom(),
+    minZoom: minimumZoomForView(map, view),
+    maxZoom: map.getMaxZoom(),
+    longitude: center.lng,
+    latitude: center.lat,
+    view,
+  }
 }
-function displayCoordinates(output: HTMLOutputElement | null, coordinates?: [number, number] | null) {
+function displayCoordinates(
+  output: HTMLOutputElement | null,
+  coordinates?: [number, number] | null,
+) {
   if (!output) return
   const valid = coordinates?.every(Number.isFinite)
   output.hidden = !valid
-  const text = valid ? `Lat ${coordinates![1].toFixed(6)}° · Lon ${coordinates![0].toFixed(6)}°` : ''
+  const text = valid
+    ? `Lat ${coordinates![1].toFixed(6)}° · Lon ${coordinates![0].toFixed(6)}°`
+    : ''
   if (output.textContent !== text) output.textContent = text
 }
 
 // v6 ships a separate module worker. Let Vite emit it with its shared chunks.
 setWorkerUrl(mapWorkerUrl)
 
-export function EarthMap({ ref, initialView, initialCoordinates, sharedNavigation, onSharedNavigationApplied, dataDate, referenceLayers, showSpace, onSpaceChange, onReferenceChange, background, onBackgroundChange, measurementMode, measurementUnit, measurementColors, onMeasurementChange, onMeasurementStorageError, onRequestSaveLocation, onCaptureRegion, navigationRequest, savedNavigation, destination, destinationSaved, onSaveLocation, onDismissLocation, onCameraChange }: EarthMapProps) {
+export function EarthMap({
+  ref,
+  initialView,
+  initialCoordinates,
+  sharedNavigation,
+  onSharedNavigationApplied,
+  dataDate,
+  referenceLayers,
+  showSpace,
+  onSpaceChange,
+  onReferenceChange,
+  background,
+  onBackgroundChange,
+  measurementMode,
+  measurementUnit,
+  measurementColors,
+  onMeasurementChange,
+  onMeasurementStorageError,
+  onRequestSaveLocation,
+  onCaptureRegion,
+  navigationRequest,
+  savedNavigation,
+  destination,
+  destinationSaved,
+  onSaveLocation,
+  onDismissLocation,
+  onCameraChange,
+}: EarthMapProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<MapLibreMap | null>(null)
   const projectionRef = useRef<ProjectionController | null>(null)
@@ -102,11 +184,20 @@ export function EarthMap({ ref, initialView, initialCoordinates, sharedNavigatio
   const reportMeasurementStorageError = useEffectEvent(onMeasurementStorageError)
   const reportCameraChange = useEffectEvent(onCameraChange)
   const availabilitySignatureRef = useRef('')
-  const settingsRef = useRef({ referenceLayers, showSpace, background, measurementMode, measurementUnit, measurementColors })
+  const settingsRef = useRef({
+    referenceLayers,
+    showSpace,
+    background,
+    measurementMode,
+    measurementUnit,
+    measurementColors,
+  })
   const viewRef = useRef<MapView>(initialView)
   const interactedRef = useRef(Boolean(initialCoordinates))
   const nasaRetriesRef = useRef(new Map<string, NasaTileRetry>())
-  const [layerAvailability, setLayerAvailability] = useState<ReferenceLayerAvailability | null>(null)
+  const [layerAvailability, setLayerAvailability] = useState<ReferenceLayerAvailability | null>(
+    null,
+  )
   const reportLayerAvailability = useEffectEvent((map: MapLibreMap) => {
     const availability = getReferenceLayerAvailability(map)
     const signature = JSON.stringify(availability)
@@ -121,8 +212,6 @@ export function EarthMap({ ref, initialView, initialCoordinates, sharedNavigatio
   const [notice, setNotice] = useState('')
   const [fatal, setFatal] = useState(false)
 
-
-
   useEffect(() => {
     dataDateRef.current = dataDate
     overlaysRef.current?.set(referenceLayers, dataDate)
@@ -130,7 +219,14 @@ export function EarthMap({ ref, initialView, initialCoordinates, sharedNavigatio
 
   // Keep settings available to map callbacks without rebuilding the map or listeners.
   useEffect(() => {
-    settingsRef.current = { referenceLayers, showSpace, background, measurementMode, measurementUnit, measurementColors }
+    settingsRef.current = {
+      referenceLayers,
+      showSpace,
+      background,
+      measurementMode,
+      measurementUnit,
+      measurementColors,
+    }
     const map = mapRef.current
     if (!map || !ready) return
     applyLayerVisibility(map, { ...referenceLayers, view: viewRef.current, background })
@@ -140,31 +236,62 @@ export function EarthMap({ ref, initialView, initialCoordinates, sharedNavigatio
     measurementsRef.current?.setMode(measurementMode)
     measurementsRef.current?.setUnit(measurementUnit)
     measurementsRef.current?.setColors(measurementColors)
-  }, [referenceLayers, showSpace, background, measurementMode, measurementUnit, measurementColors, ready])
+  }, [
+    referenceLayers,
+    showSpace,
+    background,
+    measurementMode,
+    measurementUnit,
+    measurementColors,
+    ready,
+  ])
 
-  useImperativeHandle(ref, () => ({
-    zoomBy(delta) {
-      interactedRef.current = true
-      projectionRef.current?.markNavigated()
-      const map = mapRef.current
-      if (map) map.zoomTo(Math.max(minimumZoomForView(map, viewRef.current), Math.min(map.getMaxZoom(), map.getZoom() + delta)), { duration: 300 })
-    },
-    resetView() {
-      const map = mapRef.current
-      if (!map) return
-      projectionRef.current?.markNavigated()
-      interactedRef.current = false
-      map.easeTo({ center: HOME_CENTER, zoom: overviewZoom(map.getContainer().clientWidth, map.getContainer().clientHeight), bearing: 0, pitch: 0, duration: 500 })
-    },
-    undoMeasurement() { measurementsRef.current?.undo() },
-    clearMeasurement() { measurementsRef.current?.clear() },
-    finishMeasurement() { measurementsRef.current?.finish() },
-    async capture(settings, region) {
-      const map = mapRef.current
-      if (!map) throw new Error('The map is not ready yet.')
-      await downloadMapCapture(map, settings, region)
-    },
-  }), [])
+  useImperativeHandle(
+    ref,
+    () => ({
+      zoomBy(delta) {
+        interactedRef.current = true
+        projectionRef.current?.markNavigated()
+        const map = mapRef.current
+        if (map)
+          map.zoomTo(
+            Math.max(
+              minimumZoomForView(map, viewRef.current),
+              Math.min(map.getMaxZoom(), map.getZoom() + delta),
+            ),
+            { duration: 300 },
+          )
+      },
+      resetView() {
+        const map = mapRef.current
+        if (!map) return
+        projectionRef.current?.markNavigated()
+        interactedRef.current = false
+        map.easeTo({
+          center: HOME_CENTER,
+          zoom: overviewZoom(map.getContainer().clientWidth, map.getContainer().clientHeight),
+          bearing: 0,
+          pitch: 0,
+          duration: 500,
+        })
+      },
+      undoMeasurement() {
+        measurementsRef.current?.undo()
+      },
+      clearMeasurement() {
+        measurementsRef.current?.clear()
+      },
+      finishMeasurement() {
+        measurementsRef.current?.finish()
+      },
+      async capture(settings, region) {
+        const map = mapRef.current
+        if (!map) throw new Error('The map is not ready yet.')
+        await downloadMapCapture(map, settings, region)
+      },
+    }),
+    [],
+  )
 
   useEffect(() => {
     const container = containerRef.current
@@ -191,7 +318,9 @@ export function EarthMap({ ref, initialView, initialCoordinates, sharedNavigatio
         map = new MapLibreMap({
           container,
           style: createEarthStyle(initialView),
-          center: initialCoordinates ? [initialCoordinates.longitude, initialCoordinates.latitude] : HOME_CENTER,
+          center: initialCoordinates
+            ? [initialCoordinates.longitude, initialCoordinates.latitude]
+            : HOME_CENTER,
           zoom: overviewZoom(container.clientWidth, container.clientHeight),
           minZoom: MIN_ZOOM,
           maxZoom: maximumZoomForView(initialView),
@@ -212,7 +341,12 @@ export function EarthMap({ ref, initialView, initialCoordinates, sharedNavigatio
         mapRef.current = map
         projectionRef.current = createProjectionController(map, initialView)
         map.touchZoomRotate.disableRotation()
-        map.getCanvas().setAttribute('aria-label', 'Interactive Earth, north up. Left-drag to explore, scroll to zoom, right-click for actions or to finish drawing.')
+        map
+          .getCanvas()
+          .setAttribute(
+            'aria-label',
+            'Interactive Earth, north up. Left-drag to explore, scroll to zoom, right-click for actions or to finish drawing.',
+          )
         const currentMap = map
         const reportCamera = () => {
           if (!active) return
@@ -221,7 +355,11 @@ export function EarthMap({ ref, initialView, initialCoordinates, sharedNavigatio
         }
         const syncLayers = () => {
           const settings = settingsRef.current
-          applyLayerVisibility(currentMap, { ...settings.referenceLayers, view: viewRef.current, background: settings.background })
+          applyLayerVisibility(currentMap, {
+            ...settings.referenceLayers,
+            view: viewRef.current,
+            background: settings.background,
+          })
           reportLayerAvailability(currentMap)
         }
         currentMap.on('style.load', () => {
@@ -231,25 +369,44 @@ export function EarthMap({ ref, initialView, initialCoordinates, sharedNavigatio
           if (!currentMap.getLayer(SKY_BACKGROUND_LAYER_ID)) {
             const sky = createSkyBackgroundLayer({
               visible: settingsRef.current.showSpace,
-              onError: () => { if (active) setNotice(SKY_BACKGROUND_ERROR) },
-              onReady: () => { if (active) setNotice((current) => current === SKY_BACKGROUND_ERROR ? '' : current) },
+              onError: () => {
+                if (active) setNotice(SKY_BACKGROUND_ERROR)
+              },
+              onReady: () => {
+                if (active)
+                  setNotice((current) => (current === SKY_BACKGROUND_ERROR ? '' : current))
+              },
             })
             skyRef.current = sky
             currentMap.addLayer(sky, currentMap.getStyle().layers?.[0]?.id)
           }
-          overlaysRef.current = createNonFireOverlayController(currentMap, (state) => { if (active) setOverlayStatus(state) })
+          overlaysRef.current = createNonFireOverlayController(currentMap, (state) => {
+            if (active) setOverlayStatus(state)
+          })
           overlaysRef.current.set(settingsRef.current.referenceLayers, dataDateRef.current)
           if (scaleOutputRef.current) {
-            scaleRef.current = createScaleBar(currentMap, scaleOutputRef.current, () => viewRef.current)
+            scaleRef.current = createScaleBar(
+              currentMap,
+              scaleOutputRef.current,
+              () => viewRef.current,
+            )
           }
           registerGeographicImages(currentMap)
-          measurementsRef.current = createMeasurementController(currentMap, { onChange: (state) => reportMeasurementChange(state), onStorageError: (message) => reportMeasurementStorageError(message), colors: settingsRef.current.measurementColors })
+          measurementsRef.current = createMeasurementController(currentMap, {
+            onChange: (state) => reportMeasurementChange(state),
+            onStorageError: (message) => reportMeasurementStorageError(message),
+            colors: settingsRef.current.measurementColors,
+          })
           measurementsRef.current.setMode(settingsRef.current.measurementMode)
           measurementsRef.current.setUnit(settingsRef.current.measurementUnit)
           // Future observation layers attach to this same map above borders and
           // before FIRE_LAYER_BEFORE_ID (exported by map/basemaps).
           setMapView(currentMap, viewRef.current)
-          graticuleRef.current = createGraticuleController(currentMap, () => viewRef.current, settingsRef.current.referenceLayers.showGraticule)
+          graticuleRef.current = createGraticuleController(
+            currentMap,
+            () => viewRef.current,
+            settingsRef.current.referenceLayers.showGraticule,
+          )
           syncLayers()
           setMapInstance(currentMap)
           setReady(true)
@@ -264,7 +421,9 @@ export function EarthMap({ ref, initialView, initialCoordinates, sharedNavigatio
           const point = keyboard ? { x: rect.width / 2, y: rect.height / 2 } : event.point
           const controller = measurementsRef.current
           const vertex = controller?.findVertex(point) ?? null
-          const measurement = vertex ? controller?.getMeasurement(vertex.measurementId) ?? null : controller?.findMeasurement(point) ?? null
+          const measurement = vertex
+            ? (controller?.getMeasurement(vertex.measurementId) ?? null)
+            : (controller?.findMeasurement(point) ?? null)
           setContextMeasurement(measurement)
           controller?.selectMeasurement(measurement?.id ?? null)
           const geographic = currentMap.unproject([point.x, point.y])
@@ -274,13 +433,20 @@ export function EarthMap({ ref, initialView, initialCoordinates, sharedNavigatio
           setContextCoordinates(valid ? [wrapped.lng, wrapped.lat] : null)
           // MapLibre consumes the canvas's native menu event. Forward its screen
           // position to the shadcn trigger outside the map's event handlers.
-          contextTriggerRef.current?.dispatchEvent(new MouseEvent('contextmenu', {
-            bubbles: true, cancelable: true, button: 2,
-            clientX: keyboard ? rect.left + point.x : original.clientX,
-            clientY: keyboard ? rect.top + point.y : original.clientY,
-          }))
+          contextTriggerRef.current?.dispatchEvent(
+            new MouseEvent('contextmenu', {
+              bubbles: true,
+              cancelable: true,
+              button: 2,
+              clientX: keyboard ? rect.left + point.x : original.clientX,
+              clientY: keyboard ? rect.top + point.y : original.clientY,
+            }),
+          )
         })
-        currentMap.on('moveend', () => { reportCamera(); syncLayers() })
+        currentMap.on('moveend', () => {
+          reportCamera()
+          syncLayers()
+        })
         currentMap.on('zoom', () => reportLayerAvailability(currentMap))
         currentMap.on('movestart', (event) => {
           if (event.originalEvent) {
@@ -312,16 +478,23 @@ export function EarthMap({ ref, initialView, initialCoordinates, sharedNavigatio
         currentMap.on('idle', () => {
           if (!active) return
           setLoading(false)
-          setNotice((current) => current === SLOW_LOADING_NOTICE ? '' : current)
+          setNotice((current) => (current === SLOW_LOADING_NOTICE ? '' : current))
         })
         currentMap.on('sourcedata', (event) => {
-          if (!active || event.sourceId !== NASA_SOURCE_ID || event.tile?.state !== 'loaded' || !event.coord) return
+          if (
+            !active ||
+            event.sourceId !== NASA_SOURCE_ID ||
+            event.tile?.state !== 'loaded' ||
+            !event.coord
+          )
+            return
           const { x, y, z } = event.coord.canonical
           const key = `${z}/${x}/${y}`
           const retry = nasaRetries.get(key)
           if (retry?.timer) clearTimeout(retry.timer)
           nasaRetries.delete(key)
-          if (!nasaRetries.size) setNotice((current) => current === NASA_TILE_NOTICE ? '' : current)
+          if (!nasaRetries.size)
+            setNotice((current) => (current === NASA_TILE_NOTICE ? '' : current))
         })
         currentMap.on('error', (event) => {
           if (!active) return
@@ -331,16 +504,28 @@ export function EarthMap({ ref, initialView, initialCoordinates, sharedNavigatio
           if (sourceId === NASA_SOURCE_ID) {
             // Retry just the failed tile. A single temporary 502 must not hide
             // every successfully loaded Blue Marble tile on the globe.
-            const tile = (event as typeof event & { tile?: { tileID?: { canonical?: { x: number, y: number, z: number } } } }).tile?.tileID?.canonical
-            if (tile && Number.isInteger(tile.x) && Number.isInteger(tile.y) && Number.isInteger(tile.z)) {
+            const tile = (
+              event as typeof event & {
+                tile?: { tileID?: { canonical?: { x: number; y: number; z: number } } }
+              }
+            ).tile?.tileID?.canonical
+            if (
+              tile &&
+              Number.isInteger(tile.x) &&
+              Number.isInteger(tile.y) &&
+              Number.isInteger(tile.z)
+            ) {
               const key = `${tile.z}/${tile.x}/${tile.y}`
               const retry = nasaRetries.get(key) ?? { attempts: 0 }
               if (!retry.timer && retry.attempts < 2) {
                 retry.attempts += 1
                 retry.timer = setTimeout(() => {
                   retry.timer = undefined
-                  if (active && currentMap.getLayer(NASA_LAYER_ID)
-                    && currentMap.getLayoutProperty(NASA_LAYER_ID, 'visibility') !== 'none') {
+                  if (
+                    active &&
+                    currentMap.getLayer(NASA_LAYER_ID) &&
+                    currentMap.getLayoutProperty(NASA_LAYER_ID, 'visibility') !== 'none'
+                  ) {
                     currentMap.refreshTiles(NASA_SOURCE_ID, [tile])
                   }
                 }, 700 * retry.attempts)
@@ -378,7 +563,9 @@ export function EarthMap({ ref, initialView, initialCoordinates, sharedNavigatio
         if (!active) return
         setLoading(false)
         setFatal(true)
-        setNotice('The map could not start. Check that WebGL is enabled in your browser, then reload.')
+        setNotice(
+          'The map could not start. Check that WebGL is enabled in your browser, then reload.',
+        )
         console.warn('Map initialization failed:', error)
       }
     }
@@ -433,21 +620,42 @@ export function EarthMap({ ref, initialView, initialCoordinates, sharedNavigatio
       const width = map.getContainer().clientWidth
       const height = map.getContainer().clientHeight
       map.fitBounds(destination.bounds, {
-        duration: 0, bearing: 0, pitch: 0,
-        padding: { top: Math.min(110, height * 0.2), bottom: Math.min(170, height * 0.27), left: Math.min(60, width * 0.12), right: Math.min(60, width * 0.12) },
-        maxZoom: Math.min(map.getMaxZoom(), destination.kind === 'continent' ? 4.5 : destination.kind === 'country' ? 8 : 14),
+        duration: 0,
+        bearing: 0,
+        pitch: 0,
+        padding: {
+          top: Math.min(110, height * 0.2),
+          bottom: Math.min(170, height * 0.27),
+          left: Math.min(60, width * 0.12),
+          right: Math.min(60, width * 0.12),
+        },
+        maxZoom: Math.min(
+          map.getMaxZoom(),
+          destination.kind === 'continent' ? 4.5 : destination.kind === 'country' ? 8 : 14,
+        ),
       })
       // Bounds padding is only for this jump; keep subsequent navigation centered.
       map.setPadding({ top: 0, bottom: 0, left: 0, right: 0 })
     } else {
-      map.jumpTo({ center: [longitude, latitude], zoom: Math.abs(latitude) > 85 ? 2 : destination.kind === 'current' ? 13 : 11, bearing: 0, pitch: 0, padding: { top: 0, bottom: 0, left: 0, right: 0 } })
+      map.jumpTo({
+        center: [longitude, latitude],
+        zoom: Math.abs(latitude) > 85 ? 2 : destination.kind === 'current' ? 13 : 11,
+        bearing: 0,
+        pitch: 0,
+        padding: { top: 0, bottom: 0, left: 0, right: 0 },
+      })
     }
     projectionRef.current?.refreshZoomLimits()
     // Saved places reopen with geographic context; search and GPS retain their
     // closer arrival zoom. The view-specific minimum keeps the map filled.
-    if (savedNavigation) map.setZoom(Math.max(minimumZoomForView(map, viewRef.current), map.getZoom() - 1.5))
+    if (savedNavigation)
+      map.setZoom(Math.max(minimumZoomForView(map, viewRef.current), map.getZoom() - 1.5))
     const settings = settingsRef.current
-    applyLayerVisibility(map, { ...settings.referenceLayers, view: viewRef.current, background: settings.background })
+    applyLayerVisibility(map, {
+      ...settings.referenceLayers,
+      view: viewRef.current,
+      background: settings.background,
+    })
   })
 
   useEffect(() => {
@@ -468,10 +676,17 @@ export function EarthMap({ ref, initialView, initialCoordinates, sharedNavigatio
       projectionRef.current?.setView('globe')
     }
     projectionRef.current?.markNavigated()
-    map.jumpTo({ center: [sharedNavigation.longitude, sharedNavigation.latitude], padding: { top: 0, bottom: 0, left: 0, right: 0 } })
+    map.jumpTo({
+      center: [sharedNavigation.longitude, sharedNavigation.latitude],
+      padding: { top: 0, bottom: 0, left: 0, right: 0 },
+    })
     scaleRef.current?.refresh()
     const settings = settingsRef.current
-    applyLayerVisibility(map, { ...settings.referenceLayers, view: viewRef.current, background: settings.background })
+    applyLayerVisibility(map, {
+      ...settings.referenceLayers,
+      view: viewRef.current,
+      background: settings.background,
+    })
     reportCameraChange(cameraState(map, viewRef.current))
     onSharedNavigationApplied()
   })
@@ -482,7 +697,13 @@ export function EarthMap({ ref, initialView, initialCoordinates, sharedNavigatio
 
   function requestSaveContextLocation() {
     if (!contextCoordinates) return
-    onRequestSaveLocation({ id: `map:${contextCoordinates.join(',')}`, name: 'New location', coordinates: [...contextCoordinates], kind: 'coordinates', source: 'Map' })
+    onRequestSaveLocation({
+      id: `map:${contextCoordinates.join(',')}`,
+      name: 'New location',
+      coordinates: [...contextCoordinates],
+      kind: 'coordinates',
+      source: 'Map',
+    })
   }
 
   function deleteContextMeasurement() {
@@ -499,7 +720,8 @@ export function EarthMap({ ref, initialView, initialCoordinates, sharedNavigatio
     setContextMeasurement(controller?.getMeasurement(contextMeasurement.id) ?? null)
     requestAnimationFrame(() => {
       const active = document.activeElement
-      if (active === document.body || active?.closest('[role="menu"]')) mapRef.current?.getCanvas().focus({ preventScroll: true })
+      if (active === document.body || active?.closest('[role="menu"]'))
+        mapRef.current?.getCanvas().focus({ preventScroll: true })
     })
   }
 
@@ -555,36 +777,108 @@ export function EarthMap({ ref, initialView, initialCoordinates, sharedNavigatio
     Object.entries(map.getStyle().sources).forEach(([id, config]) => {
       const source = map.getSource(id)
       if (config.type === 'geojson' && typeof config.data === 'string') {
-        (source as GeoJSONSource | undefined)?.setData(config.data)
+        ;(source as GeoJSONSource | undefined)?.setData(config.data)
       } else if (source?.type !== 'geojson') {
         map.refreshTiles(id)
       }
     })
   }
 
-  return <section className="earth-map" data-view={view} aria-label="Earth map">
-    <div ref={containerRef} className="earth-map-canvas" />
-    <MapContextMenu triggerRef={contextTriggerRef} coordinates={contextCoordinates} measurement={contextMeasurement}
-      onDeleteMeasurement={deleteContextMeasurement} onRenameMeasurement={renameContextMeasurement} onMeasurementColorChange={changeContextMeasurementColor} onSave={requestSaveContextLocation} onCapture={onCaptureRegion} />
-    <MeasurementNameDialog measurement={renamingMeasurement} onSubmit={saveMeasurementName} onClose={() => setRenamingMeasurement(null)} onCloseAutoFocus={(event) => {
-      event.preventDefault()
-      mapRef.current?.getCanvas().focus({ preventScroll: true })
-    }} />
-    <div className="map-view-control">
-      <ToggleGroup type="single" value={view} onValueChange={changeView} aria-label="Map projection" disabled={!ready}>
-        <ToggleGroupItem value="globe" aria-label="Globe"><GlobeHemisphereWestIcon size={16} />Globe</ToggleGroupItem>
-        <ToggleGroupItem value="map" aria-label="Map"><MapTrifoldIcon size={16} />Map</ToggleGroupItem>
-      </ToggleGroup>
-    </div>
-    <div className="map-background-control"><MapLayersControl overlayStatus={overlayStatus} onOverlayRetry={() => overlaysRef.current?.retry()} background={background} onBackgroundChange={onBackgroundChange} referenceLayers={referenceLayers} onReferenceChange={onReferenceChange} availability={layerAvailability} showSpace={showSpace} onSpaceChange={onSpaceChange} /></div>
-    <output ref={scaleOutputRef} className="map-scale-bar" aria-live="off" aria-label="Local map scales in kilometers and miles" hidden />
-    <output ref={coordinatesRef} className="map-coordinates" aria-label="Hovered coordinates" hidden />
-    {ready && destination && mapInstance && <LocationPin map={mapInstance} location={destination} saved={destinationSaved} onSave={onSaveLocation} onDismiss={onDismissLocation} />}
-    {(loading || notice) && <div className="map-status" role="status" data-fatal={fatal || undefined}>
-      <p>{notice || 'Loading Earth imagery…'}</p>
-      {notice && !fatal && <Button type="button" variant="outline" size="sm" onClick={retryMapResources}>Retry</Button>}
-      {fatal && <Button type="button" variant="outline" size="sm" onClick={() => window.location.reload()}>Reload</Button>}
-    </div>}
-  </section>
+  return (
+    <section className="earth-map" data-view={view} aria-label="Earth map">
+      <div ref={containerRef} className="earth-map-canvas" />
+      <MapContextMenu
+        triggerRef={contextTriggerRef}
+        coordinates={contextCoordinates}
+        measurement={contextMeasurement}
+        onDeleteMeasurement={deleteContextMeasurement}
+        onRenameMeasurement={renameContextMeasurement}
+        onMeasurementColorChange={changeContextMeasurementColor}
+        onSave={requestSaveContextLocation}
+        onCapture={onCaptureRegion}
+      />
+      <MeasurementNameDialog
+        measurement={renamingMeasurement}
+        onSubmit={saveMeasurementName}
+        onClose={() => setRenamingMeasurement(null)}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault()
+          mapRef.current?.getCanvas().focus({ preventScroll: true })
+        }}
+      />
+      <div className="map-view-control">
+        <ToggleGroup
+          type="single"
+          value={view}
+          onValueChange={changeView}
+          aria-label="Map projection"
+          disabled={!ready}
+        >
+          <ToggleGroupItem value="globe" aria-label="Globe">
+            <GlobeHemisphereWestIcon size={16} />
+            Globe
+          </ToggleGroupItem>
+          <ToggleGroupItem value="map" aria-label="Map">
+            <MapTrifoldIcon size={16} />
+            Map
+          </ToggleGroupItem>
+        </ToggleGroup>
+      </div>
+      <div className="map-background-control">
+        <MapLayersControl
+          overlayStatus={overlayStatus}
+          onOverlayRetry={() => overlaysRef.current?.retry()}
+          background={background}
+          onBackgroundChange={onBackgroundChange}
+          referenceLayers={referenceLayers}
+          onReferenceChange={onReferenceChange}
+          availability={layerAvailability}
+          showSpace={showSpace}
+          onSpaceChange={onSpaceChange}
+        />
+      </div>
+      <output
+        ref={scaleOutputRef}
+        className="map-scale-bar"
+        aria-live="off"
+        aria-label="Local map scales in kilometers and miles"
+        hidden
+      />
+      <output
+        ref={coordinatesRef}
+        className="map-coordinates"
+        aria-label="Hovered coordinates"
+        hidden
+      />
+      {ready && destination && mapInstance && (
+        <LocationPin
+          map={mapInstance}
+          location={destination}
+          saved={destinationSaved}
+          onSave={onSaveLocation}
+          onDismiss={onDismissLocation}
+        />
+      )}
+      {(loading || notice) && (
+        <div className="map-status" role="status" data-fatal={fatal || undefined}>
+          <p>{notice || 'Loading Earth imagery…'}</p>
+          {notice && !fatal && (
+            <Button type="button" variant="outline" size="sm" onClick={retryMapResources}>
+              Retry
+            </Button>
+          )}
+          {fatal && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => window.location.reload()}
+            >
+              Reload
+            </Button>
+          )}
+        </div>
+      )}
+    </section>
+  )
 }
-

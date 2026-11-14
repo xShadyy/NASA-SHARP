@@ -11,7 +11,12 @@ const MAX_LABEL_SIZE = 22
 const FADE_ZOOM_SPAN = 2
 const EARTH_CIRCUMFERENCE_KM = 40_075.017
 const MAGNITUDE_SIZES = [12, 13, 15, 18, MAX_LABEL_SIZE]
-const SIZE_ZOOM_STOPS = [[0, 0.9], [5, 0.95], [10, 1], [18, 1.08]] as const
+const SIZE_ZOOM_STOPS = [
+  [0, 0.9],
+  [5, 0.95],
+  [10, 1],
+  [18, 1.08],
+] as const
 
 /** A shape's real ground span, rather than its selected display unit, controls
  * label prominence. The square root of area gives a comparable linear span.
@@ -24,9 +29,13 @@ export function measurementLabelScale(value: number, area: boolean): Measurement
   const labelMinSize = area ? 13 : 12
   return {
     spanKm,
-    labelSize: Math.max(labelMinSize, MAGNITUDE_SIZES[index] + (MAGNITUDE_SIZES[index + 1] - MAGNITUDE_SIZES[index]) * (magnitude - index)),
+    labelSize: Math.max(
+      labelMinSize,
+      MAGNITUDE_SIZES[index] +
+        (MAGNITUDE_SIZES[index + 1] - MAGNITUDE_SIZES[index]) * (magnitude - index),
+    ),
     labelMinSize,
-    labelFadeStart: Math.max(3.25, Math.log2(10 * EARTH_CIRCUMFERENCE_KM / (512 * spanKm))),
+    labelFadeStart: Math.max(3.25, Math.log2((10 * EARTH_CIRCUMFERENCE_KM) / (512 * spanKm))),
   }
 }
 
@@ -48,11 +57,15 @@ function interpolateZoomStops(zoom: number, valueAt: (stop: number) => number) {
 }
 
 export function measurementLabelSize(scale: MeasurementLabelScale, zoom: number) {
-  return interpolateZoomStops(zoom, (stop) => Math.min(MAX_LABEL_SIZE, Math.max(scale.labelMinSize, scale.labelSize * sizeFactor(stop))))
+  return interpolateZoomStops(zoom, (stop) =>
+    Math.min(MAX_LABEL_SIZE, Math.max(scale.labelMinSize, scale.labelSize * sizeFactor(stop))),
+  )
 }
 
 export function measurementLabelOpacity(scale: MeasurementLabelScale, zoom: number) {
-  return interpolateZoomStops(zoom, (stop) => Math.max(0, Math.min(1, (stop - scale.labelFadeStart) / FADE_ZOOM_SPAN)))
+  return interpolateZoomStops(zoom, (stop) =>
+    Math.max(0, Math.min(1, (stop - scale.labelFadeStart) / FADE_ZOOM_SPAN)),
+  )
 }
 
 /** Zoom must be the top-level interpolation input in MapLibre expressions.
@@ -60,10 +73,24 @@ export function measurementLabelOpacity(scale: MeasurementLabelScale, zoom: numb
  * and layout, without rewriting GeoJSON or using a render loop while zooming. */
 const zoomStops = Array.from({ length: 41 }, (_, index) => index / 2)
 export const measurementLabelSizeExpression: ExpressionSpecification = [
-  'interpolate', ['linear'], ['zoom'],
-  ...zoomStops.flatMap((zoom): [number, ExpressionSpecification] => [zoom, ['min', MAX_LABEL_SIZE, ['max', ['get', 'labelMinSize'], ['*', ['get', 'labelSize'], sizeFactor(zoom)]]]]),
+  'interpolate',
+  ['linear'],
+  ['zoom'],
+  ...zoomStops.flatMap((zoom): [number, ExpressionSpecification] => [
+    zoom,
+    [
+      'min',
+      MAX_LABEL_SIZE,
+      ['max', ['get', 'labelMinSize'], ['*', ['get', 'labelSize'], sizeFactor(zoom)]],
+    ],
+  ]),
 ]
 export const measurementLabelOpacityExpression: ExpressionSpecification = [
-  'interpolate', ['linear'], ['zoom'],
-  ...zoomStops.flatMap((zoom): [number, ExpressionSpecification] => [zoom, ['min', 1, ['max', 0, ['/', ['-', zoom, ['get', 'labelFadeStart']], FADE_ZOOM_SPAN]]]]),
+  'interpolate',
+  ['linear'],
+  ['zoom'],
+  ...zoomStops.flatMap((zoom): [number, ExpressionSpecification] => [
+    zoom,
+    ['min', 1, ['max', 0, ['/', ['-', zoom, ['get', 'labelFadeStart']], FADE_ZOOM_SPAN]]],
+  ]),
 ]

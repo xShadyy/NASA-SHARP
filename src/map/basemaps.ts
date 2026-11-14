@@ -1,9 +1,31 @@
 import { applyContextVisibility, type ContextSettings } from './context-overlays'
-import type { ExpressionSpecification, LayerSpecification, Map as MapLibreMap, StyleSpecification } from 'maplibre-gl'
-import { applyGeographicAppearance, geographyLayers, geographySources, GEOGRAPHIC_LABEL_IDS, CITY_LABEL_LAYER_IDS, OPENFREEMAP_GLYPHS } from './geography'
+import type {
+  ExpressionSpecification,
+  LayerSpecification,
+  Map as MapLibreMap,
+  StyleSpecification,
+} from 'maplibre-gl'
+import {
+  applyGeographicAppearance,
+  geographyLayers,
+  geographySources,
+  GEOGRAPHIC_LABEL_IDS,
+  CITY_LABEL_LAYER_IDS,
+  OPENFREEMAP_GLYPHS,
+} from './geography'
 import { GLOBE_PROJECTION, type MapView } from './projection'
-import { GRATICULE_LAYER_IDS, GRATICULE_SOURCE_ID, graticuleLayers, graticuleSource } from './graticule'
-export { applyGeographicAppearance, BOUNDARY_LAYER_IDS, FIRE_LAYER_BEFORE_ID, registerGeographicImages } from './geography'
+import {
+  GRATICULE_LAYER_IDS,
+  GRATICULE_SOURCE_ID,
+  graticuleLayers,
+  graticuleSource,
+} from './graticule'
+export {
+  applyGeographicAppearance,
+  BOUNDARY_LAYER_IDS,
+  FIRE_LAYER_BEFORE_ID,
+  registerGeographicImages,
+} from './geography'
 
 export const NASA_SOURCE_ID = 'nasa-blue-marble'
 export const NASA_LAYER_ID = 'earth-blue-marble'
@@ -13,8 +35,16 @@ export const DETAIL_SOURCE_ID = 'openfreemap'
 
 export type MapBackground = 'topographic' | 'dark-gray' | 'light-gray' | 'firefly' | 'blue-marble'
 export const DEFAULT_MAP_BACKGROUND: MapBackground = 'blue-marble'
-export const MAP_BACKGROUND_OPTIONS: { value: MapBackground, label: string, description: string }[] = [
-  { value: 'topographic', label: 'Topographic', description: 'Terrain, land cover and geographic context' },
+export const MAP_BACKGROUND_OPTIONS: {
+  value: MapBackground
+  label: string
+  description: string
+}[] = [
+  {
+    value: 'topographic',
+    label: 'Topographic',
+    description: 'Terrain, land cover and geographic context',
+  },
   { value: 'dark-gray', label: 'Dark Gray', description: 'Quiet monochrome cartography' },
   { value: 'light-gray', label: 'Light Gray', description: 'Light monochrome cartography' },
   { value: 'firefly', label: 'Firefly', description: 'Muted NASA imagery · Firefly-inspired' },
@@ -50,29 +80,38 @@ export const DETAIL_LAYER_IDS = [
 ] as const
 
 const DETAIL_LABEL_LAYER_IDS = [
-  'detail-road-labels', 'detail-town-labels', 'detail-peak-labels',
+  'detail-road-labels',
+  'detail-town-labels',
+  'detail-peak-labels',
 ] as const
 
 export const LABEL_LAYER_IDS = [...GEOGRAPHIC_LABEL_IDS, ...DETAIL_LABEL_LAYER_IDS]
 
 export const ROAD_LAYER_IDS = [
-  'detail-roads-minor', 'detail-roads-major-casing', 'detail-roads-major',
-  'detail-motorways', 'detail-road-labels',
+  'detail-roads-minor',
+  'detail-roads-major-casing',
+  'detail-roads-major',
+  'detail-motorways',
+  'detail-road-labels',
 ] as const
 
-export const SETTLEMENT_LAYER_IDS = [
-  'detail-town-labels', 'detail-buildings',
-] as const
+export const SETTLEMENT_LAYER_IDS = ['detail-town-labels', 'detail-buildings'] as const
 
 export const COUNTRY_BORDER_LAYER_IDS = [
-  'geography-country-borders', 'geography-disputed-borders',
+  'geography-country-borders',
+  'geography-disputed-borders',
 ] as const
 
 export const TERRAIN_LAYER_IDS = [
-  'detail-relief', 'detail-wood', 'detail-grass', 'detail-peak-labels',
+  'detail-relief',
+  'detail-wood',
+  'detail-grass',
+  'detail-peak-labels',
 ] as const
 const REFERENCE_DETAIL_LAYER_IDS = new Set<string>([
-  ...ROAD_LAYER_IDS, ...SETTLEMENT_LAYER_IDS, ...TERRAIN_LAYER_IDS,
+  ...ROAD_LAYER_IDS,
+  ...SETTLEMENT_LAYER_IDS,
+  ...TERRAIN_LAYER_IDS,
 ])
 
 export type MapReferenceLayers = ContextSettings & {
@@ -112,7 +151,6 @@ export type MapLayerSettings = MapReferenceLayers & {
 }
 
 export type ZoomDependentLayerAvailability = {
-
   available: boolean
 
   minZoom: number | null
@@ -128,30 +166,48 @@ export function getReferenceLayerAvailability(map: MapLibreMap): ReferenceLayerA
   const layers = map.getStyle()?.layers ?? []
   const zoom = map.getZoom()
   const group = (ids: readonly string[]): ZoomDependentLayerAvailability => {
-    const candidates = layers.filter((layer) => ids.includes(layer.id)
-      && ('source' in layer && !!map.getSource(layer.source)))
+    const candidates = layers.filter(
+      (layer) => ids.includes(layer.id) && 'source' in layer && !!map.getSource(layer.source),
+    )
     return {
       available: candidates.length > 0,
-      minZoom: candidates.length ? Math.min(...candidates.map((layer) => layer.minzoom ?? 0)) : null,
-      visibleAtCurrentZoom: candidates.some((layer) => zoom >= (layer.minzoom ?? 0) && zoom < (layer.maxzoom ?? 24)),
+      minZoom: candidates.length
+        ? Math.min(...candidates.map((layer) => layer.minzoom ?? 0))
+        : null,
+      visibleAtCurrentZoom: candidates.some(
+        (layer) => zoom >= (layer.minzoom ?? 0) && zoom < (layer.maxzoom ?? 24),
+      ),
     }
   }
   return { roads: group(ROAD_LAYER_IDS), settlements: group(SETTLEMENT_LAYER_IDS) }
 }
 
 export function applyLayerVisibility(map: MapLibreMap, settings: MapLayerSettings) {
-  const { background = DEFAULT_MAP_BACKGROUND, showRoads, showSettlements, showBorders, showLabels, showTerrain } = settings
+  const {
+    background = DEFAULT_MAP_BACKGROUND,
+    showRoads,
+    showSettlements,
+    showBorders,
+    showLabels,
+    showTerrain,
+  } = settings
   const imagery = background === 'blue-marble' || background === 'firefly'
   const detailed = !imagery || map.getZoom() >= 8
-  const appearance = background === 'dark-gray' || background === 'firefly'
-    ? background === 'firefly' ? 'firefly' : 'dark'
-    : imagery && map.getZoom() < 8.5 ? 'globe' : 'map'
+  const appearance =
+    background === 'dark-gray' || background === 'firefly'
+      ? background === 'firefly'
+        ? 'firefly'
+        : 'dark'
+      : imagery && map.getZoom() < 8.5
+        ? 'globe'
+        : 'map'
   applyBackgroundAppearance(map, background)
   applyGeographicAppearance(map, appearance)
   const visibility = (id: string, visible: boolean) => {
     if (!map.getLayer(id)) return
     const next = visible ? 'visible' : 'none'
-    if (map.getLayoutProperty(id, 'visibility') !== next) map.setLayoutProperty(id, 'visibility', next)
+    if (map.getLayoutProperty(id, 'visibility') !== next)
+      map.setLayoutProperty(id, 'visibility', next)
   }
   visibility(NASA_FALLBACK_LAYER_ID, imagery && map.getZoom() < 9)
   visibility(NASA_FALLBACK_WATER_LAYER_ID, imagery && map.getZoom() < 9)
@@ -162,47 +218,86 @@ export function applyLayerVisibility(map: MapLibreMap, settings: MapLayerSetting
   for (const id of GRATICULE_LAYER_IDS) visibility(id, settings.showGraticule)
   visibility('geography-coastlines', settings.showCoastlines)
   for (const id of COUNTRY_BORDER_LAYER_IDS) visibility(id, showBorders)
-  for (const id of GEOGRAPHIC_LABEL_IDS) visibility(id, (CITY_LABEL_LAYER_IDS as readonly string[]).includes(id) ? settings.showCities : showLabels)
+  for (const id of GEOGRAPHIC_LABEL_IDS)
+    visibility(
+      id,
+      (CITY_LABEL_LAYER_IDS as readonly string[]).includes(id) ? settings.showCities : showLabels,
+    )
   for (const id of ROAD_LAYER_IDS) visibility(id, showRoads)
   for (const id of SETTLEMENT_LAYER_IDS) visibility(id, showSettlements)
   for (const id of TERRAIN_LAYER_IDS) visibility(id, detailed && showTerrain)
   applyContextVisibility(map, settings)
 }
 const terrainColors = {
-    land: '#f0eee5',
-    water: '#bad8e8',
-    wood: '#b8cfb0',
-    grass: '#d4dec0',
-    ice: '#f8fcff',
-    minorRoad: '#ffffff',
-    majorRoad: '#fff8e4',
-    casing: '#c4bca9',
-    motorway: '#dfb789',
-    building: '#d5d1c7',
-    text: '#263b50',
-    halo: '#ffffff',
-    reliefOpacity: 0.78,
-    reliefBrightness: 1,
+  land: '#f0eee5',
+  water: '#bad8e8',
+  wood: '#b8cfb0',
+  grass: '#d4dec0',
+  ice: '#f8fcff',
+  minorRoad: '#ffffff',
+  majorRoad: '#fff8e4',
+  casing: '#c4bca9',
+  motorway: '#dfb789',
+  building: '#d5d1c7',
+  text: '#263b50',
+  halo: '#ffffff',
+  reliefOpacity: 0.78,
+  reliefBrightness: 1,
 } as const
 
-type BackgroundPalette = { [Key in keyof typeof terrainColors]: (typeof terrainColors)[Key] extends number ? number : string }
+type BackgroundPalette = {
+  [Key in keyof typeof terrainColors]: (typeof terrainColors)[Key] extends number ? number : string
+}
 const palettes: Record<MapBackground, BackgroundPalette> = {
   topographic: terrainColors,
   'blue-marble': terrainColors,
   'light-gray': {
-    ...terrainColors, land: '#e8e9e8', water: '#cdd3d5', wood: '#d9ddda', grass: '#e1e3df',
-    ice: '#f5f6f6', minorRoad: '#fafbfb', majorRoad: '#ffffff', motorway: '#c3c8ca',
-    casing: '#bdc3c5', building: '#ced2d2', text: '#39464e', halo: '#f4f5f4', reliefOpacity: 0.12,
+    ...terrainColors,
+    land: '#e8e9e8',
+    water: '#cdd3d5',
+    wood: '#d9ddda',
+    grass: '#e1e3df',
+    ice: '#f5f6f6',
+    minorRoad: '#fafbfb',
+    majorRoad: '#ffffff',
+    motorway: '#c3c8ca',
+    casing: '#bdc3c5',
+    building: '#ced2d2',
+    text: '#39464e',
+    halo: '#f4f5f4',
+    reliefOpacity: 0.12,
   },
   'dark-gray': {
-    land: '#292e32', water: '#171d22', wood: '#303936', grass: '#343b37', ice: '#aab6bd',
-    minorRoad: '#596269', majorRoad: '#909aa1', casing: '#1b2228', motorway: '#b3bdc3',
-    building: '#3c464e', text: '#d9e1e6', halo: '#222a30', reliefOpacity: 0.15, reliefBrightness: 0.42,
+    land: '#292e32',
+    water: '#171d22',
+    wood: '#303936',
+    grass: '#343b37',
+    ice: '#aab6bd',
+    minorRoad: '#596269',
+    majorRoad: '#909aa1',
+    casing: '#1b2228',
+    motorway: '#b3bdc3',
+    building: '#3c464e',
+    text: '#d9e1e6',
+    halo: '#222a30',
+    reliefOpacity: 0.15,
+    reliefBrightness: 0.42,
   },
   firefly: {
-    land: '#0b1720', water: '#06111a', wood: '#172c2d', grass: '#1a2b2c', ice: '#7c9298',
-    minorRoad: '#627b81', majorRoad: '#9fb4b6', casing: '#07121d', motorway: '#b5c9cb',
-    building: '#233741', text: '#dae8eb', halo: '#07131d', reliefOpacity: 0.38, reliefBrightness: 0.45,
+    land: '#0b1720',
+    water: '#06111a',
+    wood: '#172c2d',
+    grass: '#1a2b2c',
+    ice: '#7c9298',
+    minorRoad: '#627b81',
+    majorRoad: '#9fb4b6',
+    casing: '#07121d',
+    motorway: '#b5c9cb',
+    building: '#233741',
+    text: '#dae8eb',
+    halo: '#07131d',
+    reliefOpacity: 0.38,
+    reliefBrightness: 0.45,
   },
 }
 const backgroundByMap = new WeakMap<MapLibreMap, string>()
@@ -214,49 +309,93 @@ function applyBackgroundAppearance(map: MapLibreMap, background: MapBackground) 
   const colors = palettes[background]
   const imagery = background === 'blue-marble' || background === 'firefly'
   const opacity: number | ExpressionSpecification = imagery
-    ? ['interpolate', ['linear'], ['zoom'], 8, 0, 9, 1] : 1
-  const paint = (id: string, property: Parameters<MapLibreMap['setPaintProperty']>[1], value: Parameters<MapLibreMap['setPaintProperty']>[2]) => {
+    ? ['interpolate', ['linear'], ['zoom'], 8, 0, 9, 1]
+    : 1
+  const paint = (
+    id: string,
+    property: Parameters<MapLibreMap['setPaintProperty']>[1],
+    value: Parameters<MapLibreMap['setPaintProperty']>[2],
+  ) => {
     if (map.getLayer(id)) map.setPaintProperty(id, property, value)
   }
   paint('detail-land', 'background-color', colors.land)
   paint('detail-land', 'background-opacity', opacity)
   for (const [id, color] of [
-    ['detail-wood', colors.wood], ['detail-grass', colors.grass],
-    ['detail-ice', colors.ice], ['detail-water', colors.water], ['detail-buildings', colors.building],
-  ]) paint(id, 'fill-color', color)
-  for (const [id, multiplier] of [['detail-wood', 0.65], ['detail-grass', 0.45], ['detail-ice', 1], ['detail-water', 1]] as const) {
-    paint(id, 'fill-opacity', typeof opacity === 'number' ? multiplier : ['interpolate', ['linear'], ['zoom'], 8, 0, 9, multiplier])
+    ['detail-wood', colors.wood],
+    ['detail-grass', colors.grass],
+    ['detail-ice', colors.ice],
+    ['detail-water', colors.water],
+    ['detail-buildings', colors.building],
+  ])
+    paint(id, 'fill-color', color)
+  for (const [id, multiplier] of [
+    ['detail-wood', 0.65],
+    ['detail-grass', 0.45],
+    ['detail-ice', 1],
+    ['detail-water', 1],
+  ] as const) {
+    paint(
+      id,
+      'fill-opacity',
+      typeof opacity === 'number'
+        ? multiplier
+        : ['interpolate', ['linear'], ['zoom'], 8, 0, 9, multiplier],
+    )
   }
   for (const [id, color] of [
-    ['detail-waterways', colors.water], ['detail-roads-minor', colors.minorRoad],
-    ['detail-roads-major-casing', colors.casing], ['detail-roads-major', colors.majorRoad],
+    ['detail-waterways', colors.water],
+    ['detail-roads-minor', colors.minorRoad],
+    ['detail-roads-major-casing', colors.casing],
+    ['detail-roads-major', colors.majorRoad],
     ['detail-motorways', colors.motorway],
-  ]) paint(id, 'line-color', color)
+  ])
+    paint(id, 'line-color', color)
   for (const id of DETAIL_LABEL_LAYER_IDS) {
     paint(id, 'text-color', colors.text)
     paint(id, 'text-halo-color', colors.halo)
   }
-  paint('detail-relief', 'raster-opacity', ['interpolate', ['linear'], ['zoom'], 5, colors.reliefOpacity, 7, 0])
+  paint('detail-relief', 'raster-opacity', [
+    'interpolate',
+    ['linear'],
+    ['zoom'],
+    5,
+    colors.reliefOpacity,
+    7,
+    0,
+  ])
   paint('detail-relief', 'raster-brightness-max', colors.reliefBrightness)
-  paint('detail-relief', 'raster-saturation', background === 'topographic' || background === 'blue-marble' ? 0 : -1)
+  paint(
+    'detail-relief',
+    'raster-saturation',
+    background === 'topographic' || background === 'blue-marble' ? 0 : -1,
+  )
   paint(NASA_LAYER_ID, 'raster-saturation', background === 'firefly' ? -0.9 : 0)
   paint(NASA_LAYER_ID, 'raster-brightness-max', background === 'firefly' ? 0.52 : 1)
   paint(NASA_LAYER_ID, 'raster-contrast', background === 'firefly' ? 0.12 : 0)
 }
 
 const name: ExpressionSpecification = [
-  'coalesce', ['get', 'name:en'], ['get', 'name_en'], ['get', 'name:latin'], ['get', 'name_int'], ['get', 'name'],
+  'coalesce',
+  ['get', 'name:en'],
+  ['get', 'name_en'],
+  ['get', 'name:latin'],
+  ['get', 'name_int'],
+  ['get', 'name'],
 ]
 
 function detailedLayers(): LayerSpecification[] {
   const colors = terrainColors
   const layers: LayerSpecification[] = [
     {
-      id: 'detail-land', type: 'background',
+      id: 'detail-land',
+      type: 'background',
       paint: { 'background-color': colors.land },
     },
     {
-      id: 'detail-relief', type: 'raster', source: 'natural-earth-relief', maxzoom: 7,
+      id: 'detail-relief',
+      type: 'raster',
+      source: 'natural-earth-relief',
+      maxzoom: 7,
       paint: {
         'raster-opacity': ['interpolate', ['linear'], ['zoom'], 5, colors.reliefOpacity, 7, 0],
         'raster-brightness-max': colors.reliefBrightness,
@@ -264,33 +403,53 @@ function detailedLayers(): LayerSpecification[] {
       },
     },
     {
-      id: 'detail-wood', type: 'fill', source: DETAIL_SOURCE_ID, 'source-layer': 'landcover',
+      id: 'detail-wood',
+      type: 'fill',
+      source: DETAIL_SOURCE_ID,
+      'source-layer': 'landcover',
       filter: ['==', 'class', 'wood'],
       paint: { 'fill-color': colors.wood, 'fill-opacity': 0.65 },
     },
     {
-      id: 'detail-grass', type: 'fill', source: DETAIL_SOURCE_ID, 'source-layer': 'landcover',
+      id: 'detail-grass',
+      type: 'fill',
+      source: DETAIL_SOURCE_ID,
+      'source-layer': 'landcover',
       filter: ['in', 'class', 'grass', 'scrub', 'farmland'],
       paint: { 'fill-color': colors.grass, 'fill-opacity': 0.45 },
     },
     {
-      id: 'detail-ice', type: 'fill', source: DETAIL_SOURCE_ID, 'source-layer': 'landcover',
+      id: 'detail-ice',
+      type: 'fill',
+      source: DETAIL_SOURCE_ID,
+      'source-layer': 'landcover',
       filter: ['==', 'class', 'ice'],
       paint: { 'fill-color': colors.ice },
     },
     {
-      id: 'detail-water', type: 'fill', source: DETAIL_SOURCE_ID, 'source-layer': 'water',
+      id: 'detail-water',
+      type: 'fill',
+      source: DETAIL_SOURCE_ID,
+      'source-layer': 'water',
       paint: { 'fill-color': colors.water },
     },
     {
-      id: 'detail-waterways', type: 'line', source: DETAIL_SOURCE_ID, 'source-layer': 'waterway', minzoom: 7,
+      id: 'detail-waterways',
+      type: 'line',
+      source: DETAIL_SOURCE_ID,
+      'source-layer': 'waterway',
+      minzoom: 7,
       paint: {
         'line-color': colors.water,
         'line-width': ['interpolate', ['linear'], ['zoom'], 7, 0.5, 14, 2],
       },
     },
     {
-      id: 'detail-roads-minor', type: 'line', source: DETAIL_SOURCE_ID, 'source-layer': 'transportation', minzoom: 11,
+      id: 'detail-roads-minor',
+      type: 'line',
+      source: DETAIL_SOURCE_ID,
+      'source-layer': 'transportation',
+      minzoom: 11,
       filter: ['in', 'class', 'minor', 'service', 'track', 'path'],
       layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: {
@@ -299,7 +458,11 @@ function detailedLayers(): LayerSpecification[] {
       },
     },
     {
-      id: 'detail-roads-major-casing', type: 'line', source: DETAIL_SOURCE_ID, 'source-layer': 'transportation', minzoom: 6,
+      id: 'detail-roads-major-casing',
+      type: 'line',
+      source: DETAIL_SOURCE_ID,
+      'source-layer': 'transportation',
+      minzoom: 6,
       filter: ['in', 'class', 'trunk', 'primary', 'secondary', 'tertiary'],
       layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: {
@@ -308,7 +471,11 @@ function detailedLayers(): LayerSpecification[] {
       },
     },
     {
-      id: 'detail-roads-major', type: 'line', source: DETAIL_SOURCE_ID, 'source-layer': 'transportation', minzoom: 6,
+      id: 'detail-roads-major',
+      type: 'line',
+      source: DETAIL_SOURCE_ID,
+      'source-layer': 'transportation',
+      minzoom: 6,
       filter: ['in', 'class', 'trunk', 'primary', 'secondary', 'tertiary'],
       layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: {
@@ -317,7 +484,11 @@ function detailedLayers(): LayerSpecification[] {
       },
     },
     {
-      id: 'detail-motorways', type: 'line', source: DETAIL_SOURCE_ID, 'source-layer': 'transportation', minzoom: 5,
+      id: 'detail-motorways',
+      type: 'line',
+      source: DETAIL_SOURCE_ID,
+      'source-layer': 'transportation',
+      minzoom: 5,
       filter: ['==', 'class', 'motorway'],
       layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: {
@@ -326,31 +497,53 @@ function detailedLayers(): LayerSpecification[] {
       },
     },
     {
-      id: 'detail-buildings', type: 'fill', source: DETAIL_SOURCE_ID, 'source-layer': 'building', minzoom: 14,
+      id: 'detail-buildings',
+      type: 'fill',
+      source: DETAIL_SOURCE_ID,
+      'source-layer': 'building',
+      minzoom: 14,
       paint: { 'fill-color': colors.building, 'fill-opacity': 0.8 },
     },
     {
-      id: 'detail-road-labels', type: 'symbol', source: DETAIL_SOURCE_ID, 'source-layer': 'transportation_name', minzoom: 13,
+      id: 'detail-road-labels',
+      type: 'symbol',
+      source: DETAIL_SOURCE_ID,
+      'source-layer': 'transportation_name',
+      minzoom: 13,
       layout: {
-        'text-field': name, 'text-font': ['Fira Sans'], 'text-size': 11,
-        'symbol-placement': 'line', 'text-max-angle': 30,
+        'text-field': name,
+        'text-font': ['Fira Sans'],
+        'text-size': 11,
+        'symbol-placement': 'line',
+        'text-max-angle': 30,
       },
       paint: { 'text-color': colors.text, 'text-halo-color': colors.halo, 'text-halo-width': 1.5 },
     },
     {
-      id: 'detail-town-labels', type: 'symbol', source: DETAIL_SOURCE_ID, 'source-layer': 'place', minzoom: 8,
+      id: 'detail-town-labels',
+      type: 'symbol',
+      source: DETAIL_SOURCE_ID,
+      'source-layer': 'place',
+      minzoom: 8,
       filter: ['in', 'class', 'town', 'village', 'hamlet', 'suburb', 'neighbourhood'],
       layout: {
-        'text-field': name, 'text-font': ['Fira Sans'],
+        'text-field': name,
+        'text-font': ['Fira Sans'],
         'text-size': ['interpolate', ['linear'], ['zoom'], 7, 10, 14, 13],
       },
       paint: { 'text-color': colors.text, 'text-halo-color': colors.halo, 'text-halo-width': 1.5 },
     },
     {
-      id: 'detail-peak-labels', type: 'symbol', source: DETAIL_SOURCE_ID, 'source-layer': 'mountain_peak', minzoom: 10,
+      id: 'detail-peak-labels',
+      type: 'symbol',
+      source: DETAIL_SOURCE_ID,
+      'source-layer': 'mountain_peak',
+      minzoom: 10,
       layout: {
         'text-field': ['concat', name, '\n', ['to-string', ['get', 'ele']], ' m'],
-        'text-font': ['Fira Sans'], 'text-size': 11, 'text-max-width': 8,
+        'text-font': ['Fira Sans'],
+        'text-size': 11,
+        'text-max-width': 8,
       },
       paint: { 'text-color': colors.text, 'text-halo-color': colors.halo, 'text-halo-width': 1.5 },
     },
@@ -372,29 +565,49 @@ export function createEarthStyle(view: MapView = 'globe'): StyleSpecification {
       ...geographySources(),
       [GRATICULE_SOURCE_ID]: graticuleSource(),
       [NASA_SOURCE_ID]: {
-        type: 'raster', tiles: [NASA_BLUE_MARBLE_URL], tileSize: 256,
-        minzoom: 0, maxzoom: 8, attribution: NASA_ATTRIBUTION,
+        type: 'raster',
+        tiles: [NASA_BLUE_MARBLE_URL],
+        tileSize: 256,
+        minzoom: 0,
+        maxzoom: 8,
+        attribution: NASA_ATTRIBUTION,
       },
       [DETAIL_SOURCE_ID]: {
-        type: 'vector', url: 'https://tiles.openfreemap.org/planet', attribution: DETAIL_ATTRIBUTION,
+        type: 'vector',
+        url: 'https://tiles.openfreemap.org/planet',
+        attribution: DETAIL_ATTRIBUTION,
       },
       'natural-earth-relief': {
         type: 'raster',
         tiles: ['https://tiles.openfreemap.org/natural_earth/ne2sr/{z}/{x}/{y}.png'],
-        tileSize: 512, minzoom: 0, maxzoom: 6,
+        tileSize: 512,
+        minzoom: 0,
+        maxzoom: 6,
         attribution: DETAIL_ATTRIBUTION,
       },
     },
     layers: [
-
       { id: 'earth-loading-surface', type: 'background', paint: { 'background-color': '#000000' } },
 
-      { id: NASA_FALLBACK_LAYER_ID, type: 'raster', source: 'natural-earth-relief',
-        paint: { 'raster-fade-duration': 0 }, layout: { visibility: 'none' } },
-      { id: NASA_FALLBACK_WATER_LAYER_ID, type: 'fill', source: DETAIL_SOURCE_ID, 'source-layer': 'water',
-        paint: { 'fill-color': '#113c66' }, layout: { visibility: 'none' } },
       {
-        id: NASA_LAYER_ID, type: 'raster', source: NASA_SOURCE_ID,
+        id: NASA_FALLBACK_LAYER_ID,
+        type: 'raster',
+        source: 'natural-earth-relief',
+        paint: { 'raster-fade-duration': 0 },
+        layout: { visibility: 'none' },
+      },
+      {
+        id: NASA_FALLBACK_WATER_LAYER_ID,
+        type: 'fill',
+        source: DETAIL_SOURCE_ID,
+        'source-layer': 'water',
+        paint: { 'fill-color': '#113c66' },
+        layout: { visibility: 'none' },
+      },
+      {
+        id: NASA_LAYER_ID,
+        type: 'raster',
+        source: NASA_SOURCE_ID,
         paint: { 'raster-fade-duration': 250 },
       },
       ...details.filter((layer) => layer.type !== 'symbol'),
@@ -405,4 +618,3 @@ export function createEarthStyle(view: MapView = 'globe'): StyleSpecification {
     ],
   }
 }
-

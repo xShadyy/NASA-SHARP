@@ -1,13 +1,50 @@
 import type { Feature, FeatureCollection, Geometry } from 'geojson'
 import geographicLib from 'geographiclib-geodesic'
-import { Marker, type GeoJSONSource, type Map as MapLibreMap, type MapMouseEvent, type MapTouchEvent } from 'maplibre-gl'
-import { geodesicDistanceKm, geodesicPath, geodesicPolygonAccumulator, geodesicSegment, closeGeodesicRing, hasCrossingPaths, type GeodesicSegment, type GeographicPosition } from '@/lib/geodesy'
+import {
+  Marker,
+  type GeoJSONSource,
+  type Map as MapLibreMap,
+  type MapMouseEvent,
+  type MapTouchEvent,
+} from 'maplibre-gl'
+import {
+  geodesicDistanceKm,
+  geodesicPath,
+  geodesicPolygonAccumulator,
+  geodesicSegment,
+  closeGeodesicRing,
+  hasCrossingPaths,
+  type GeodesicSegment,
+  type GeographicPosition,
+} from '@/lib/geodesy'
 import { polygonInteriorPoint, polygonContainsPoint } from '@/lib/polygon-label'
-import { measurementUnits, type MeasurementMode, type MeasurementUnit } from '@/lib/measurement-units'
+import {
+  measurementUnits,
+  type MeasurementMode,
+  type MeasurementUnit,
+} from '@/lib/measurement-units'
 import { FIRE_LAYER_BEFORE_ID } from './geography'
-import { measurementLabelScale, measurementLabelSize, measurementLabelOpacity, measurementLabelSizeExpression, measurementLabelOpacityExpression, type MeasurementLabelScale } from './measurement-labels'
-import { DEFAULT_MEASUREMENT_COLORS, isMeasurementColor, measurementColorValue, type MeasurementColor, type MeasurementColors } from './measurement-colors'
-import { loadFinishedMeasurements, persistFinishedMeasurements, MEASUREMENT_NAME_LIMIT, type StoredMeasurement } from './measurement-storage'
+import {
+  measurementLabelScale,
+  measurementLabelSize,
+  measurementLabelOpacity,
+  measurementLabelSizeExpression,
+  measurementLabelOpacityExpression,
+  type MeasurementLabelScale,
+} from './measurement-labels'
+import {
+  DEFAULT_MEASUREMENT_COLORS,
+  isMeasurementColor,
+  measurementColorValue,
+  type MeasurementColor,
+  type MeasurementColors,
+} from './measurement-colors'
+import {
+  loadFinishedMeasurements,
+  persistFinishedMeasurements,
+  MEASUREMENT_NAME_LIMIT,
+  type StoredMeasurement,
+} from './measurement-storage'
 import './measurement-controller.css'
 
 export type MeasurementState = {
@@ -32,7 +69,7 @@ export type MeasurementTarget = {
   text: string
 }
 
-export type MeasurementVertexHit = { measurementId: string, index: number }
+export type MeasurementVertexHit = { measurementId: string; index: number }
 
 export type MeasurementController = {
   setMode: (mode: 'orbit' | MeasurementMode) => void
@@ -42,8 +79,8 @@ export type MeasurementController = {
   clear: () => void
   finish: () => void
   cancelDrawing: () => boolean
-  findVertex: (point: { x: number, y: number }, radius?: number) => MeasurementVertexHit | null
-  findMeasurement: (point: { x: number, y: number }, radius?: number) => MeasurementTarget | null
+  findVertex: (point: { x: number; y: number }, radius?: number) => MeasurementVertexHit | null
+  findMeasurement: (point: { x: number; y: number }, radius?: number) => MeasurementTarget | null
   getMeasurement: (id: string) => MeasurementTarget | null
   selectMeasurement: (id: string | null) => void
   deleteMeasurement: (id: string) => void
@@ -64,9 +101,17 @@ type CachedGeometry = {
   hasPolarGeometry: boolean
   labelAnchor: GeographicPosition | null
 }
-type Shape = StoredMeasurement & { finished: boolean, cache: CachedGeometry }
-type MeasurementLabel = { id: string, kind: 'segment-label' | 'area-label', point: GeographicPosition, text: string, name: string, valueText: string, scale: MeasurementLabelScale }
-type ScreenPoint = { x: number, y: number }
+type Shape = StoredMeasurement & { finished: boolean; cache: CachedGeometry }
+type MeasurementLabel = {
+  id: string
+  kind: 'segment-label' | 'area-label'
+  point: GeographicPosition
+  text: string
+  name: string
+  valueText: string
+  scale: MeasurementLabelScale
+}
+type ScreenPoint = { x: number; y: number }
 type VertexDrag = {
   measurementId: string
   index: number
@@ -74,14 +119,19 @@ type VertexDrag = {
   offset: ScreenPoint
   pending: GeographicPosition | null
   touchId: number | null
-  viewport: { left: number, top: number, scaleX: number, scaleY: number }
+  viewport: { left: number; top: number; scaleX: number; scaleY: number }
 }
 const SOURCE = 'measurements'
 const PREVIEW_SOURCE = 'measurement-preview-geometry'
 const LAYERS = [
-  'measurement-area', 'measurement-line-halo', 'measurement-line',
-  'measurement-preview-halo', 'measurement-preview', 'measurement-vertices',
-  'measurement-segment-labels', 'measurement-area-label',
+  'measurement-area',
+  'measurement-line-halo',
+  'measurement-line',
+  'measurement-preview-halo',
+  'measurement-preview',
+  'measurement-vertices',
+  'measurement-segment-labels',
+  'measurement-area-label',
 ]
 const empty: FeatureCollection = { type: 'FeatureCollection', features: [] }
 const previewInterval = 1_000 / 30
@@ -93,11 +143,18 @@ const precise = new Intl.NumberFormat('en', { maximumFractionDigits: 4 })
 /** Geometry and geodesics are cached on vertex edits. Cursor previews update
  * only the dashed-edge source; explicit vertex drags coalesce geometry writes
  * behind worker backpressure. Neither pointer path updates React per move. */
-export function createMeasurementController(map: MapLibreMap, options: { onChange: (state: MeasurementState) => void, colors?: MeasurementColors, onStorageError?: (message: string) => void }): MeasurementController {
+export function createMeasurementController(
+  map: MapLibreMap,
+  options: {
+    onChange: (state: MeasurementState) => void
+    colors?: MeasurementColors
+    onStorageError?: (message: string) => void
+  },
+): MeasurementController {
   let mode: 'orbit' | MeasurementMode = 'orbit'
   let geometryMode: MeasurementMode = 'ruler'
   let cursor: GeographicPosition | null = null
-  let cursorPoint: { x: number, y: number } | null = null
+  let cursorPoint: { x: number; y: number } | null = null
   let scheduledFrame = 0
   let scheduledTimer: ReturnType<typeof setTimeout> | undefined
   let previewDirty = false
@@ -112,15 +169,30 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
   let editError: string | null = null
   let storageWarningShown = false
   const segmentCache = new Map<string, GeodesicSegment>()
-  const polarLabels = new Map<string, { marker: Marker, element: HTMLDivElement, scale: MeasurementLabelScale, name: string, valueText: string }>()
+  const polarLabels = new Map<
+    string,
+    {
+      marker: Marker
+      element: HTMLDivElement
+      scale: MeasurementLabelScale
+      name: string
+      valueText: string
+    }
+  >()
   const labelMeasure = document.createElement('canvas').getContext('2d')
   const defaults = {
     colors: { ...DEFAULT_MEASUREMENT_COLORS, ...options.colors },
     units: { ruler: 'km', area: 'ha' } as Record<MeasurementMode, MeasurementUnit>,
   }
-  const drafts: Record<MeasurementMode, Shape> = { ruler: newDraft('ruler'), area: newDraft('area') }
+  const drafts: Record<MeasurementMode, Shape> = {
+    ruler: newDraft('ruler'),
+    area: newDraft('area'),
+  }
   const finished = new Map<string, Shape>()
-  const renderedShapes = new Map<string, { features: Feature<Geometry>[], labels: MeasurementLabel[] }>()
+  const renderedShapes = new Map<
+    string,
+    { features: Feature<Geometry>[]; labels: MeasurementLabel[] }
+  >()
   const canvas = map.getCanvas()
   const container = map.getContainer()
   const previousCursor = canvas.style.cursor
@@ -131,15 +203,23 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
   readout.setAttribute('aria-hidden', 'true')
   container.append(readout)
   // Dimensions come from ResizeObserver, never a forced layout after writing text.
-  let containerWidth = container.clientWidth, containerHeight = container.clientHeight
-  let readoutWidth = 150, readoutHeight = 26
+  let containerWidth = container.clientWidth,
+    containerHeight = container.clientHeight
+  let readoutWidth = 150,
+    readoutHeight = 26
   const observer = new ResizeObserver((entries) => {
     for (const entry of entries) {
       const box = entry.borderBoxSize[0]
       const width = box?.inlineSize ?? entry.contentRect.width
       const height = box?.blockSize ?? entry.contentRect.height
-      if (entry.target === container) { containerWidth = width; containerHeight = height; updatePolarLabelAppearance() }
-      else if (width > 0 && height > 0) { readoutWidth = width; readoutHeight = height }
+      if (entry.target === container) {
+        containerWidth = width
+        containerHeight = height
+        updatePolarLabelAppearance()
+      } else if (width > 0 && height > 0) {
+        readoutWidth = width
+        readoutHeight = height
+      }
     }
     if (cursorPoint) requestFrame()
   })
@@ -153,69 +233,144 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
   })
   const previewWriter = latestSourceWriter(map, PREVIEW_SOURCE, () => {
     if (destroyed) return
-    setPreviewVisible(previewHasGeometry && !drag && !!cursor && mode !== 'orbit' && draft().points.length > 0)
+    setPreviewVisible(
+      previewHasGeometry && !drag && !!cursor && mode !== 'orbit' && draft().points.length > 0,
+    )
     if (previewDirty) requestFrame()
   })
   const before = map.getLayer(FIRE_LAYER_BEFORE_ID) ? FIRE_LAYER_BEFORE_ID : undefined
-  map.addLayer({
-    id: LAYERS[0], type: 'fill', source: SOURCE, filter: ['==', 'kind', 'area'],
-    paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.2 },
-  }, before)
-  map.addLayer({
-    id: LAYERS[1], type: 'line', source: SOURCE, filter: ['==', 'kind', 'path'],
-    layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: { 'line-color': '#07173f', 'line-width': 4.5, 'line-opacity': 0.8 },
-  }, before)
-  map.addLayer({
-    id: LAYERS[2], type: 'line', source: SOURCE, filter: ['==', 'kind', 'path'],
-    layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: { 'line-color': ['get', 'color'], 'line-width': 2 },
-  }, before)
-  for (const halo of [true, false]) map.addLayer({
-    id: halo ? LAYERS[3] : LAYERS[4], type: 'line', source: PREVIEW_SOURCE,
-    layout: { 'line-cap': 'round', 'line-join': 'round', visibility: 'none' },
-    paint: halo
-      ? { 'line-color': '#07173f', 'line-width': 4.5, 'line-opacity': 0.8 }
-      : { 'line-color': ['get', 'color'], 'line-width': 2, 'line-dasharray': [3, 2] },
-  }, before)
-  map.addLayer({
-    id: LAYERS[5], type: 'circle', source: SOURCE, filter: ['==', 'kind', 'vertex'],
-    paint: {
-      'circle-radius': ['case', ['==', ['get', 'index'], 0], 5, 4],
-      'circle-color': ['get', 'color'], 'circle-stroke-color': '#07173f', 'circle-stroke-width': 2,
+  map.addLayer(
+    {
+      id: LAYERS[0],
+      type: 'fill',
+      source: SOURCE,
+      filter: ['==', 'kind', 'area'],
+      paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.2 },
     },
-  }, before)
+    before,
+  )
+  map.addLayer(
+    {
+      id: LAYERS[1],
+      type: 'line',
+      source: SOURCE,
+      filter: ['==', 'kind', 'path'],
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-color': '#07173f', 'line-width': 4.5, 'line-opacity': 0.8 },
+    },
+    before,
+  )
+  map.addLayer(
+    {
+      id: LAYERS[2],
+      type: 'line',
+      source: SOURCE,
+      filter: ['==', 'kind', 'path'],
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-color': ['get', 'color'], 'line-width': 2 },
+    },
+    before,
+  )
+  for (const halo of [true, false])
+    map.addLayer(
+      {
+        id: halo ? LAYERS[3] : LAYERS[4],
+        type: 'line',
+        source: PREVIEW_SOURCE,
+        layout: { 'line-cap': 'round', 'line-join': 'round', visibility: 'none' },
+        paint: halo
+          ? { 'line-color': '#07173f', 'line-width': 4.5, 'line-opacity': 0.8 }
+          : { 'line-color': ['get', 'color'], 'line-width': 2, 'line-dasharray': [3, 2] },
+      },
+      before,
+    )
+  map.addLayer(
+    {
+      id: LAYERS[5],
+      type: 'circle',
+      source: SOURCE,
+      filter: ['==', 'kind', 'vertex'],
+      paint: {
+        'circle-radius': ['case', ['==', ['get', 'index'], 0], 5, 4],
+        'circle-color': ['get', 'color'],
+        'circle-stroke-color': '#07173f',
+        'circle-stroke-width': 2,
+      },
+    },
+    before,
+  )
   // Native symbols follow their geographic points in both projections. They
   // deliberately remain readable over imagery and cannot be hidden by cities.
-  for (const area of [false, true]) map.addLayer({
-    id: area ? LAYERS[7] : LAYERS[6], type: 'symbol', source: SOURCE,
-    filter: ['all', ['==', 'kind', area ? 'area-label' : 'segment-label'], ['!=', 'polar', true]],
-    layout: {
-      'text-field': ['get', 'label'], 'text-font': ['Fira Sans'], 'text-size': measurementLabelSizeExpression,
-      'text-anchor': area ? 'center' : 'bottom', 'text-offset': area ? [0, 0] : ['case', ['==', ['get', 'isTotal'], true], ['literal', [0, -1.6]], ['literal', [0, -0.45]]],
-      'text-max-width': 12, 'text-allow-overlap': true, 'text-ignore-placement': true,
-      'text-pitch-alignment': 'viewport', 'text-rotation-alignment': 'viewport',
-    },
-    paint: {
-      'text-color': '#ffffff', 'text-halo-color': '#07173f', 'text-halo-width': 1.5,
-      'text-opacity': measurementLabelOpacityExpression,
-    },
-  })
+  for (const area of [false, true])
+    map.addLayer({
+      id: area ? LAYERS[7] : LAYERS[6],
+      type: 'symbol',
+      source: SOURCE,
+      filter: ['all', ['==', 'kind', area ? 'area-label' : 'segment-label'], ['!=', 'polar', true]],
+      layout: {
+        'text-field': ['get', 'label'],
+        'text-font': ['Fira Sans'],
+        'text-size': measurementLabelSizeExpression,
+        'text-anchor': area ? 'center' : 'bottom',
+        'text-offset': area
+          ? [0, 0]
+          : [
+              'case',
+              ['==', ['get', 'isTotal'], true],
+              ['literal', [0, -1.6]],
+              ['literal', [0, -0.45]],
+            ],
+        'text-max-width': 12,
+        'text-allow-overlap': true,
+        'text-ignore-placement': true,
+        'text-pitch-alignment': 'viewport',
+        'text-rotation-alignment': 'viewport',
+      },
+      paint: {
+        'text-color': '#ffffff',
+        'text-halo-color': '#07173f',
+        'text-halo-width': 1.5,
+        'text-opacity': measurementLabelOpacityExpression,
+      },
+    })
 
   function newDraft(tool: MeasurementMode): Shape {
-    return { id: crypto.randomUUID(), mode: tool, name: '', points: [], finished: false, unit: defaults.units[tool], color: defaults.colors[tool], cache: blankCache() }
+    return {
+      id: crypto.randomUUID(),
+      mode: tool,
+      name: '',
+      points: [],
+      finished: false,
+      unit: defaults.units[tool],
+      color: defaults.colors[tool],
+      cache: blankCache(),
+    }
   }
 
-  function draft() { return drafts[geometryMode] }
+  function draft() {
+    return drafts[geometryMode]
+  }
 
   function getShape(id: string) {
-    return finished.get(id) ?? (drafts.ruler.id === id ? drafts.ruler : drafts.area.id === id ? drafts.area : null)
+    return (
+      finished.get(id) ??
+      (drafts.ruler.id === id ? drafts.ruler : drafts.area.id === id ? drafts.area : null)
+    )
   }
 
-  function allShapes() { return [...finished.values(), ...Object.values(drafts).filter((current) => current.points.length)] }
+  function allShapes() {
+    return [
+      ...finished.values(),
+      ...Object.values(drafts).filter((current) => current.points.length),
+    ]
+  }
 
   function shape() {
-    return (drag ? getShape(drag.measurementId) : null) ?? (draft().points.length ? draft() : selectedId ? finished.get(selectedId) : null) ?? draft()
+    return (
+      (drag ? getShape(drag.measurementId) : null) ??
+      (draft().points.length ? draft() : selectedId ? finished.get(selectedId) : null) ??
+      draft()
+    )
   }
 
   function storageError(message: string) {
@@ -225,30 +380,48 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
   }
 
   function persist() {
-    if (!persistFinishedMeasurements([...finished.values()])) storageError('Measurements could not be saved in this browser. They remain on the map until you close or reload the page.')
+    if (!persistFinishedMeasurements([...finished.values()]))
+      storageError(
+        'Measurements could not be saved in this browser. They remain on the map until you close or reload the page.',
+      )
   }
 
   function setPreviewVisible(visible: boolean) {
     if (previewVisible === visible) return
     previewVisible = visible
-    for (const layer of [LAYERS[3], LAYERS[4]]) map.setLayoutProperty(layer, 'visibility', visible ? 'visible' : 'none')
+    for (const layer of [LAYERS[3], LAYERS[4]])
+      map.setLayoutProperty(layer, 'visibility', visible ? 'visible' : 'none')
   }
 
   function canFinish(current: Shape) {
-    if (current.points.length < (current.mode === 'area' ? 3 : 2) || current.cache.crossing) return false
-    const value = current.mode === 'area' ? Math.abs(current.cache.accumulator.signedAreaKm2) : current.cache.distanceKm
+    if (current.points.length < (current.mode === 'area' ? 3 : 2) || current.cache.crossing)
+      return false
+    const value =
+      current.mode === 'area'
+        ? Math.abs(current.cache.accumulator.signedAreaKm2)
+        : current.cache.distanceKm
     return Number.isFinite(value) && value > (current.mode === 'area' ? 1e-8 : 0)
   }
 
   function updatePointerCursor() {
-    canvas.style.cursor = drag ? 'grabbing' : hoveredVertex !== null ? 'grab' : mode === 'orbit' ? previousCursor : 'crosshair'
+    canvas.style.cursor = drag
+      ? 'grabbing'
+      : hoveredVertex !== null
+        ? 'grab'
+        : mode === 'orbit'
+          ? previousCursor
+          : 'crosshair'
     canvas.classList.toggle('measurement-vertex-dragging', drag !== null)
   }
 
   /** A canonical GeoJSON point may appear in another wrapped world. Project
    * the copy nearest the pointer, then inverse-project it to reject a point on
    * the hidden hemisphere. No private MapLibre transform APIs are needed. */
-  function vertexScreenPosition(point: GeographicPosition, near: ScreenPoint, maxDistance = Infinity): ScreenPoint | null {
+  function vertexScreenPosition(
+    point: GeographicPosition,
+    near: ScreenPoint,
+    maxDistance = Infinity,
+  ): ScreenPoint | null {
     if (Math.abs(point[1]) > MAX_VECTOR_LATITUDE) return null
     const longitude = map.unproject([near.x, near.y]).lng
     const wrap = Math.round((longitude - point[0]) / 360)
@@ -257,7 +430,15 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
     for (const copy of [wrap, wrap - 1, wrap + 1]) {
       const projected = map.project([point[0] + copy * 360, point[1]])
       const candidateDistance = Math.hypot(projected.x - near.x, projected.y - near.y)
-      if (candidateDistance > maxDistance || candidateDistance >= distance || projected.x < 0 || projected.y < 0 || projected.x > containerWidth || projected.y > containerHeight) continue
+      if (
+        candidateDistance > maxDistance ||
+        candidateDistance >= distance ||
+        projected.x < 0 ||
+        projected.y < 0 ||
+        projected.x > containerWidth ||
+        projected.y > containerHeight
+      )
+        continue
       const visible = map.unproject(projected).wrap()
       if (geodesicDistanceKm(point, [visible.lng, visible.lat]) > 0.01) continue
       best = projected
@@ -267,28 +448,59 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
   }
 
   function findVertex(point: ScreenPoint, radius = VERTEX_HIT_RADIUS): MeasurementVertexHit | null {
-    if (destroyed || !Number.isFinite(point.x) || !Number.isFinite(point.y) || !Number.isFinite(radius) || radius < 0) return null
+    if (
+      destroyed ||
+      !Number.isFinite(point.x) ||
+      !Number.isFinite(point.y) ||
+      !Number.isFinite(radius) ||
+      radius < 0
+    )
+      return null
     let nearest: MeasurementVertexHit | null = null
     let distance = radius
-    for (const current of allShapes()) for (const [index, position] of current.points.entries()) {
-      const projected = vertexScreenPosition(position, point, distance)
-      if (!projected) continue
-      const next = Math.hypot(projected.x - point.x, projected.y - point.y)
-      if (next <= distance) { nearest = { measurementId: current.id, index }; distance = next }
-    }
+    for (const current of allShapes())
+      for (const [index, position] of current.points.entries()) {
+        const projected = vertexScreenPosition(position, point, distance)
+        if (!projected) continue
+        const next = Math.hypot(projected.x - point.x, projected.y - point.y)
+        if (next <= distance) {
+          nearest = { measurementId: current.id, index }
+          distance = next
+        }
+      }
     return nearest
   }
 
   function target(current: Shape): MeasurementTarget {
-    const value = current.mode === 'area' ? Math.abs(current.cache.accumulator.signedAreaKm2) : current.cache.distanceKm
-    return { id: current.id, mode: current.mode, name: current.name, color: current.color, unit: current.unit, text: formatMeasurement(value, current.unit) }
+    const value =
+      current.mode === 'area'
+        ? Math.abs(current.cache.accumulator.signedAreaKm2)
+        : current.cache.distanceKm
+    return {
+      id: current.id,
+      mode: current.mode,
+      name: current.name,
+      color: current.color,
+      unit: current.unit,
+      text: formatMeasurement(value, current.unit),
+    }
   }
 
   function findMeasurement(point: ScreenPoint, radius = 10): MeasurementTarget | null {
     if (destroyed || !Number.isFinite(radius) || radius < 0) return null
     const geographic = positionAtPoint(point)
     if (!geographic) return null
-    const candidates = new Set(map.queryRenderedFeatures([[point.x - radius, point.y - radius], [point.x + radius, point.y + radius]], { layers: [LAYERS[0], LAYERS[2]] }).map((item) => item.properties.measurementId as string))
+    const candidates = new Set(
+      map
+        .queryRenderedFeatures(
+          [
+            [point.x - radius, point.y - radius],
+            [point.x + radius, point.y + radius],
+          ],
+          { layers: [LAYERS[0], LAYERS[2]] },
+        )
+        .map((item) => item.properties.measurementId as string),
+    )
     const pointerLongitude = map.unproject([point.x, point.y]).lng
     let nearest: Shape | null = null
     let distance = radius
@@ -296,7 +508,8 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
       if (!candidates.has(current.id) && !current.cache.hasPolarGeometry) continue
       const path = current.mode === 'area' ? current.cache.boundary : current.cache.openPath
       for (let index = 1; index < path.length; index++) {
-        const from = path[index - 1], to = path[index]
+        const from = path[index - 1],
+          to = path[index]
         // Both endpoints use the same wrapped world, avoiding a false chord
         // between opposite edges of a Mercator copy at the antimeridian.
         const wrap = Math.round((pointerLongitude - (from[0] + to[0]) / 2) / 360) * 360
@@ -305,26 +518,42 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
           const back = map.unproject(result).wrap()
           return geodesicDistanceKm(position, [back.lng, back.lat]) <= 0.01 ? result : null
         }
-        const a = project(from), b = project(to)
+        const a = project(from),
+          b = project(to)
         if (!a || !b) continue
         const next = pointSegmentDistance(point, a, b)
-        if (next < distance || (!nearest && next <= distance)) { nearest = current; distance = next }
+        if (next < distance || (!nearest && next <= distance)) {
+          nearest = current
+          distance = next
+        }
       }
     }
     if (nearest) return target(nearest)
     // Only visible, truly enclosed fill is selectable; not a polygon's bbox or
     // a hidden hemisphere. This also covers polar caps and concave polygons.
     for (const current of [...finished.values()].reverse()) {
-      if (current.mode === 'area' && !current.cache.crossing && (candidates.has(current.id) || current.cache.hasPolarGeometry) && polygonContainsPoint(geographic, current.points)) return target(current)
+      if (
+        current.mode === 'area' &&
+        !current.cache.crossing &&
+        (candidates.has(current.id) || current.cache.hasPolarGeometry) &&
+        polygonContainsPoint(geographic, current.points)
+      )
+        return target(current)
     }
     return null
   }
 
   function positionAtPoint(point: ScreenPoint): GeographicPosition | null {
-    if (point.x < 0 || point.y < 0 || point.x > containerWidth || point.y > containerHeight) return null
+    if (point.x < 0 || point.y < 0 || point.x > containerWidth || point.y > containerHeight)
+      return null
     const location = map.unproject([point.x, point.y])
     const projected = map.project(location)
-    if (!Number.isFinite(location.lng) || !Number.isFinite(location.lat) || Math.hypot(projected.x - point.x, projected.y - point.y) > 1) return null
+    if (
+      !Number.isFinite(location.lng) ||
+      !Number.isFinite(location.lat) ||
+      Math.hypot(projected.x - point.x, projected.y - point.y) > 1
+    )
+      return null
     const wrapped = location.wrap()
     return [wrapped.lng, Math.max(-90, Math.min(90, wrapped.lat))]
   }
@@ -343,22 +572,34 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
   function rebuild(current: Shape) {
     renderedShapes.delete(current.id)
     const segments: GeodesicSegment[] = []
-    for (let index = 1; index < current.points.length; index++) segments.push(getSegment(current.points[index - 1], current.points[index]))
+    for (let index = 1; index < current.points.length; index++)
+      segments.push(getSegment(current.points[index - 1], current.points[index]))
     const paths = segments.map((segment) => segment.path)
     const openPath = joinPaths(paths)
-    const closedPaths = current.mode === 'area' && current.points.length >= 2
-      ? [...paths, getSegment(current.points.at(-1)!, current.points[0]).path] : paths
+    const closedPaths =
+      current.mode === 'area' && current.points.length >= 2
+        ? [...paths, getSegment(current.points.at(-1)!, current.points[0]).path]
+        : paths
     const boundary = joinPaths(closedPaths)
     const accumulator = geodesicPolygonAccumulator(current.points)
-    const ring = current.mode === 'area' && current.points.length >= 3 ? closeGeodesicRing(boundary, accumulator.signedAreaKm2) : []
+    const ring =
+      current.mode === 'area' && current.points.length >= 3
+        ? closeGeodesicRing(boundary, accumulator.signedAreaKm2)
+        : []
     current.cache = {
-      segments, openPath, boundary,
+      segments,
+      openPath,
+      boundary,
       ring,
-      accumulator, distanceKm: segments.reduce((total, segment) => total + segment.distanceKm, 0),
-      crossing: current.mode === 'area' && current.points.length >= 4 && hasCrossingPaths(closedPaths),
+      accumulator,
+      distanceKm: segments.reduce((total, segment) => total + segment.distanceKm, 0),
+      crossing:
+        current.mode === 'area' && current.points.length >= 4 && hasCrossingPaths(closedPaths),
       // A cap can enclose a pole even with every vertex below the vector
       // source's latitude limit. Its closed ring includes that polar edge.
-      hasPolarGeometry: boundary.some((position) => Math.abs(position[1]) > MAX_VECTOR_LATITUDE) || ring.some((position) => Math.abs(position[1]) > MAX_VECTOR_LATITUDE),
+      hasPolarGeometry:
+        boundary.some((position) => Math.abs(position[1]) > MAX_VECTOR_LATITUDE) ||
+        ring.some((position) => Math.abs(position[1]) > MAX_VECTOR_LATITUDE),
       labelAnchor: null,
     }
   }
@@ -369,28 +610,75 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
     const cache = current.cache
     const features: Feature<Geometry>[] = []
     const labels: MeasurementLabel[] = []
-    const properties = { measurementId: current.id, mode: current.mode, name: current.name, color: measurementColorValue(current.color), finished: current.finished }
-    function add(kind: string, geometry: Geometry, id: string, extra: Record<string, unknown> = {}) {
-      features.push({ ...feature(kind, geometry, `${current.id}:${id}`), properties: { ...properties, kind, ...extra } })
+    const properties = {
+      measurementId: current.id,
+      mode: current.mode,
+      name: current.name,
+      color: measurementColorValue(current.color),
+      finished: current.finished,
     }
-    function label(kind: MeasurementLabel['kind'], point: GeographicPosition, id: string, value: number, name = '') {
+    function add(
+      kind: string,
+      geometry: Geometry,
+      id: string,
+      extra: Record<string, unknown> = {},
+    ) {
+      features.push({
+        ...feature(kind, geometry, `${current.id}:${id}`),
+        properties: { ...properties, kind, ...extra },
+      })
+    }
+    function label(
+      kind: MeasurementLabel['kind'],
+      point: GeographicPosition,
+      id: string,
+      value: number,
+      name = '',
+    ) {
       const valueText = formatMeasurement(value, current.unit)
       const text = namedLabel(name, valueText)
       const scale = measurementLabelScale(value, current.mode === 'area')
       labels.push({ id: `${current.id}:${id}`, kind, point, text, name, valueText, scale })
-      add(kind, { type: 'Point', coordinates: point }, id, { label: text, value, isTotal: id === 'total-label', ...scale, polar: Math.abs(point[1]) > 85 })
+      add(kind, { type: 'Point', coordinates: point }, id, {
+        label: text,
+        value,
+        isTotal: id === 'total-label',
+        ...scale,
+        polar: Math.abs(point[1]) > 85,
+      })
     }
-    if (current.mode === 'area' && current.points.length >= 3 && !cache.crossing) add('area', { type: 'Polygon', coordinates: [cache.ring] }, 'area')
+    if (current.mode === 'area' && current.points.length >= 3 && !cache.crossing)
+      add('area', { type: 'Polygon', coordinates: [cache.ring] }, 'area')
     const path = current.mode === 'area' ? cache.boundary : cache.openPath
     if (path.length >= 2) add('path', { type: 'LineString', coordinates: path }, 'path')
-    for (const [index, point] of current.points.entries()) add('vertex', { type: 'Point', coordinates: point }, `vertex-${index}`, { index })
+    for (const [index, point] of current.points.entries())
+      add('vertex', { type: 'Point', coordinates: point }, `vertex-${index}`, { index })
     if (current.mode === 'ruler') {
       for (const [index, segment] of cache.segments.entries()) {
-        label('segment-label', segment.midpoint, `segment-label-${index}`, segment.distanceKm, cache.segments.length === 1 ? current.name : '')
+        label(
+          'segment-label',
+          segment.midpoint,
+          `segment-label-${index}`,
+          segment.distanceKm,
+          cache.segments.length === 1 ? current.name : '',
+        )
       }
-      if (current.name && cache.segments.length > 1) label('segment-label', pathMidpoint(cache.segments), 'total-label', cache.distanceKm, current.name)
+      if (current.name && cache.segments.length > 1)
+        label(
+          'segment-label',
+          pathMidpoint(cache.segments),
+          'total-label',
+          cache.distanceKm,
+          current.name,
+        )
     } else if (current.finished && !cache.crossing && cache.labelAnchor) {
-      label('area-label', cache.labelAnchor, 'area-label', Math.abs(cache.accumulator.signedAreaKm2), current.name)
+      label(
+        'area-label',
+        cache.labelAnchor,
+        'area-label',
+        Math.abs(cache.accumulator.signedAreaKm2),
+        current.name,
+      )
     }
     const result = { features, labels }
     renderedShapes.set(current.id, result)
@@ -414,15 +702,22 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
     if (size && display && labelMeasure) {
       labelMeasure.font = `400 ${size}px "Fira Sans"`
       const width = Math.max(100, Math.min(320, containerWidth - 24))
-      while (display.length > 2 && labelMeasure.measureText(`${display} · ${value}`).width > width) display = `${display.replace(/…$/, '').slice(0, -1)}…`
+      while (display.length > 2 && labelMeasure.measureText(`${display} · ${value}`).width > width)
+        display = `${display.replace(/…$/, '').slice(0, -1)}…`
       if (labelMeasure.measureText(`${display} · ${value}`).width > width) display = ''
     }
     return display ? `${display} · ${value}` : value
   }
 
   function reconcilePolarLabels(labels: MeasurementLabel[]) {
-    const desired = new Set(labels.filter((label) => Math.abs(label.point[1]) > 85).map((label) => label.id))
-    for (const [id, current] of polarLabels) if (!desired.has(id)) { current.marker.remove(); polarLabels.delete(id) }
+    const desired = new Set(
+      labels.filter((label) => Math.abs(label.point[1]) > 85).map((label) => label.id),
+    )
+    for (const [id, current] of polarLabels)
+      if (!desired.has(id)) {
+        current.marker.remove()
+        polarLabels.delete(id)
+      }
     for (const label of labels) {
       if (!desired.has(label.id)) continue
       let current = polarLabels.get(label.id)
@@ -430,9 +725,27 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
         const element = document.createElement('div')
         element.className = 'measurement-polar-label'
         element.dataset.kind = label.kind
-        const marker = new Marker({ element, anchor: label.kind === 'area-label' ? 'center' : 'bottom', offset: label.kind === 'area-label' ? [0, 0] : label.id.endsWith(':total-label') ? [0, -32] : [0, -8], opacity: measurementLabelOpacity(label.scale, map.getZoom()), opacityWhenCovered: 0 })
-          .setLngLat(label.point).addTo(map)
-        current = { marker, element, scale: label.scale, name: label.name, valueText: label.valueText }
+        const marker = new Marker({
+          element,
+          anchor: label.kind === 'area-label' ? 'center' : 'bottom',
+          offset:
+            label.kind === 'area-label'
+              ? [0, 0]
+              : label.id.endsWith(':total-label')
+                ? [0, -32]
+                : [0, -8],
+          opacity: measurementLabelOpacity(label.scale, map.getZoom()),
+          opacityWhenCovered: 0,
+        })
+          .setLngLat(label.point)
+          .addTo(map)
+        current = {
+          marker,
+          element,
+          scale: label.scale,
+          name: label.name,
+          valueText: label.valueText,
+        }
         polarLabels.set(label.id, current)
       }
       current.element.textContent = label.text
@@ -457,14 +770,23 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
   }
 
   function publish() {
-    const current = shape(), cache = current.cache
-    const value = current.mode === 'area' ? Math.abs(cache.accumulator.signedAreaKm2) : cache.distanceKm
-    const error = editError ?? (cache.crossing ? 'Edges cross. Move or remove a point to measure this area.' : null)
+    const current = shape(),
+      cache = current.cache
+    const value =
+      current.mode === 'area' ? Math.abs(cache.accumulator.signedAreaKm2) : cache.distanceKm
+    const error =
+      editError ??
+      (cache.crossing ? 'Edges cross. Move or remove a point to measure this area.' : null)
     options.onChange({
-      mode, canUndo: current.points.length > 0, canClear: current.points.length > 0,
+      mode,
+      canUndo: current.points.length > 0,
+      canClear: current.points.length > 0,
       canFinish: !current.finished && canFinish(current),
-      value: cache.crossing ? 0 : value, text: current.points.length ? error ?? formatMeasurement(value, current.unit) : '',
-      pointCount: current.points.length, finished: current.finished, error,
+      value: cache.crossing ? 0 : value,
+      text: current.points.length ? (error ?? formatMeasurement(value, current.unit)) : '',
+      pointCount: current.points.length,
+      finished: current.finished,
+      error,
     })
   }
 
@@ -472,22 +794,40 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
     const projected = map.project(event.lngLat)
     if (Math.hypot(projected.x - event.point.x, projected.y - event.point.y) > 1) return null
     const { lng, lat } = event.lngLat.wrap()
-    return Number.isFinite(lng) && Number.isFinite(lat) ? [lng, Math.max(-90, Math.min(90, lat))] : null
+    return Number.isFinite(lng) && Number.isFinite(lat)
+      ? [lng, Math.max(-90, Math.min(90, lat))]
+      : null
   }
 
   function updateReadout() {
     const current = shape()
     if (drag) {
-      if (!cursorPoint || current.points.length < (current.mode === 'area' ? 3 : 2)) { readout.hidden = true; return }
-      const value = current.mode === 'area' ? Math.abs(current.cache.accumulator.signedAreaKm2) : current.cache.distanceKm
-      showReadout(current.cache.crossing ? 'Edges cross · Move or remove a point' : formatMeasurement(value, current.unit))
+      if (!cursorPoint || current.points.length < (current.mode === 'area' ? 3 : 2)) {
+        readout.hidden = true
+        return
+      }
+      const value =
+        current.mode === 'area'
+          ? Math.abs(current.cache.accumulator.signedAreaKm2)
+          : current.cache.distanceKm
+      showReadout(
+        current.cache.crossing
+          ? 'Edges cross · Move or remove a point'
+          : formatMeasurement(value, current.unit),
+      )
       return
     }
-    if (!cursor || !cursorPoint || mode === 'orbit' || current.finished || !current.points.length) { readout.hidden = true; return }
-    const value = current.mode === 'area'
-      ? Math.abs(current.cache.accumulator.previewSignedAreaKm2(cursor))
-      : current.cache.distanceKm + geodesicDistanceKm(current.points.at(-1)!, cursor)
-    const text = current.cache.crossing ? 'Edges cross · Move or remove a point' : formatMeasurement(value, current.unit)
+    if (!cursor || !cursorPoint || mode === 'orbit' || current.finished || !current.points.length) {
+      readout.hidden = true
+      return
+    }
+    const value =
+      current.mode === 'area'
+        ? Math.abs(current.cache.accumulator.previewSignedAreaKm2(cursor))
+        : current.cache.distanceKm + geodesicDistanceKm(current.points.at(-1)!, cursor)
+    const text = current.cache.crossing
+      ? 'Edges cross · Move or remove a point'
+      : formatMeasurement(value, current.unit)
     showReadout(text)
   }
 
@@ -496,7 +836,10 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
     if (readout.textContent !== text) readout.textContent = text
     readout.hidden = false
     const x = Math.max(8, Math.min(cursorPoint.x + 15, containerWidth - readoutWidth - 8))
-    const y = Math.max(8, Math.min(cursorPoint.y - readoutHeight - 7, containerHeight - readoutHeight - 8))
+    const y = Math.max(
+      8,
+      Math.min(cursorPoint.y - readoutHeight - 7, containerHeight - readoutHeight - 8),
+    )
     readout.style.transform = `translate3d(${x}px, ${y}px, 0)`
   }
 
@@ -510,10 +853,24 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
     }
     // Only the candidate edges move. The clicked footprint stays filled until
     // the next click, avoiding a whole polygon reindex on every pointer frame.
-    const points = current.mode === 'area' && current.points.length >= 2
-      ? [current.points.at(-1)!, cursor, current.points[0]] : [current.points.at(-1)!, cursor]
+    const points =
+      current.mode === 'area' && current.points.length >= 2
+        ? [current.points.at(-1)!, cursor, current.points[0]]
+        : [current.points.at(-1)!, cursor]
     previewHasGeometry = true
-    previewWriter.write({ type: 'FeatureCollection', features: [{ ...feature('preview', { type: 'LineString', coordinates: geodesicPath(points) }), properties: { kind: 'preview', measurementId: current.id, color: measurementColorValue(current.color) } }] })
+    previewWriter.write({
+      type: 'FeatureCollection',
+      features: [
+        {
+          ...feature('preview', { type: 'LineString', coordinates: geodesicPath(points) }),
+          properties: {
+            kind: 'preview',
+            measurementId: current.id,
+            color: measurementColorValue(current.color),
+          },
+        },
+      ],
+    })
   }
 
   function requestFrame() {
@@ -525,7 +882,11 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
         if (!committedWriter.busy) {
           const wait = previewInterval - (now - lastPreviewTime)
           if (wait > 0) {
-            if (scheduledTimer === undefined) scheduledTimer = setTimeout(() => { scheduledTimer = undefined; requestFrame() }, wait)
+            if (scheduledTimer === undefined)
+              scheduledTimer = setTimeout(() => {
+                scheduledTimer = undefined
+                requestFrame()
+              }, wait)
           } else {
             lastPreviewTime = now
             applyDragPosition(drag)
@@ -539,7 +900,11 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
       if (!previewDirty || previewWriter.busy) return
       const wait = previewInterval - (now - lastPreviewTime)
       if (wait > 0) {
-        if (scheduledTimer === undefined) scheduledTimer = setTimeout(() => { scheduledTimer = undefined; requestFrame() }, wait)
+        if (scheduledTimer === undefined)
+          scheduledTimer = setTimeout(() => {
+            scheduledTimer = undefined
+            requestFrame()
+          }, wait)
         return
       }
       previewDirty = false
@@ -583,7 +948,10 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
   function dragAt(clientX: number, clientY: number) {
     if (!drag) return
     const { viewport, offset } = drag
-    cursorPoint = { x: (clientX - viewport.left) * viewport.scaleX, y: (clientY - viewport.top) * viewport.scaleY }
+    cursorPoint = {
+      x: (clientX - viewport.left) * viewport.scaleX,
+      y: (clientY - viewport.top) * viewport.scaleY,
+    }
     const point = positionAtPoint({ x: cursorPoint.x + offset.x, y: cursorPoint.y + offset.y })
     if (point) drag.pending = point
     requestFrame()
@@ -591,7 +959,10 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
 
   function onDragMouseMove(event: MouseEvent) {
     if (!drag || drag.touchId !== null) return
-    if (!(event.buttons & 1)) { endDrag(); return }
+    if (!(event.buttons & 1)) {
+      endDrag()
+      return
+    }
     event.preventDefault()
     dragAt(event.clientX, event.clientY)
   }
@@ -606,7 +977,10 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
     if (!drag || drag.touchId === null) return
     // A second finger cancels this edit rather than accidentally moving a
     // point during a pinch. The next gesture can navigate the map normally.
-    if (event.touches.length !== 1) { endDrag(true); return }
+    if (event.touches.length !== 1) {
+      endDrag(true)
+      return
+    }
     const touch = [...event.touches].find((item) => item.identifier === drag?.touchId)
     if (!touch) return
     if (event.cancelable) event.preventDefault()
@@ -621,7 +995,9 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
     endDrag()
   }
 
-  function onDragCancel() { endDrag(true) }
+  function onDragCancel() {
+    endDrag(true)
+  }
   function onDragKeyDown(event: KeyboardEvent) {
     if (!drag || event.key !== 'Escape') return
     event.preventDefault()
@@ -641,9 +1017,18 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
     editError = null
     const rect = canvas.getBoundingClientRect()
     drag = {
-      measurementId: current.id, index: hit.index, original: [...original], pending: null, touchId,
+      measurementId: current.id,
+      index: hit.index,
+      original: [...original],
+      pending: null,
+      touchId,
       offset: { x: projected.x - point.x, y: projected.y - point.y },
-      viewport: { left: rect.left, top: rect.top, scaleX: canvas.clientWidth / rect.width, scaleY: canvas.clientHeight / rect.height },
+      viewport: {
+        left: rect.left,
+        top: rect.top,
+        scaleX: canvas.clientWidth / rect.width,
+        scaleY: canvas.clientHeight / rect.height,
+      },
     }
     hoveredVertex = hit
     suppressClick = true
@@ -663,8 +1048,10 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
     if (!drag) return
     const active = drag
     if (!destroyed) {
-      if (cancelled) { active.pending = active.original; applyDragPosition(active) }
-      else applyDragPosition(active)
+      if (cancelled) {
+        active.pending = active.original
+        applyDragPosition(active)
+      } else applyDragPosition(active)
       const current = getShape(active.measurementId)
       if (!cancelled && current?.finished && !canFinish(current)) {
         active.pending = active.original
@@ -684,13 +1071,18 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
     window.removeEventListener('keydown', onDragKeyDown, true)
     hoveredVertex = null
     updatePointerCursor()
-    if (!destroyed) { clearCursor(); publish() }
+    if (!destroyed) {
+      clearCursor()
+      publish()
+    }
   }
 
   // The selected drawing tool owns clicks, including existing vertices. Editing
   // resumes in Orbit / after closing Measure tools, so connecting to an
   // existing finished endpoint can also start a new line without moving it.
-  function drawingToolActive() { return mode !== 'orbit' }
+  function drawingToolActive() {
+    return mode !== 'orbit'
+  }
 
   function onMouseDown(event: MapMouseEvent) {
     if (drawingToolActive()) return
@@ -710,7 +1102,11 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
     if (drawingToolActive()) return
     if (event.originalEvent.target !== canvas) return
     suppressClick = false
-    if (drag) { event.preventDefault(); endDrag(true); return }
+    if (drag) {
+      event.preventDefault()
+      endDrag(true)
+      return
+    }
     if (event.points.length !== 1 || event.defaultPrevented) return
     const index = findVertex(event.point, 22)
     if (index === null) return
@@ -720,7 +1116,10 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
 
   function onMove(event: MapMouseEvent) {
     if (drag) return
-    hoveredVertex = drawingToolActive() || map.dragPan.isActive() || event.originalEvent.target !== canvas ? null : findVertex(event.point)
+    hoveredVertex =
+      drawingToolActive() || map.dragPan.isActive() || event.originalEvent.target !== canvas
+        ? null
+        : findVertex(event.point)
     updatePointerCursor()
     const current = draft()
     if (mode === 'orbit' || current.finished || !current.points.length) return
@@ -737,13 +1136,30 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
     if (cursor || cursorPoint || previewDirty) clearCursor()
   }
 
-  function onMapMoveStart() { endDrag(true); onLeave() }
+  function onMapMoveStart() {
+    endDrag(true)
+    onLeave()
+  }
 
   function onClick(event: MapMouseEvent) {
-    if (suppressClick) { suppressClick = false; event.preventDefault(); return }
+    if (suppressClick) {
+      suppressClick = false
+      event.preventDefault()
+      return
+    }
     if (drag || (!drawingToolActive() && findVertex(event.point) !== null)) return
-    if (event.defaultPrevented || event.originalEvent.defaultPrevented || event.originalEvent.button !== 0 || event.originalEvent.detail > 1 || event.originalEvent.target !== canvas) return
-    if (mode === 'orbit') { selectMeasurement(findMeasurement(event.point)?.id ?? null); return }
+    if (
+      event.defaultPrevented ||
+      event.originalEvent.defaultPrevented ||
+      event.originalEvent.button !== 0 ||
+      event.originalEvent.detail > 1 ||
+      event.originalEvent.target !== canvas
+    )
+      return
+    if (mode === 'orbit') {
+      selectMeasurement(findMeasurement(event.point)?.id ?? null)
+      return
+    }
     const point = validPosition(event)
     if (!point) return
     const current = draft()
@@ -778,12 +1194,20 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
     renderedShapes.delete(current.id)
     // Each distance leg is a real independent measurement: its own name,
     // color, endpoints and context actions. Polygons remain one area.
-    const records = current.mode === 'ruler'
-      ? current.points.slice(1).map((point, index): Shape => ({ ...current, id: index === 0 ? current.id : crypto.randomUUID(), points: [[...current.points[index]], [...point]], cache: blankCache(), finished: true }))
-      : [{ ...current, finished: true }]
+    const records =
+      current.mode === 'ruler'
+        ? current.points.slice(1).map((point, index): Shape => ({
+            ...current,
+            id: index === 0 ? current.id : crypto.randomUUID(),
+            points: [[...current.points[index]], [...point]],
+            cache: blankCache(),
+            finished: true,
+          }))
+        : [{ ...current, finished: true }]
     for (const record of records) {
       rebuild(record)
-      if (record.mode === 'area') record.cache.labelAnchor = polygonInteriorPoint(record.points, record.cache.boundary)
+      if (record.mode === 'area')
+        record.cache.labelAnchor = polygonInteriorPoint(record.points, record.cache.boundary)
       finished.set(record.id, record)
     }
     selectedId = records.at(-1)!.id
@@ -797,7 +1221,10 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
 
   function clear() {
     endDrag()
-    if (!draft().points.length) { if (selectedId) deleteMeasurement(selectedId); return }
+    if (!draft().points.length) {
+      if (selectedId) deleteMeasurement(selectedId)
+      return
+    }
     renderedShapes.delete(draft().id)
     drafts[geometryMode] = newDraft(geometryMode)
     editError = null
@@ -821,7 +1248,10 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
   }
 
   function onDoubleClick(event: MapMouseEvent) {
-    if (mode === 'orbit' && findVertex(event.point) !== null) { event.preventDefault(); return }
+    if (mode === 'orbit' && findVertex(event.point) !== null) {
+      event.preventDefault()
+      return
+    }
     if (mode === 'orbit' || event.originalEvent.target !== canvas || !validPosition(event)) return
     event.preventDefault()
     finish()
@@ -830,7 +1260,10 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
   function undo() {
     endDrag()
     const current = shape()
-    if (current.finished) { removeVertex({ measurementId: current.id, index: current.points.length - 1 }); return }
+    if (current.finished) {
+      removeVertex({ measurementId: current.id, index: current.points.length - 1 })
+      return
+    }
     if (!current.points.length) return
     current.points.pop()
     editError = null
@@ -846,7 +1279,10 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
     if (!current || !Number.isInteger(index) || index < 0 || index >= current.points.length) return
     const previous = current.points[index]
     current.points.splice(index, 1)
-    if (current.finished && current.points.length < (current.mode === 'area' ? 3 : 2)) { deleteMeasurement(current.id); return }
+    if (current.finished && current.points.length < (current.mode === 'area' ? 3 : 2)) {
+      deleteMeasurement(current.id)
+      return
+    }
     clearCursor()
     rebuild(current)
     editError = null
@@ -914,8 +1350,15 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
       event.stopPropagation()
       return
     }
-    if (event.key === 'Enter') { event.preventDefault(); finish() }
-    if (event.key === 'Backspace' || event.key === 'Delete' || ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z')) {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      finish()
+    }
+    if (
+      event.key === 'Backspace' ||
+      event.key === 'Delete' ||
+      ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z')
+    ) {
       event.preventDefault()
       undo()
     }
@@ -931,18 +1374,27 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
   map.on('zoom', updatePolarLabelAppearance)
   canvas.addEventListener('keydown', onKeyDown)
   const stored = loadFinishedMeasurements()
-  if (stored.failed) storageError('Saved measurements could not be loaded in this browser. New drawings remain available on the map.')
+  if (stored.failed)
+    storageError(
+      'Saved measurements could not be loaded in this browser. New drawings remain available on the map.',
+    )
   let migrated = false
   for (const record of stored.records) {
-    const records = record.mode === 'ruler' && record.points.length > 2
-      ? record.points.slice(1).map((point, index) => ({ ...record, id: index === 0 ? record.id : crypto.randomUUID(), points: [record.points[index], point] }))
-      : [record]
+    const records =
+      record.mode === 'ruler' && record.points.length > 2
+        ? record.points.slice(1).map((point, index) => ({
+            ...record,
+            id: index === 0 ? record.id : crypto.randomUUID(),
+            points: [record.points[index], point],
+          }))
+        : [record]
     migrated ||= records.length > 1
     for (const segment of records) {
       const current: Shape = { ...segment, finished: true, cache: blankCache() }
       rebuild(current)
       if (!canFinish(current)) continue
-      if (current.mode === 'area') current.cache.labelAnchor = polygonInteriorPoint(current.points, current.cache.boundary)
+      if (current.mode === 'area')
+        current.cache.labelAnchor = polygonInteriorPoint(current.points, current.cache.boundary)
       finished.set(current.id, current)
     }
   }
@@ -962,8 +1414,9 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
       clearCursor()
       hoveredVertex = null
       updatePointerCursor()
-      if (mode === 'orbit') { if (doubleClickZoomEnabled) map.doubleClickZoom.enable() }
-      else map.doubleClickZoom.disable()
+      if (mode === 'orbit') {
+        if (doubleClickZoomEnabled) map.doubleClickZoom.enable()
+      } else map.doubleClickZoom.disable()
       publish()
     },
     setUnit(unit) {
@@ -988,7 +1441,10 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
         changed ||= drafts[tool].points.length > 0
       }
       if (changed) writeCommitted()
-      if (cursor) { previewDirty = true; requestFrame() }
+      if (cursor) {
+        previewDirty = true
+        requestFrame()
+      }
     },
     undo,
     clear,
@@ -996,7 +1452,10 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
     cancelDrawing,
     findVertex,
     findMeasurement,
-    getMeasurement(id) { const current = finished.get(id); return current ? target(current) : null },
+    getMeasurement(id) {
+      const current = finished.get(id)
+      return current ? target(current) : null
+    },
     selectMeasurement,
     deleteMeasurement,
     renameMeasurement,
@@ -1024,7 +1483,8 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
       if (doubleClickZoomEnabled) map.doubleClickZoom.enable()
       readout.remove()
       for (const layer of [...LAYERS].reverse()) if (map.getLayer(layer)) map.removeLayer(layer)
-      for (const source of [PREVIEW_SOURCE, SOURCE]) if (map.getSource(source)) map.removeSource(source)
+      for (const source of [PREVIEW_SOURCE, SOURCE])
+        if (map.getSource(source)) map.removeSource(source)
       for (const label of polarLabels.values()) label.marker.remove()
       polarLabels.clear()
       segmentCache.clear()
@@ -1035,22 +1495,36 @@ export function createMeasurementController(map: MapLibreMap, options: { onChang
 }
 
 function blankCache(): CachedGeometry {
-  return { segments: [], openPath: [], boundary: [], ring: [], accumulator: geodesicPolygonAccumulator([]), distanceKm: 0, crossing: false, hasPolarGeometry: false, labelAnchor: null }
+  return {
+    segments: [],
+    openPath: [],
+    boundary: [],
+    ring: [],
+    accumulator: geodesicPolygonAccumulator([]),
+    distanceKm: 0,
+    crossing: false,
+    hasPolarGeometry: false,
+    labelAnchor: null,
+  }
 }
 
 function joinPaths(paths: readonly (readonly GeographicPosition[])[]): GeographicPosition[] {
   const result: GeographicPosition[] = []
   for (const path of paths) {
     const offset = result.length ? Math.round((result.at(-1)![0] - path[0][0]) / 360) * 360 : 0
-    for (let index = result.length ? 1 : 0; index < path.length; index++) result.push([path[index][0] + offset, path[index][1]])
+    for (let index = result.length ? 1 : 0; index < path.length; index++)
+      result.push([path[index][0] + offset, path[index][1]])
   }
   return result
 }
 
 function pointSegmentDistance(point: ScreenPoint, from: ScreenPoint, to: ScreenPoint) {
-  const dx = to.x - from.x, dy = to.y - from.y
+  const dx = to.x - from.x,
+    dy = to.y - from.y
   const length = dx * dx + dy * dy
-  const fraction = length ? Math.max(0, Math.min(1, ((point.x - from.x) * dx + (point.y - from.y) * dy) / length)) : 0
+  const fraction = length
+    ? Math.max(0, Math.min(1, ((point.x - from.x) * dx + (point.y - from.y) * dy) / length))
+    : 0
   return Math.hypot(point.x - from.x - fraction * dx, point.y - from.y - fraction * dy)
 }
 
@@ -1058,7 +1532,8 @@ function pathMidpoint(segments: GeodesicSegment[]): GeographicPosition {
   let remaining = segments.reduce((sum, segment) => sum + segment.distanceKm, 0) / 2
   for (const segment of segments) {
     if (remaining <= segment.distanceKm) {
-      const from = segment.path[0], to = segment.path.at(-1)!
+      const from = segment.path[0],
+        to = segment.path.at(-1)!
       const line = geographicLib.Geodesic.WGS84.InverseLine(from[1], from[0], to[1], to[0])
       const point = line.Position(remaining * 1_000)
       return [point.lon2 ?? from[0], point.lat2 ?? from[1]]
@@ -1083,17 +1558,28 @@ function latestSourceWriter(map: MapLibreMap, id: string, onIdle?: () => void) {
     const data = pending
     pending = null
     busy = true
-    void source.setData(data).catch(() => undefined).finally(() => {
-      busy = false
-      if (!alive) return
-      if (pending) flush()
-      else onIdle?.()
-    })
+    void source
+      .setData(data)
+      .catch(() => undefined)
+      .finally(() => {
+        busy = false
+        if (!alive) return
+        if (pending) flush()
+        else onIdle?.()
+      })
   }
   return {
-    get busy() { return busy },
-    write(data: FeatureCollection) { pending = data; flush() },
-    destroy() { alive = false; pending = null },
+    get busy() {
+      return busy
+    },
+    write(data: FeatureCollection) {
+      pending = data
+      flush()
+    },
+    destroy() {
+      alive = false
+      pending = null
+    },
   }
 }
 

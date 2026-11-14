@@ -7,15 +7,36 @@ function Command({ className, ...props }: React.ComponentProps<typeof CommandPri
 }
 
 function CommandList({ className, ...props }: React.ComponentProps<typeof CommandPrimitive.List>) {
-  return <CommandPrimitive.List data-slot="command-list" className={cn('ui-command-list', className)} {...props} />
+  return (
+    <CommandPrimitive.List
+      data-slot="command-list"
+      className={cn('ui-command-list', className)}
+      {...props}
+    />
+  )
 }
 
 function CommandItem({ className, ...props }: React.ComponentProps<typeof CommandPrimitive.Item>) {
-  return <CommandPrimitive.Item data-slot="command-item" className={cn('ui-command-item', className)} {...props} />
+  return (
+    <CommandPrimitive.Item
+      data-slot="command-item"
+      className={cn('ui-command-item', className)}
+      {...props}
+    />
+  )
 }
 
-function CommandEmpty({ className, ...props }: React.ComponentProps<typeof CommandPrimitive.Empty>) {
-  return <CommandPrimitive.Empty data-slot="command-empty" className={cn('ui-command-empty', className)} {...props} />
+function CommandEmpty({
+  className,
+  ...props
+}: React.ComponentProps<typeof CommandPrimitive.Empty>) {
+  return (
+    <CommandPrimitive.Empty
+      data-slot="command-empty"
+      className={cn('ui-command-empty', className)}
+      {...props}
+    />
+  )
 }
 
 export { Command, CommandList, CommandItem, CommandEmpty }

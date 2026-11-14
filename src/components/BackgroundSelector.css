@@ -23,7 +23,9 @@
   background: transparent;
   color: var(--text);
   text-align: left;
-  font: 400 12px 'Fira Sans', sans-serif;
+  font:
+    400 12px 'Fira Sans',
+    sans-serif;
   cursor: pointer;
 }
 
@@ -34,22 +36,56 @@
   font-weight: 400;
 }
 
-.background-selector .background-selector-option.ui-toggle-group-item[data-state='on']:is(:hover, :focus-visible) {
+.background-selector
+  .background-selector-option.ui-toggle-group-item[data-state='on']:is(:hover, :focus-visible) {
   background: var(--contrast);
   color: var(--contrast-foreground);
   box-shadow: none;
 }
 
-.background-selector .background-selector-option.ui-toggle-group-item:not([data-state='on'], :disabled):is(:hover, :focus-visible) {
+.background-selector
+  .background-selector-option.ui-toggle-group-item:not([data-state='on'], :disabled):is(
+    :hover,
+    :focus-visible
+  ) {
   border-color: var(--contrast);
   background: transparent;
   color: var(--text);
   box-shadow: none;
 }
 
-.background-selector-option:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
-.background-selector-option:disabled { cursor: default; opacity: .5; }
-.background-selector-name { flex: 1; min-width: 0; }
-.background-selector-indicator { display: grid; flex: none; place-items: center; width: 15px; height: 15px; border: 1px solid currentColor; border-radius: 50%; }
-.background-selector-indicator > svg { flex: none; }
-.background-selector-preview { display: block; flex: none; width: 36px; height: 36px; border: 1px solid var(--border-strong); border-radius: 50%; object-fit: cover; pointer-events: none; user-select: none; }
+.background-selector-option:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+.background-selector-option:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.background-selector-name {
+  flex: 1;
+  min-width: 0;
+}
+.background-selector-indicator {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+}
+.background-selector-indicator > svg {
+  flex: none;
+}
+.background-selector-preview {
+  display: block;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  object-fit: cover;
+  pointer-events: none;
+  user-select: none;
+}

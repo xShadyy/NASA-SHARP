@@ -10,7 +10,8 @@ export function geodesicDistanceKm(from: GeographicPosition, to: GeographicPosit
 
 export function geodesicLengthKm(points: readonly GeographicPosition[]): number {
   let total = 0
-  for (let index = 1; index < points.length; index++) total += geodesicDistanceKm(points[index - 1], points[index])
+  for (let index = 1; index < points.length; index++)
+    total += geodesicDistanceKm(points[index - 1], points[index])
   return total
 }
 
@@ -25,11 +26,15 @@ export function geodesicSegment(from: GeographicPosition, to: GeographicPosition
   const steps = Math.max(1, Math.ceil(Math.max(line.s13 / 30_000, line.a13 / 0.4)))
   const path: GeographicPosition[] = [[...from]]
   for (let step = 1; step <= steps; step++) {
-    const point = line.Position(line.s13 * step / steps, Geodesic.STANDARD | Geodesic.LONG_UNROLL)
+    const point = line.Position((line.s13 * step) / steps, Geodesic.STANDARD | Geodesic.LONG_UNROLL)
     path.push([point.lon2 ?? to[0], point.lat2 ?? to[1]])
   }
   const halfway = line.Position(line.s13 / 2)
-  return { path, distanceKm: line.s13 / 1_000, midpoint: [halfway.lon2 ?? from[0], halfway.lat2 ?? from[1]] }
+  return {
+    path,
+    distanceKm: line.s13 / 1_000,
+    midpoint: [halfway.lon2 ?? from[0], halfway.lat2 ?? from[1]],
+  }
 }
 
 export function geodesicPolygonAccumulator(points: readonly GeographicPosition[]) {
@@ -54,7 +59,10 @@ function signedAreaM2(points: readonly GeographicPosition[]): number {
   return polygon.Compute(false, true).area ?? 0
 }
 
-export function geodesicPath(points: readonly GeographicPosition[], closed = false): GeographicPosition[] {
+export function geodesicPath(
+  points: readonly GeographicPosition[],
+  closed = false,
+): GeographicPosition[] {
   if (points.length === 0) return []
   const path: GeographicPosition[] = [[...points[0]]]
   const count = closed ? points.length : points.length - 1
@@ -64,7 +72,8 @@ export function geodesicPath(points: readonly GeographicPosition[], closed = fal
     const segment = geodesicSegment(from, to)
     const previousLongitude = path[path.length - 1][0]
     const offset = Math.round((previousLongitude - from[0]) / 360) * 360
-    for (const [longitude, latitude] of segment.path.slice(1)) path.push([longitude + offset, latitude])
+    for (const [longitude, latitude] of segment.path.slice(1))
+      path.push([longitude + offset, latitude])
   }
   return path
 }
@@ -73,7 +82,10 @@ export function geodesicPolygonRing(points: readonly GeographicPosition[]): Geog
   return closeGeodesicRing(geodesicPath(points, true), signedAreaM2(points) / 1_000_000)
 }
 
-export function closeGeodesicRing(path: readonly GeographicPosition[], signedAreaKm2: number): GeographicPosition[] {
+export function closeGeodesicRing(
+  path: readonly GeographicPosition[],
+  signedAreaKm2: number,
+): GeographicPosition[] {
   const ring = [...path]
   if (ring.length === 0) return ring
   const first = ring[0]
@@ -101,8 +113,16 @@ export function hasCrossingEdges(points: readonly GeographicPosition[]): boolean
 
 export function hasCrossingPaths(edges: readonly (readonly GeographicPosition[])[]): boolean {
   const boxes = edges.map((edge) => {
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
-    for (const [x, y] of edge) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y) }
+    let minX = Infinity,
+      maxX = -Infinity,
+      minY = Infinity,
+      maxY = -Infinity
+    for (const [x, y] of edge) {
+      minX = Math.min(minX, x)
+      maxX = Math.max(maxX, x)
+      minY = Math.min(minY, y)
+      maxY = Math.max(maxY, y)
+    }
     return { minX, maxX, minY, maxY }
   })
   for (let left = 0; left < edges.length; left++) {
@@ -111,8 +131,15 @@ export function hasCrossingPaths(edges: readonly (readonly GeographicPosition[])
       const a = edges[left]
       const b = edges[right]
       const wrap = Math.round((a[0][0] - b[0][0]) / 360) * 360
-      const boxA = boxes[left], boxB = boxes[right]
-      if (boxA.maxX < boxB.minX + wrap || boxB.maxX + wrap < boxA.minX || boxA.maxY < boxB.minY || boxB.maxY < boxA.minY) continue
+      const boxA = boxes[left],
+        boxB = boxes[right]
+      if (
+        boxA.maxX < boxB.minX + wrap ||
+        boxB.maxX + wrap < boxA.minX ||
+        boxA.maxY < boxB.minY ||
+        boxB.maxY < boxA.minY
+      )
+        continue
       for (let i = 1; i < a.length; i++) {
         for (let j = 1; j < b.length; j++) {
           const c: GeographicPosition = [b[j - 1][0] + wrap, b[j - 1][1]]
@@ -125,9 +152,19 @@ export function hasCrossingPaths(edges: readonly (readonly GeographicPosition[])
   return false
 }
 
-function segmentsCross(a: GeographicPosition, b: GeographicPosition, c: GeographicPosition, d: GeographicPosition): boolean {
-  if (Math.max(a[0], b[0]) < Math.min(c[0], d[0]) || Math.max(c[0], d[0]) < Math.min(a[0], b[0]) ||
-      Math.max(a[1], b[1]) < Math.min(c[1], d[1]) || Math.max(c[1], d[1]) < Math.min(a[1], b[1])) return false
+function segmentsCross(
+  a: GeographicPosition,
+  b: GeographicPosition,
+  c: GeographicPosition,
+  d: GeographicPosition,
+): boolean {
+  if (
+    Math.max(a[0], b[0]) < Math.min(c[0], d[0]) ||
+    Math.max(c[0], d[0]) < Math.min(a[0], b[0]) ||
+    Math.max(a[1], b[1]) < Math.min(c[1], d[1]) ||
+    Math.max(c[1], d[1]) < Math.min(a[1], b[1])
+  )
+    return false
   const turn = (p: GeographicPosition, q: GeographicPosition, r: GeographicPosition) =>
     (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
   return turn(a, b, c) * turn(a, b, d) < -1e-16 && turn(c, d, a) * turn(c, d, b) < -1e-16

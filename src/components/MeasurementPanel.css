@@ -56,15 +56,15 @@
   cursor: pointer;
 }
 
-.measurement-panel .measurement-tool:not(:disabled, [data-state="on"]):is(:hover, :focus-visible) {
+.measurement-panel .measurement-tool:not(:disabled, [data-state='on']):is(:hover, :focus-visible) {
   border-color: var(--contrast);
   background: transparent;
   color: var(--text);
   box-shadow: none;
 }
 
-.measurement-panel .measurement-tool[data-state="on"],
-.measurement-panel .measurement-tool[data-state="on"]:is(:hover, :focus-visible) {
+.measurement-panel .measurement-tool[data-state='on'],
+.measurement-panel .measurement-tool[data-state='on']:is(:hover, :focus-visible) {
   border-color: var(--contrast);
   background: var(--contrast);
   color: var(--contrast-foreground);
@@ -73,7 +73,7 @@
 }
 
 .measurement-panel .measurement-tool:disabled {
-  opacity: .4;
+  opacity: 0.4;
   cursor: not-allowed;
 }
 
@@ -134,13 +134,19 @@
   cursor: pointer;
 }
 
-.measurement-units-popover .measurement-units-option[data-state="checked"],
-.measurement-units-popover .measurement-units-option[data-state="checked"]:is([data-highlighted], :hover, :focus-visible) {
+.measurement-units-popover .measurement-units-option[data-state='checked'],
+.measurement-units-popover
+  .measurement-units-option[data-state='checked']:is([data-highlighted], :hover, :focus-visible) {
   background: var(--contrast);
   color: var(--contrast-foreground);
 }
 
-.measurement-units-popover .measurement-units-option:not([data-state="checked"]):is([data-highlighted], :hover, :focus-visible) {
+.measurement-units-popover
+  .measurement-units-option:not([data-state='checked']):is(
+    [data-highlighted],
+    :hover,
+    :focus-visible
+  ) {
   outline: 1px solid var(--contrast);
   outline-offset: -1px;
   background: transparent;
@@ -161,8 +167,14 @@
   margin-top: 3px;
 }
 
-.measurement-finish.ui-button:disabled { opacity: .4; cursor: not-allowed; }
-.measurement-finish.ui-button:not(:disabled):hover { border-color: var(--contrast); background: var(--surface); }
+.measurement-finish.ui-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.measurement-finish.ui-button:not(:disabled):hover {
+  border-color: var(--contrast);
+  background: var(--surface);
+}
 
 .measurement-color-control {
   display: flex;
@@ -176,7 +188,9 @@
   font-size: 10px;
 }
 
-.measurement-color-control > label { text-transform: uppercase; }
+.measurement-color-control > label {
+  text-transform: uppercase;
+}
 
 .measurement-color-trigger.ui-select-trigger {
   width: 147px;
@@ -199,8 +213,19 @@
   box-shadow: none;
 }
 
-.measurement-color-value { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
-.measurement-color-swatch { width: 13px; height: 13px; flex: none; border: 1px solid var(--border-strong); border-radius: var(--radius-xs); }
+.measurement-color-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+.measurement-color-swatch {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xs);
+}
 
 .measurement-colors-popover.ui-select-content {
   z-index: 120;
@@ -212,20 +237,39 @@
   color: var(--text);
 }
 
-.measurement-color-option.ui-select-item { min-height: 29px; padding-right: 27px; color: var(--text); font-size: 11px; cursor: pointer; }
-.measurement-color-option.ui-select-item[data-state="checked"],
-.measurement-color-option.ui-select-item[data-state="checked"]:is([data-highlighted], :hover, :focus-visible) {
+.measurement-color-option.ui-select-item {
+  min-height: 29px;
+  padding-right: 27px;
+  color: var(--text);
+  font-size: 11px;
+  cursor: pointer;
+}
+.measurement-color-option.ui-select-item[data-state='checked'],
+.measurement-color-option.ui-select-item[data-state='checked']:is(
+    [data-highlighted],
+    :hover,
+    :focus-visible
+  ) {
   background: var(--contrast);
   color: var(--contrast-foreground);
 }
-.measurement-color-option.ui-select-item:not([data-state="checked"]):is([data-highlighted], :hover, :focus-visible) {
+.measurement-color-option.ui-select-item:not([data-state='checked']):is(
+    [data-highlighted],
+    :hover,
+    :focus-visible
+  ) {
   outline: 1px solid var(--contrast);
   outline-offset: -1px;
   background: transparent;
   color: var(--text);
 }
 
-
-.measurement-panel .draggable-panel__divider.ui-separator { margin: 3px 10px 7px; }
-.measurement-panel .draggable-panel__content { padding: 0 8px 8px; }
-.measurement-color-trigger.ui-select-trigger { width: 135px; }
+.measurement-panel .draggable-panel__divider.ui-separator {
+  margin: 3px 10px 7px;
+}
+.measurement-panel .draggable-panel__content {
+  padding: 0 8px 8px;
+}
+.measurement-color-trigger.ui-select-trigger {
+  width: 135px;
+}
