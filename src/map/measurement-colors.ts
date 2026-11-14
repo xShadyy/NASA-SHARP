@@ -3,9 +3,9 @@ import type { MeasurementMode } from '@/lib/measurement-units'
 /** Official Space Apps accents, bright enough to distinguish over imagery. */
 export const MEASUREMENT_COLORS = [
   { id: 'white', label: 'White', value: '#FFFFFF' },
-  { id: 'blue', label: 'Blue Yonder', value: '#2E96F5' },
-  { id: 'yellow', label: 'Neon Yellow', value: '#EAFE07' },
-  { id: 'red', label: 'Rocket Red', value: '#E43700' },
+  { id: 'blue', label: 'Blue', value: '#2E96F5' },
+  { id: 'yellow', label: 'Yellow', value: '#EAFE07' },
+  { id: 'red', label: 'Red', value: '#E43700' },
 ] as const
 
 export type MeasurementColor = (typeof MEASUREMENT_COLORS)[number]['id']

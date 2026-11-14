@@ -1,3 +1,6 @@
+import { isLocationIcon, type LocationIcon } from '@/lib/location-appearance'
+import { isMeasurementColor, type MeasurementColor } from '@/map/measurement-colors'
+
 export type LocationTarget = {
   id: string
   name: string
@@ -11,6 +14,8 @@ export type LocationTarget = {
   source?: string
   description?: string
   country?: string
+  icon?: LocationIcon
+  color?: MeasurementColor
 }
 
 export type SearchPlace = LocationTarget & { aliases?: string[] }
@@ -69,6 +74,8 @@ export function isLocationTarget(value: unknown): value is LocationTarget {
       return false
   }
   return (
+    (item.icon === undefined || isLocationIcon(item.icon)) &&
+    (item.color === undefined || isMeasurementColor(item.color)) &&
     (item.source === undefined || typeof item.source === 'string') &&
     (item.description === undefined || typeof item.description === 'string') &&
     (item.country === undefined ||
@@ -117,6 +124,8 @@ function cleanLocation(location: LocationTarget): LocationTarget {
     ...(location.source ? { source: location.source } : {}),
     ...(location.description ? { description: location.description } : {}),
     ...(location.country ? { country: location.country } : {}),
+    ...(location.icon ? { icon: location.icon } : {}),
+    ...(location.color ? { color: location.color } : {}),
   }
 }
 

@@ -4,7 +4,6 @@ import {
   CaretRightIcon,
   DotsSixVerticalIcon,
   FolderPlusIcon,
-  MapPinIcon,
   PencilSimpleIcon,
   TrashIcon,
 } from '@phosphor-icons/react'
@@ -28,7 +27,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { LocationNameDialog } from '@/components/LocationNameDialog'
+import { LocationSymbol } from '@/components/LocationSymbol'
 import { formatCoordinates, locationKey, type LocationTarget } from '@/lib/locations'
 import './SavedLocations.css'
 
@@ -76,11 +75,11 @@ type SavedLocationsProps = {
   locations: LocationTarget[]
   onSelect: (location: LocationTarget) => void
   onRemove: (location: LocationTarget) => void
-  onRename: (location: LocationTarget, name: string) => void
+  onEdit: (location: LocationTarget) => void
 }
 
-export function SavedLocations({ locations, onSelect, onRemove, onRename }: SavedLocationsProps) {
-  const [renaming, setRenaming] = useState<LocationTarget | null>(null)
+export function SavedLocations({ locations, onSelect, onRemove, onEdit }: SavedLocationsProps) {
+  const [sectionOpen, setSectionOpen] = useState(true)
   const [collection, setCollection] = useState<Groups>(loadGroups)
   const [editingGroup, setEditingGroup] = useState<{ id: string; name: string } | null>(null)
   const [groupName, setGroupName] = useState('')
@@ -173,7 +172,7 @@ export function SavedLocations({ locations, onSelect, onRemove, onRename }: Save
               onClick={() => onSelect(location)}
               aria-label={`Go to ${location.name}`}
             >
-              <MapPinIcon size={18} />
+              <LocationSymbol icon={location.icon} color={location.color} size={18} />
               <span>
                 <strong>{location.name}</strong>
                 <span className="saved-location-coordinate-line">
@@ -191,13 +190,13 @@ export function SavedLocations({ locations, onSelect, onRemove, onRename }: Save
                   size="icon-sm"
                   variant="ghost"
                   className="saved-location-action saved-location-rename"
-                  aria-label={`Rename ${location.name}`}
-                  onClick={() => setRenaming(location)}
+                  aria-label={`Edit ${location.name}`}
+                  onClick={() => onEdit(location)}
                 >
                   <PencilSimpleIcon size={16} />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>Rename location</TooltipContent>
+              <TooltipContent>Edit location</TooltipContent>
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -247,176 +246,184 @@ export function SavedLocations({ locations, onSelect, onRemove, onRename }: Save
   )
 
   return (
-    <section className="saved-locations" aria-label="Saved locations">
-      <div className="saved-locations-heading">
-        <h2>
-          Saved locations <span>({locations.length})</span>
-        </h2>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Create location group"
-          onClick={() => editGroup()}
-        >
-          <FolderPlusIcon size={19} />
-        </Button>
-      </div>
-      {!locations.length && (
-        <p className="saved-locations-empty">
-          Search for a place, then choose Save location below its pin.
-        </p>
-      )}
-      {rows(
-        locations.filter(
-          (location) =>
-            !collection.groups.some((g) => g.id === collection.membership[locationKey(location)]),
-        ),
-      )}
-      {collection.groups.map((group) => {
-        const items = locations.filter(
-          (location) => collection.membership[locationKey(location)] === group.id,
-        )
-        const open = !collection.collapsed.includes(group.id)
-        return (
-          <Collapsible
-            key={group.id}
-            open={open}
-            onOpenChange={(next) => setGroupOpen(group.id, next)}
-            asChild
+    <Collapsible open={sectionOpen} onOpenChange={setSectionOpen} asChild>
+      <section className="saved-locations" aria-label="Saved locations">
+        <div className="saved-locations-heading">
+          <h2>
+            <CollapsibleTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                className="saved-locations-toggle"
+                aria-label={`${sectionOpen ? 'Collapse' : 'Expand'} saved locations`}
+              >
+                {sectionOpen ? <CaretDownIcon size={16} /> : <CaretRightIcon size={16} />}
+                Saved locations <span>({locations.length})</span>
+              </Button>
+            </CollapsibleTrigger>
+          </h2>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Create location group"
+            onClick={() => editGroup()}
           >
-            <section
-              className="saved-location-group"
-              aria-label={group.name}
-              data-drop-target={dropGroup === group.id || undefined}
-              onDragOver={(event) => {
-                if (!draggedKey || !event.dataTransfer.types.includes(LOCATION_DRAG_TYPE)) return
-                event.preventDefault()
-                event.dataTransfer.dropEffect = 'move'
-                if (dropGroup !== group.id) setDropGroup(group.id)
-              }}
-              onDragLeave={(event) => {
-                if (
-                  !(event.relatedTarget instanceof Node) ||
-                  !event.currentTarget.contains(event.relatedTarget)
-                )
-                  setDropGroup((current) => (current === group.id ? null : current))
-              }}
-              onDrop={(event) => {
-                if (!event.dataTransfer.types.includes(LOCATION_DRAG_TYPE)) return
-                event.preventDefault()
-                dropLocation(event.dataTransfer.getData(LOCATION_DRAG_TYPE), group.id)
-                setDraggedKey(null)
-                setDropGroup(null)
-              }}
-            >
-              <div className="saved-group-heading">
-                <h3>
-                  <CollapsibleTrigger asChild>
+            <FolderPlusIcon size={19} />
+          </Button>
+        </div>
+        <CollapsibleContent>
+          {!locations.length && (
+            <p className="saved-locations-empty">
+              Search for a place, then choose Save location below its pin.
+            </p>
+          )}
+          {rows(
+            locations.filter(
+              (location) =>
+                !collection.groups.some(
+                  (g) => g.id === collection.membership[locationKey(location)],
+                ),
+            ),
+          )}
+          {collection.groups.map((group) => {
+            const items = locations.filter(
+              (location) => collection.membership[locationKey(location)] === group.id,
+            )
+            const open = !collection.collapsed.includes(group.id)
+            return (
+              <Collapsible
+                key={group.id}
+                open={open}
+                onOpenChange={(next) => setGroupOpen(group.id, next)}
+                asChild
+              >
+                <section
+                  className="saved-location-group"
+                  aria-label={group.name}
+                  data-drop-target={dropGroup === group.id || undefined}
+                  onDragOver={(event) => {
+                    if (!draggedKey || !event.dataTransfer.types.includes(LOCATION_DRAG_TYPE))
+                      return
+                    event.preventDefault()
+                    event.dataTransfer.dropEffect = 'move'
+                    if (dropGroup !== group.id) setDropGroup(group.id)
+                  }}
+                  onDragLeave={(event) => {
+                    if (
+                      !(event.relatedTarget instanceof Node) ||
+                      !event.currentTarget.contains(event.relatedTarget)
+                    )
+                      setDropGroup((current) => (current === group.id ? null : current))
+                  }}
+                  onDrop={(event) => {
+                    if (!event.dataTransfer.types.includes(LOCATION_DRAG_TYPE)) return
+                    event.preventDefault()
+                    dropLocation(event.dataTransfer.getData(LOCATION_DRAG_TYPE), group.id)
+                    setDraggedKey(null)
+                    setDropGroup(null)
+                  }}
+                >
+                  <div className="saved-group-heading">
+                    <h3>
+                      <CollapsibleTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="saved-group-toggle"
+                          aria-label={`${open ? 'Collapse' : 'Expand'} ${group.name} group, ${items.length} locations`}
+                        >
+                          {open ? <CaretDownIcon size={14} /> : <CaretRightIcon size={14} />}
+                          <span>{group.name}</span>
+                          <span className="saved-group-count">{items.length}</span>
+                        </Button>
+                      </CollapsibleTrigger>
+                    </h3>
                     <Button
                       type="button"
                       variant="ghost"
-                      className="saved-group-toggle"
-                      aria-label={`${open ? 'Collapse' : 'Expand'} ${group.name} group, ${items.length} locations`}
+                      size="icon-sm"
+                      aria-label={`Rename group ${group.name}`}
+                      onClick={() => editGroup(group)}
                     >
-                      {open ? <CaretDownIcon size={14} /> : <CaretRightIcon size={14} />}
-                      <span>{group.name}</span>
-                      <span className="saved-group-count">{items.length}</span>
+                      <PencilSimpleIcon size={14} />
                     </Button>
-                  </CollapsibleTrigger>
-                </h3>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label={`Rename group ${group.name}`}
-                  onClick={() => editGroup(group)}
-                >
-                  <PencilSimpleIcon size={14} />
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label={`Delete group ${group.name}, keep its locations`}
-                  onClick={() => deleteGroup(group.id)}
-                >
-                  <TrashIcon size={14} />
-                </Button>
-              </div>
-              <CollapsibleContent>
-                {rows(items)}
-                {!items.length && (
-                  <p className="saved-group-empty">
-                    Drag a saved location here or use its group menu.
-                  </p>
-                )}
-              </CollapsibleContent>
-            </section>
-          </Collapsible>
-        )
-      })}
-      {notice && (
-        <p role="status" className="saved-group-empty">
-          {notice}
-        </p>
-      )}
-      <LocationNameDialog
-        location={renaming}
-        title="Rename location"
-        onSubmit={(name) => {
-          if (renaming) onRename(renaming, name)
-          setRenaming(null)
-        }}
-        onClose={() => setRenaming(null)}
-      />
-      <Dialog
-        open={editingGroup !== null}
-        onOpenChange={(open) => {
-          if (!open) setEditingGroup(null)
-        }}
-      >
-        <DialogContent
-          className="location-name-dialog"
-          onOpenAutoFocus={(event) => {
-            event.preventDefault()
-            groupInput.current?.focus()
-            groupInput.current?.select()
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label={`Delete group ${group.name}, keep its locations`}
+                      onClick={() => deleteGroup(group.id)}
+                    >
+                      <TrashIcon size={14} />
+                    </Button>
+                  </div>
+                  <CollapsibleContent>
+                    {rows(items)}
+                    {!items.length && (
+                      <p className="saved-group-empty">
+                        Drag a saved location here or use its group menu.
+                      </p>
+                    )}
+                  </CollapsibleContent>
+                </section>
+              </Collapsible>
+            )
+          })}
+          {notice && (
+            <p role="status" className="saved-group-empty">
+              {notice}
+            </p>
+          )}
+        </CollapsibleContent>
+        <Dialog
+          open={editingGroup !== null}
+          onOpenChange={(open) => {
+            if (!open) setEditingGroup(null)
           }}
         >
-          <DialogHeader>
-            <DialogTitle>{editingGroup?.id ? 'Rename group' : 'Create group'}</DialogTitle>
-            <DialogDescription>Organize your saved locations.</DialogDescription>
-          </DialogHeader>
-          <form
-            onSubmit={(event) => {
+          <DialogContent
+            className="location-name-dialog"
+            onOpenAutoFocus={(event) => {
               event.preventDefault()
-              saveGroup()
+              groupInput.current?.focus()
+              groupInput.current?.select()
             }}
           >
-            <label htmlFor={groupNameId}>Group name</label>
-            <Input
-              ref={groupInput}
-              id={groupNameId}
-              value={groupName}
-              onChange={(event) => setGroupName(event.target.value)}
-              maxLength={80}
-              required
-              autoComplete="off"
-            />
-            <DialogFooter>
-              <DialogClose asChild>
-                <Button variant="outline" type="button" size="sm">
-                  Cancel
+            <DialogHeader>
+              <DialogTitle>{editingGroup?.id ? 'Rename group' : 'Create group'}</DialogTitle>
+              <DialogDescription>Organize your saved locations.</DialogDescription>
+            </DialogHeader>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault()
+                saveGroup()
+              }}
+            >
+              <label htmlFor={groupNameId}>Group name</label>
+              <Input
+                ref={groupInput}
+                id={groupNameId}
+                value={groupName}
+                onChange={(event) => setGroupName(event.target.value)}
+                maxLength={80}
+                required
+                autoComplete="off"
+              />
+              <DialogFooter>
+                <DialogClose asChild>
+                  <Button variant="outline" type="button" size="sm">
+                    Cancel
+                  </Button>
+                </DialogClose>
+                <Button type="submit" size="sm" disabled={!groupName.trim()}>
+                  Save
                 </Button>
-              </DialogClose>
-              <Button type="submit" size="sm" disabled={!groupName.trim()}>
-                Save
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-    </section>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
+      </section>
+    </Collapsible>
   )
 }

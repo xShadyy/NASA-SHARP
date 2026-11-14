@@ -37,7 +37,7 @@ interface DraggablePanelProps {
   className?: string
   dragLabel?: string
   closeLabel?: string
-  initialPlacement?: 'bottom-center' | 'top-right' | 'left-center'
+  initialPlacement?: 'bottom-center' | 'top-right' | 'left-center' | 'center'
 }
 
 const EDGE_GAP = 12
@@ -87,7 +87,7 @@ export function DraggablePanel({
           y:
             initialPlacement === 'top-right'
               ? EDGE_GAP
-              : initialPlacement === 'left-center'
+              : initialPlacement === 'left-center' || initialPlacement === 'center'
                 ? (containerHeight - panelHeight) / 2
                 : containerHeight - panelHeight - (containerWidth <= 540 ? 100 : TOOLBAR_CLEARANCE),
         }

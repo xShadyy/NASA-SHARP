@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Marker, type Map as MapLibreMap } from 'maplibre-gl'
-import { BookmarkSimpleIcon, CheckIcon, MapPinIcon, XIcon } from '@phosphor-icons/react'
+import { BookmarkSimpleIcon, CheckIcon, XIcon } from '@phosphor-icons/react'
+import { LocationSymbol } from '@/components/LocationSymbol'
 import { Button } from '@/components/ui/button'
 import { formatCoordinates, type LocationTarget } from '@/lib/locations'
 import './LocationPin.css'
@@ -110,7 +111,12 @@ export function LocationPin({ map, location, saved, onSave, onDismiss }: Locatio
 
   return createPortal(
     <>
-      <MapPinIcon className="destination-pin-symbol" size={36} weight="fill" aria-hidden="true" />
+      <LocationSymbol
+        icon={location.icon}
+        color={location.color}
+        className="destination-pin-symbol"
+        size={36}
+      />
       <section
         className="destination-pin-card"
         aria-label={`Destination: ${location.name}`}

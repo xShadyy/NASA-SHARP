@@ -45,6 +45,7 @@ import {
 import type { CaptureRegion, CaptureSettings } from '@/lib/map-capture'
 import { CurrentLocationButton, DestinationSearch } from '@/components/DestinationSearch'
 import { SavedLocations } from '@/components/SavedLocations'
+import type { LocationAppearance } from '@/lib/location-appearance'
 import {
   loadSavedLocations,
   persistSavedLocations,
@@ -139,14 +140,14 @@ function ExplorerSidebar({
   savedLocations,
   onLocationSelect,
   onLocationRemove,
-  onLocationRename,
+  onLocationEdit,
 }: {
   activeNav: string
   setActiveNav: (name: string) => void
   savedLocations: LocationTarget[]
   onLocationSelect: (location: LocationTarget) => void
   onLocationRemove: (location: LocationTarget) => void
-  onLocationRename: (location: LocationTarget, name: string) => void
+  onLocationEdit: (location: LocationTarget) => void
 }) {
   const { open, setOpen, isMobile, openMobile, setOpenMobile } = useSidebar()
   const expanded = isMobile ? openMobile : open
@@ -195,7 +196,10 @@ function ExplorerSidebar({
               if (isMobile) setOpenMobile(false)
             }}
             onRemove={onLocationRemove}
-            onRename={onLocationRename}
+            onEdit={(location) => {
+              onLocationEdit(location)
+              if (isMobile) setOpenMobile(false)
+            }}
           />
         )}
         {expanded && activeNav === 'Instructions' && (
@@ -416,6 +420,7 @@ function App() {
   const [destinationRequest, setDestinationRequest] = useState(0)
   const [savedNavigation, setSavedNavigation] = useState(false)
   const [pendingSave, setPendingSave] = useState<LocationTarget | null>(null)
+  const [editingLocation, setEditingLocation] = useState<LocationTarget | null>(null)
   const [savedLocations, setSavedLocations] = useState<LocationTarget[]>(loadSavedLocations)
   const [storageNotice, setStorageNotice] = useState('')
   const [mode, setMode] = useState<'orbit' | MeasurementMode>('orbit')
@@ -592,24 +597,26 @@ function App() {
     return true
   }
 
-  function renameLocation(location: LocationTarget, name: string) {
+  function renameLocation(location: LocationTarget, name: string, appearance: LocationAppearance) {
     const nextName = name.trim()
     if (!nextName) return
     const key = locationKey(location)
     const next = savedLocations.map((saved) =>
-      locationKey(saved) === key ? { ...saved, name: nextName } : saved,
+      locationKey(saved) === key ? { ...saved, name: nextName, ...appearance } : saved,
     )
     const persisted = persistSavedLocations(next)
     setSavedLocations(next)
     setDestination((current) =>
-      current && locationKey(current) === key ? { ...current, name: nextName } : current,
+      current && locationKey(current) === key
+        ? { ...current, name: nextName, ...appearance }
+        : current,
     )
-    setStorageNotice(persisted ? '' : 'Renamed for this session. Browser storage is unavailable.')
+    setStorageNotice(persisted ? '' : 'Updated for this session. Browser storage is unavailable.')
   }
 
-  function saveNamedLocation(name: string) {
+  function saveNamedLocation(name: string, appearance: LocationAppearance) {
     if (!pendingSave) return
-    const named = { ...pendingSave, name }
+    const named = { ...pendingSave, name, ...appearance }
     if (!saveLocation(named)) return
     setDestination(named)
     setPendingSave(null)
@@ -810,7 +817,7 @@ function App() {
               savedLocations={savedLocations}
               onLocationSelect={(location) => selectDestination(location, true)}
               onLocationRemove={removeLocation}
-              onLocationRename={renameLocation}
+              onLocationEdit={setEditingLocation}
             />
 
             <main
@@ -859,7 +866,7 @@ function App() {
                     destination &&
                     savedLocations.some((saved) => locationKey(saved) === locationKey(destination)),
                   )}
-                  onSaveLocation={saveLocation}
+                  onSaveLocation={setPendingSave}
                   onDismissLocation={() => setDestination(null)}
                   onCameraChange={setCamera}
                 />
@@ -1015,6 +1022,15 @@ function App() {
             title="Save location"
             onSubmit={saveNamedLocation}
             onClose={() => setPendingSave(null)}
+          />
+          <LocationNameDialog
+            location={editingLocation}
+            title="Edit location"
+            onSubmit={(name, appearance) => {
+              if (editingLocation) renameLocation(editingLocation, name, appearance)
+              setEditingLocation(null)
+            }}
+            onClose={() => setEditingLocation(null)}
           />
         </div>
       </TooltipProvider>

@@ -219,6 +219,7 @@ function annotate(
   measureOnly = false,
 ) {
   const width = region.width
+  const height = region.height
   const compact = width < 420
   const fontSize = compact ? 9 : 11
   const padding = Math.min(12, width / 12)
@@ -329,6 +330,8 @@ export async function captureMapImage(
   await document.fonts.load('400 12px "Fira Sans"').catch(() => undefined)
   await document.fonts.load('700 17px "Fira Sans"').catch(() => undefined)
   const source = map.getCanvas()
+  const ratioX = source.width / source.clientWidth
+  const ratioY = source.height / source.clientHeight
   const output = document.createElement('canvas')
   output.width = Math.max(1, Math.round(region.width * ratioX))
   output.height = Math.max(1, Math.round(region.height * ratioY))

@@ -1,0 +1,60 @@
+.location-appearance-trigger.ui-button {
+  width: 38px;
+  height: 34px;
+  flex: none;
+  padding: 0;
+}
+.location-appearance-trigger svg,
+.location-icon-options svg {
+  filter: drop-shadow(0 0 1px #07173f80);
+}
+.location-appearance-picker.ui-popover {
+  z-index: 130;
+  width: 190px;
+  min-width: 0;
+  padding: 10px;
+  gap: 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--text);
+  font-family: 'Fira Sans', sans-serif;
+}
+.location-appearance-label {
+  font-size: 12px;
+  font-weight: 700;
+}
+.location-icon-options.ui-toggle-group,
+.location-color-options.ui-toggle-group {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.location-appearance-picker .ui-toggle-group-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 34px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+}
+.location-appearance-picker .ui-toggle-group-item[data-state='on'],
+.location-appearance-picker
+  .ui-toggle-group-item[data-state='on']:not(:disabled):is(:hover, :focus-visible),
+.location-appearance-picker .ui-toggle-group-item:is(:hover, :focus-visible) {
+  border-color: var(--contrast);
+  background: transparent;
+  box-shadow: none;
+}
+.location-color-options span {
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+}

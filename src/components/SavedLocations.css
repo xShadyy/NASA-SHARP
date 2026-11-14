@@ -22,6 +22,26 @@
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
+.saved-locations-heading h2 {
+  min-width: 0;
+  flex: 1;
+}
+.saved-locations .saved-locations-toggle.ui-button {
+  width: 100%;
+  height: auto;
+  justify-content: flex-start;
+  gap: 6px;
+  padding: 4px 0;
+  font-size: 15px;
+  font-weight: 700;
+  background: transparent;
+  color: var(--text);
+}
+.saved-locations-toggle > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
 .saved-locations-list {
   display: flex;
   flex-direction: column;

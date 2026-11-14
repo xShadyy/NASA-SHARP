@@ -48,3 +48,56 @@
   background: transparent;
   box-shadow: none;
 }
+
+.location-dialog-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+}
+.draggable-panel.location-save-panel {
+  width: min(360px, calc(100% - 24px));
+  max-height: calc(100% - 24px);
+  pointer-events: auto;
+}
+.location-save-panel .draggable-panel__header {
+  min-height: 37px;
+}
+.location-save-panel .draggable-panel__drag-handle.ui-button {
+  height: 31px;
+  font-size: 14px;
+}
+.location-save-panel .draggable-panel__divider.ui-separator {
+  margin-top: 3px;
+}
+.location-save-coordinates {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.location-save-panel form {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.location-save-panel label {
+  font-size: 12px;
+  font-weight: 700;
+}
+.location-save-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.location-save-name .ui-input {
+  min-width: 0;
+  height: 34px;
+  flex: 1;
+}
+.location-save-actions {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 12px;
+}
