@@ -1,4 +1,4 @@
-"""Compact, exact summaries for the wildfire dashboard."""
+"""Compact, exact summaries for Area Analytics."""
 
 import heapq
 import json
@@ -18,7 +18,7 @@ FRP_RANGES = (
 )
 
 
-class DashboardSummary:
+class AreaAnalyticsSummary:
     def __init__(self, sample_limit: int = SAMPLE_LIMIT):
         self.sample_limit = sample_limit
         self.count = 0
@@ -149,7 +149,7 @@ class DashboardSummary:
         )
 
     @classmethod
-    def from_cache(cls, payload: str) -> "DashboardSummary":
+    def from_cache(cls, payload: str) -> "AreaAnalyticsSummary":
         saved = json.loads(payload)
         summary = cls(saved["sample_limit"])
         summary.count = saved["count"]
@@ -174,7 +174,7 @@ class DashboardSummary:
             )
         return summary
 
-    def merge(self, other: "DashboardSummary") -> None:
+    def merge(self, other: "AreaAnalyticsSummary") -> None:
         self.count += other.count
         self.daily.update(other.daily)
         self.products.update(other.products)

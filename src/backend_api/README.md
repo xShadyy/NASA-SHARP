@@ -14,7 +14,7 @@ from outbound proxy logs or tracing if you use them.
 
 ## 2. Start the backend
 
-The backend must be running while using dashboard data. From the repository
+The backend must be running while using Area Analytics. From the repository
 root, open a **second PowerShell terminal** (leave `npm run dev` running in the
 frontend terminal) and run these commands from `src\backend_api`. Use Python
 3.11 or newer:
@@ -48,13 +48,13 @@ try {
 }
 ```
 
-Keep that terminal open while using the dashboard. Verify the service from
+Keep that terminal open while using Area Analytics. Verify the service from
 another terminal with `Invoke-RestMethod http://127.0.0.1:8000/health`; it
 should return `{"status":"ok"}`. Do not paste the key into the frontend, source
 code, or a `VITE_` environment variable. If you already created a virtual
 environment, you can skip the `py -m venv .venv` command.
 
-The Vite development server proxies the dashboard's `/api` requests to
+The Vite development server proxies Area Analytics `/api` requests to
 `http://127.0.0.1:8000`. Start the frontend from the repository root with
 `npm run dev` in a separate terminal. For a deployment, configure the web
 server to proxy `/api` to the backend on the same origin. A cross-origin API
@@ -96,7 +96,7 @@ box over California and surrounding areas.
 | `source`               | Optional and repeatable. Use `MODIS_NRT`, `VIIRS_NOAA20_NRT`, `VIIRS_NOAA21_NRT`, `VIIRS_SNPP_NRT`, or their `_SP` equivalents when available.                                                                                                                                                |
 | `modis_min_confidence` | Integer from 0 to 100, default 0.                                                                                                                                                                                                                                                             |
 | `viirs_min_confidence` | `l` (low), `n` (nominal), or `h` (high), default `l`.                                                                                                                                                                                                                                         |
-| `summary`              | Optional boolean. `true` returns exact interval-wide dashboard metrics and only the 500 newest matching detection records; omitted/false returns every matching feature.                                                                                                                      |
+| `summary`              | Optional boolean. `true` returns exact interval-wide Area Analytics metrics and only the 500 newest matching detection records; omitted/false returns every matching feature.                                                                                                                      |
 
 ### Confirmed Analysis geometry
 
@@ -111,6 +111,11 @@ antimeridian are split into two candidate requests.
 Area Analytics uses this endpoint only when Analysis has a confirmed area.
 Otherwise it continues using `area=netherlands` and the generalized European
 Netherlands boundary.
+
+Area Analytics uses `POST /hotspots/stream` with the same query fields, plus
+`area: "netherlands"` or an optional confirmed `geometry`. It streams
+newline-delimited JSON progress events as all selected products finish each
+day, followed by a `result` event containing the usual hotspot response.
 
 For historical data, use `/availability` to select a product with coverage
 for the dates you need. NASA announced the end of Suomi NPP observations
@@ -150,7 +155,7 @@ fails, the backend returns HTTP 502 with a per-source error. Detections can
 include thermal anomalies other than wildfire. Satellite coverage, cloud and
 overpass timing affect what FIRMS can observe.
 
-The dashboard uses `summary=true` to keep global multi-week queries usable.
+Area Analytics uses `summary=true` to keep global multi-week queries usable.
 `count` and the summary metrics cover every matching observation; `features`
 contains only the latest 500 records for inspection/export, not the complete
 dataset. Omit `summary` for the full GeoJSON feature list, which can be very
@@ -169,6 +174,9 @@ large for global intervals.
 - A successful daily batch, including an empty CSV with valid headers, is
   cached before time, confidence or day/night filters are applied. The same
   product, bounding box and date can serve different filters and timezones.
+  Concurrent requests for the same product, bounds and date share one
+  in-flight pull, which continues after an interval stream is canceled so a
+  subsequent interval can reuse the result.
   Cache reuse requires identical bounds. Each source reports cache hits,
   the oldest fetch timestamp and any failed UTC dates. A failed date is
   retried on the next request.
@@ -177,7 +185,7 @@ large for global intervals.
   on writes and the least recently used entries are evicted above 128 MiB
   of compressed payload. SQLite files can retain allocated space for
   reuse. Stop the server before removing the cache files.
-- The dashboard also caches compact daily summaries, tied to the exact
+- Area Analytics also caches compact daily summaries, tied to the exact
   underlying batch version and its expiry. Repeated interval/filter queries
   can reuse aggregate counts and the bounded recent-record sample without
   decompressing and reprocessing every cached point. These entries are
@@ -213,7 +221,7 @@ It reads canonical detections from `FIRE_DATA_CSV` (and optionally
 When no local rows are available, a configured `FIRMS_MAP_KEY` enables
 live-area analysis for requests up to 31 UTC days. Local-data analysis does
 not require a FIRMS key; `/availability`, `/hotspots`, and
-`/hotspots/area` always do.
+`/hotspots/area` and `/hotspots/stream` always do.
 
 NASA documentation
 

@@ -8,14 +8,14 @@ import {
   filterDetections,
   detectionsToCsv,
   frpBuckets,
-  getDashboardWindows,
+  getAreaAnalyticsWindows,
   highestFrp,
   latestDetection,
   medianFrp,
   peakActivity,
   topDetectionCells,
   type HotspotDetection,
-} from '../src/lib/wildfire-dashboard'
+} from '../src/lib/area-analytics'
 
 function detection(acquiredAt: string, longitude = -120, satellite = 'N') {
   return {
@@ -38,7 +38,7 @@ function detection(acquiredAt: string, longitude = -120, satellite = 'N') {
 }
 
 test('builds current and immediately preceding UTC windows', () => {
-  assert.deepEqual(getDashboardWindows(3, '2026-03-01'), {
+  assert.deepEqual(getAreaAnalyticsWindows(3, '2026-03-01'), {
     currentStart: '2026-02-27',
     previousStart: '2026-02-24',
     endDate: '2026-03-01',
@@ -46,8 +46,8 @@ test('builds current and immediately preceding UTC windows', () => {
 })
 
 test('rejects live intervals outside the supported slider range', () => {
-  assert.throws(() => getDashboardWindows(31, '2026-03-01'), RangeError)
-  assert.throws(() => getDashboardWindows(0, '2026-03-01'), RangeError)
+  assert.throws(() => getAreaAnalyticsWindows(31, '2026-03-01'), RangeError)
+  assert.throws(() => getAreaAnalyticsWindows(0, '2026-03-01'), RangeError)
 })
 
 test('aggregates detections into complete daily bins including empty days', () => {
@@ -94,11 +94,13 @@ test('aggregates operational breakdowns without merging sensor confidence scales
       daynight: 'N',
     },
   } satisfies HotspotDetection
-  assert.deepEqual(aggregateHourlyActivity([viirs, modis])
-    .filter(({ count }) => count > 0), [
-    { hour: 4, count: 1 },
-    { hour: 18, count: 1 },
-  ])
+  assert.deepEqual(
+    aggregateHourlyActivity([viirs, modis]).filter(({ count }) => count > 0),
+    [
+      { hour: 4, count: 1 },
+      { hour: 18, count: 1 },
+    ],
+  )
   assert.deepEqual(confidenceBuckets([viirs, modis]), [
     { label: 'VIIRS N', count: 1 },
     { label: 'MODIS 80–100', count: 1 },
@@ -122,7 +124,10 @@ test('finds the newest and highest-FRP observations and ranks spatial grid cells
   } satisfies HotspotDetection
   assert.equal(latestDetection([first, otherCell]), otherCell)
   assert.equal(highestFrp([first, strongest]), strongest)
-  assert.deepEqual(topDetectionCells([first, sameCell, otherCell]).map(({ count }) => count), [2, 1])
+  assert.deepEqual(
+    topDetectionCells([first, sameCell, otherCell]).map(({ count }) => count),
+    [2, 1],
+  )
   assert.throws(() => topDetectionCells([first], 0), RangeError)
 })
 

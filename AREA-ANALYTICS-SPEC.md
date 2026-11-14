@@ -1,8 +1,8 @@
-# Wildfire Dashboard: Feature Specification and Implementation Brief
+# Area Analytics: Feature Specification and Implementation Brief
 
 ## Purpose
 
-Build a sidebar-accessible dashboard for exploring satellite-observed burning
+Build a sidebar-accessible Area Analytics view for exploring satellite-observed burning
 activity. It should make recent activity easy to monitor and, once the
 harmonized historical dataset is available, make seasonal patterns, unusual
 conditions, and long-term changes understandable for a selected area.
@@ -10,7 +10,7 @@ conditions, and long-term changes understandable for a selected area.
 The contest's primary product is a harmonized burning-activity calendar based
 on MODIS and VIIRS active-fire hotspots. The intended users include emergency
 responders, early-warning teams, scientists, land managers, and firefighters.
-The dashboard must distinguish satellite hotspot observations from confirmed
+The interface must distinguish satellite hotspot observations from confirmed
 fire incidents: one incident can produce many observations, and detections can
 also come from agricultural burning, industrial heat, volcanoes, and other
 sources.
@@ -48,14 +48,14 @@ sources.
   climatological anomalies must not be presented as complete until these exist.
 - The current FIRMS endpoint is a recent-data source, not a substitute for the
   full historical harmonized record. Its 31-day query cap does not support a
-  multi-year dashboard request.
+  multi-year Area Analytics request.
 
-Implement the dashboard in stages so the working Netherlands/recent view does
+Implement Area Analytics in stages so the working Netherlands/recent view does
 not depend on either unfinished feature. Clearly label unavailable future
 capabilities rather than simulating historical results or silently substituting
 other data.
 
-## Dashboard information architecture
+## Area Analytics information architecture
 
 ### Sidebar and entry point
 
@@ -63,14 +63,14 @@ other data.
 - Use the existing sidebar components, active-navigation behavior, tooltips,
   focus states, and mobile-collapse behavior; do not create a second navigation
   system.
-- Selecting the item opens a dashboard surface that fits the existing map
+- Selecting the item opens the Area Analytics view within the existing map
   workspace. Provide a clear close/back action and preserve the map and its
   unrelated state.
-- The dashboard should remain usable at narrow widths. Stack cards/charts on
+- The view should remain usable at narrow widths. Stack cards/charts on
   small screens and allow chart controls to wrap rather than causing horizontal
   page overflow.
 
-### Dashboard header and scope controls
+### Area Analytics header and scope controls
 
 Display:
 
@@ -88,10 +88,14 @@ Display:
 - Appropriate loading, empty, retryable error, and partial-data states.
   Never show a successful-looking zero when a request failed or data is
   unavailable.
+- While the current interval loads, report the number of dates actually
+  processed by the backend. Animate the indicator along the bar; show a full
+  green bar and check only after the final response arrives. Keep partial-data
+  warnings separate from processing completion.
 
-Use dashboard-owned query state unless a deliberate, tested product decision
+Keep query state local to Area Analytics unless a deliberate, tested product decision
 is made to share the existing header date state. Do not unexpectedly change the
-map's current date or date presets when the dashboard slider moves.
+map's current date or date presets when the Area Analytics slider moves.
 
 ### Summary cards (live/recent view)
 
@@ -120,17 +124,17 @@ spatiotemporal clustering method and must be labeled as an estimate.
 ### Fire Activity at a Glance
 
 Place a prominent **Fire Activity at a Glance** panel at the top of the
-dashboard content, before KPI cards and detailed charts. Its job is to orient
+Area Analytics content, before KPI cards and detailed charts. Its job is to orient
 users in seconds with a concise, factual readout of recent satellite-observed
 activity, its short-term direction, and the reliability of the data. Use
 **Observed satellite activity** as the concept—not "severity," "threat level,"
 "fire danger," or a red/green all-clear indicator.
 
 The panel must summarize the **same selected 1–30 UTC-calendar-day interval**
-as the dashboard KPIs and charts and compare it with the immediately preceding
+as the Area Analytics KPIs and charts and compare it with the immediately preceding
 equal-length interval. Do not run a separate rolling-24-hour snapshot. Show
-the selected duration and date range, selected area (Global until confirmed
-Analysis-area support exists), applied sensor/day-night filters, and comparison
+the selected duration and date range, selected area (confirmed Analysis area or the
+Netherlands fallback), applied sensor/day-night filters, and comparison
 range. The same filters must apply to the panel, KPI cards, charts, and export.
 
 Show:
@@ -184,7 +188,7 @@ and fire-danger conditions, exposed assets, and official safety information.
 
 #### MVP analytics available from recent FIRMS detections
 
-The Global/recent dashboard should expose several complementary views of the
+The Netherlands/confirmed-area recent view should expose several complementary views of the
 same filtered detection set, not just a headline count:
 
 1. **Daily trend with prior-period overlay:** paired daily bars for the selected
@@ -273,7 +277,7 @@ they are applied consistently to every view and export.
   distinguish detections only when the distinction is supported (for example,
   sensor or confidence class).
 - Provide a legend, map attribution where required, and a clear way to return
-  to the dashboard.
+  to the Area Analytics.
 - For a polygon/country selection, filter detections against the actual
   geometry, not only its bounding box. The current backend accepts `world` or
   bounding-box areas; add a correct polygon query/filter path before claiming
@@ -399,7 +403,7 @@ normalizes selected MODIS and VIIRS fields. Keep NASA credentials and
 upstream-specific requests on the backend; the browser must call the
 application service, never call FIRMS with a secret key.
 
-Do not add another NASA API merely to increase the number of dashboard cards.
+Do not add another NASA API merely to increase the number of Area Analytics cards.
 Add a supplementary source only when it answers a distinct requirement,
 documents its temporal/spatial resolution and licensing/attribution, and can be
 combined without implying false equivalence with hotspot observations.
@@ -438,7 +442,7 @@ because MODIS and VIIRS rows have been placed in one table.
   backend, use bounded FIRMS candidate queries (split at the antimeridian when
   needed), and clip summaries and returned features to the exact confirmed
   geometry. Report the active area's name. Keep `world` available as an API
-  area, but do not use it as the dashboard's initial scope.
+  area, but do not use it as the initial Area Analytics scope.
 - Treat incomplete source/day results as partial, including per-source status
   where possible. A partial total is not an authoritative complete total.
 
@@ -446,13 +450,12 @@ because MODIS and VIIRS rows have been placed in one table.
 
 Build the MVP in this order:
 
-1. Add the Area Analytics sidebar entry and responsive dashboard surface.
+1. Add the Area Analytics sidebar entry and responsive analytics view.
 2. Use a confirmed Analysis area when available; otherwise default to
    **Netherlands (European part)**. Keep the **1-day interval** default and
    allow the slider to adjust up to 30 days.
-3. Connect to the existing backend `/hotspots` service for the Netherlands
-   fallback and the geometry-aware `/hotspots/area` service for confirmed
-   Analysis areas, with clear loading,
+3. Connect to the backend `/hotspots/stream` service for the Netherlands
+   fallback and confirmed Analysis areas, with clear loading,
    error, empty, and partial-result handling.
 4. Put **Fire Activity at a Glance** first: summarize the selected interval and
    preceding equal-length UTC-day interval, apply current filters consistently, and
@@ -498,8 +501,8 @@ Build the MVP in this order:
 Use the following as the implementation brief when assigning this feature to an
 AI coding agent:
 
-> Implement the Wildfire Dashboard in this repository, following
-> `WILDFIRE-DASHBOARD-SPEC.md` and the existing React/TypeScript conventions.
+> Implement Area Analytics in this repository, following
+> `AREA-ANALYTICS-SPEC.md` and the existing React/TypeScript conventions.
 >
 > **Before editing**
 >
@@ -507,30 +510,30 @@ AI coding agent:
 >    `src/backend_api/README.md`, and the FIRMS backend's `/hotspots` endpoint.
 >    Verify the current application state instead of assuming this document's
 >    inventory is exhaustive.
-> 2. Treat the confirmed Analysis area as the dashboard scope when available;
+> 2. Treat the confirmed Analysis area as the Area Analytics scope when available;
 >    retain Netherlands as the fallback. The MODIS/VIIRS harmonization pipeline
 >    remains unfinished. Do not claim or fake that capability. Ask for
 >    clarification only if implementation cannot proceed without a product
 >    decision.
 > 3. Check the worktree and preserve unrelated user changes. Keep scope limited
->    to the dashboard and directly required integration/tests/docs.
+>    to Area Analytics and directly required integration/tests/docs.
 >
 > **Implementation**
 >
 > 4. Add an Area Analytics entry using the current sidebar navigation,
 >    active-state, tooltip, keyboard, and mobile-collapse patterns. Put the
->    dashboard in the existing application workspace and preserve current map
+>    Implement the view in the existing application workspace and preserve current map
 >    behavior.
 > 5. Use the confirmed Analysis polygon or multipolygon when available,
 >    otherwise use Netherlands (European part), with exact boundary filtering,
 >    and a
->    dashboard-owned date interval initially set to 1 day. Add an accessible
+>    Area Analytics-owned date interval initially set to 1 day. Add an accessible
 >    slider and visible selected duration/date range. Clamp the live query to
 >    what the backend supports (no more than 31 UTC calendar days); do not
 >    silently alter the existing global date control.
 > 6. Fetch data through the application's backend, not directly from NASA
 >    FIRMS. Follow the existing service/API configuration conventions. Use
->    `/hotspots/area` for confirmed geometry and `area=netherlands` as fallback.
+>    `/hotspots/stream` for the Netherlands fallback and confirmed geometry.
 >    Abort or ignore stale
 >    requests when controls change, and surface network, HTTP, malformed
 >    response, and partial-source errors explicitly.
@@ -547,7 +550,7 @@ AI coding agent:
 >    detection-density grid, and a sortable recent detections table. Reuse
 >    repository UI primitives and styling conventions.
 >    8a. Place **Fire Activity at a Glance** before KPI cards. Use the same
->    selected interval as the dashboard, plus the immediately preceding
+>    selected interval as the main analytics view, plus the immediately preceding
 >    equal-length interval. Do not run a separate rolling-24-hour query.
 >    Apply the same sensor/day-night filters and require complete results for
 >    directional comparison. Show explicit
@@ -593,11 +596,13 @@ AI coding agent:
 
 ### Stage 2: confirmed region support (implemented)
 
-- The dashboard consumes the Analysis tool's confirmed-area state and uses
+- The Area Analytics consumes the Analysis tool's confirmed-area state and uses
   Netherlands (European part) when there is no confirmed area.
 - `/hotspots/area` accepts Polygon/MultiPolygon geometry and clips summary and
   feature results to that geometry, splitting candidate requests at the
   antimeridian.
+- `/hotspots/stream` emits the selected interval's per-day processing progress
+  and then the standard summary response.
 - The active area name is shown in Area Analytics; add future geometry edge
   cases to the test suite as new Analysis shapes are supported.
 
