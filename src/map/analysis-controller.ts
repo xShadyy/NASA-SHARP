@@ -2,25 +2,32 @@ import {
   TerraDraw,
   TerraDrawPolygonMode,
   TerraDrawRectangleMode,
-  TerraDrawSelectMode,
   TerraDrawExtend,
 } from 'terra-draw'
 import { TerraDrawMapLibreGLAdapter } from 'terra-draw-maplibre-gl-adapter'
 import type { Feature, FeatureCollection, Polygon } from 'geojson'
-import type { GeoJSONSource, Map as MapLibreMap } from 'maplibre-gl'
-import {
-  drawnArea,
-  outsideAreaMask,
-  validateDrawnArea,
-  wrappedArea,
-  type AnalysisArea,
-} from '@/lib/analysis-area'
+import type { GeoJSONSource, Map as MapLibreMap, MapMouseEvent, MapTouchEvent } from 'maplibre-gl'
+import { drawnArea, validateDrawnArea, type AnalysisArea } from '@/lib/analysis-area'
 import type { AnalysisState } from '@/lib/analysis-state'
+import { analysisDrawingMeasurements } from '@/lib/analysis-measurements'
+import type { AreaUnit, DistanceUnit } from '@/lib/measurement-units'
+import { formatMeasurement } from '@/map/measurement-controller'
 import { minimumZoomForView, setAnalysisZoomFloor, type MapView } from '@/map/projection'
+import './analysis-controller.css'
+import { createAnalysisSelectMode } from './analysis-select-mode'
+import { createCountryPickingController } from './country-picking'
+import { FIRE_LAYER_BEFORE_ID } from './geography'
+import { createAnalysisGeometryPreparer } from './analysis-geometry-preparer'
+import { fallbackAnalysisDisplayGeometry, type AnalysisDisplayGeometry } from './analysis-geometry'
 
 const SOURCE = 'analysis-area'
 const MASK = 'analysis-outside'
-const LAYERS = ['analysis-outside-dim', 'analysis-boundary-halo', 'analysis-boundary']
+const LAYERS = [
+  'analysis-outside-dim',
+  'analysis-area-fill',
+  'analysis-boundary-halo',
+  'analysis-boundary',
+]
 const empty: FeatureCollection = { type: 'FeatureCollection', features: [] }
 
 class AnalysisDrawAdapter extends TerraDrawMapLibreGLAdapter<MapLibreMap> {
@@ -35,7 +42,12 @@ class AnalysisDrawAdapter extends TerraDrawMapLibreGLAdapter<MapLibreMap> {
     try {
       super.clear()
     } catch (error) {
-      if (['point', 'linestring', 'polygon'].every((kind) => this.attachedMap.getSource(`analysis-draw-${kind}`))) throw error
+      if (
+        ['point', 'linestring', 'polygon'].every((kind) =>
+          this.attachedMap.getSource(`analysis-draw-${kind}`),
+        )
+      )
+        throw error
     }
   }
 
@@ -58,7 +70,9 @@ export function createAnalysisController(
     onChange: (area: AnalysisArea | null, error: string | null, vertices: number) => void
     onFinish: (area: AnalysisArea, error: string | null) => void
     onCancel: () => void
+    onCountryPick: (countryId: string) => void
     getView: () => MapView
+    getUnits: () => { distance: DistanceUnit; area: AreaUnit }
     markNavigated: () => void
   },
 ) {
@@ -70,6 +84,15 @@ export function createAnalysisController(
   let frame = 0
   let state: AnalysisState | null = null
   let open = false
+  let picking = false
+  let preparedArea: AnalysisDisplayGeometry | null = null
+  let lastMask: object | null | undefined
+  let lastMaskView: MapView | null = null
+  let lastRendered: {
+    area: AnalysisArea | null
+    prepared: AnalysisDisplayGeometry | null
+    role: string
+  } | null = null
   let finishedId: string | number | null = null
   let drawId = ''
   let changing = false
@@ -77,12 +100,147 @@ export function createAnalysisController(
   let rememberedDoubleClick = false
   let styleReady = true
   let pendingFit: AnalysisArea | null = null
+  const geometryPreparer = createAnalysisGeometryPreparer()
+  let cursor: { x: number; y: number } | null = null
+  let readoutFrame = 0
+  const container = map.getContainer()
+  const readout = document.createElement('output')
+  readout.className = 'analysis-drawing-readout'
+  readout.hidden = true
+  readout.setAttribute('aria-hidden', 'true')
+  container.append(readout)
+  const notice = document.createElement('output')
+  notice.className = 'analysis-map-notice'
+  notice.hidden = true
+  notice.setAttribute('role', 'status')
+  container.append(notice)
+  const countryPicking = createCountryPickingController(map, {
+    onPick: (countryId) => options.onCountryPick(countryId),
+    onError: (message) => {
+      if (disposed) return
+      notice.textContent = message ?? ''
+      notice.hidden = !message
+    },
+  })
+  const themeObserver = new MutationObserver(() => {
+    if (!styleReady || disposed) return
+    updateTheme()
+    countryPicking.updateTheme()
+  })
+  themeObserver.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['data-theme'],
+  })
+  let containerWidth = container.clientWidth
+  let containerHeight = container.clientHeight
+  let readoutWidth = 240
+  let readoutHeight = 26
+  const readoutObserver = new ResizeObserver((entries) => {
+    for (const entry of entries) {
+      const box = entry.borderBoxSize[0]
+      const width = box?.inlineSize ?? entry.contentRect.width
+      const height = box?.blockSize ?? entry.contentRect.height
+      if (entry.target === container) {
+        containerWidth = width
+        containerHeight = height
+      } else if (width > 0 && height > 0) {
+        readoutWidth = width
+        readoutHeight = height
+      }
+    }
+    positionReadout()
+  })
+  readoutObserver.observe(container)
+  readoutObserver.observe(readout)
+
+  function positionReadout() {
+    if (!cursor || readout.hidden) return
+    const x = Math.max(8, Math.min(cursor.x + 15, containerWidth - readoutWidth - 8))
+    const y = Math.max(
+      8,
+      Math.min(cursor.y - readoutHeight - 7, containerHeight - readoutHeight - 8),
+    )
+    readout.style.transform = `translate3d(${x}px, ${y}px, 0)`
+  }
+
+  function updateReadout() {
+    const current = draw && cursor ? feature() : null
+    const values = current ? analysisDrawingMeasurements(current, finishedId !== null) : null
+    if (!values || !cursor) {
+      readout.hidden = true
+      return
+    }
+    const units = options.getUnits()
+    const text = [
+      values.edgeKm !== null ? `Edge ${formatMeasurement(values.edgeKm, units.distance)}` : '',
+      values.widthKm !== null ? `Width ${formatMeasurement(values.widthKm, units.distance)}` : '',
+      values.heightKm !== null
+        ? `Height ${formatMeasurement(values.heightKm, units.distance)}`
+        : '',
+      values.areaKm2 !== null
+        ? state?.error
+          ? 'Invalid area · Move or remove a point'
+          : `Area ${formatMeasurement(values.areaKm2, units.area)}`
+        : '',
+    ]
+      .filter(Boolean)
+      .join(' · ')
+    if (!text) {
+      readout.hidden = true
+      return
+    }
+    if (readout.textContent !== text) readout.textContent = text
+    readout.hidden = false
+    positionReadout()
+  }
+
+  function requestReadout() {
+    if (readoutFrame || disposed || !draw) return
+    readoutFrame = requestAnimationFrame(() => {
+      readoutFrame = 0
+      if (!disposed) updateReadout()
+    })
+  }
+
+  function pointerMove(event: MapMouseEvent | MapTouchEvent) {
+    if (!draw) return
+    const projected = map.project(event.lngLat)
+    if (Math.hypot(projected.x - event.point.x, projected.y - event.point.y) > 2) {
+      clearReadout()
+      return
+    }
+    cursor = event.point
+    requestReadout()
+  }
+
+  function clearReadout() {
+    cancelAnimationFrame(readoutFrame)
+    readoutFrame = 0
+    cursor = null
+    readout.hidden = true
+  }
+
+  function accent() {
+    return getComputedStyle(container).getPropertyValue('--brand-accent').trim() || '#0960e1'
+  }
+
+  function updateTheme() {
+    for (const [id, property] of [['analysis-area-fill', 'fill-color']] as const)
+      if (map.getLayer(id)) map.setPaintProperty(id, property, accent())
+  }
 
   function ensureLayers() {
     if (!map.getSource(SOURCE))
       map.addSource(SOURCE, { type: 'geojson', data: empty, tolerance: 0 })
     if (!map.getSource(MASK)) map.addSource(MASK, { type: 'geojson', data: empty, tolerance: 0 })
-    const before = map.getStyle().layers?.find((layer) => layer.id.startsWith('measurement-'))?.id
+    const layers = map.getStyle().layers ?? []
+    const before = layers.find(
+      (layer) =>
+        layer.id.startsWith('measurement-') ||
+        layer.id.startsWith('analysis-observations-') ||
+        /(?:^|[-_])(?:fire|hotspots?|firms)(?:$|[-_])/i.test(layer.id) ||
+        layer.id === FIRE_LAYER_BEFORE_ID,
+    )?.id
     if (!map.getLayer(LAYERS[0]))
       map.addLayer(
         {
@@ -97,9 +255,12 @@ export function createAnalysisController(
       map.addLayer(
         {
           id: LAYERS[1],
-          type: 'line',
+          type: 'fill',
           source: SOURCE,
-          paint: { 'line-color': '#07173f', 'line-width': 4, 'line-opacity': 0.8 },
+          paint: {
+            'fill-color': accent(),
+            'fill-opacity': ['case', ['==', ['get', 'role'], 'candidate'], 0.12, 0.055],
+          },
         },
         before,
       )
@@ -109,41 +270,114 @@ export function createAnalysisController(
           id: LAYERS[2],
           type: 'line',
           source: SOURCE,
-          paint: { 'line-color': '#ffffff', 'line-width': 2, 'line-opacity': 0.95 },
+          layout: { 'line-join': 'round', 'line-cap': 'round' },
+          paint: { 'line-color': '#07173f', 'line-width': 4, 'line-opacity': 0.8 },
+        },
+        before,
+      )
+    if (!map.getLayer(LAYERS[3]))
+      map.addLayer(
+        {
+          id: LAYERS[3],
+          type: 'line',
+          source: SOURCE,
+          layout: { 'line-join': 'round', 'line-cap': 'round' },
+          paint: {
+            'line-color': '#ffffff',
+            'line-width': 2,
+            'line-opacity': 0.95,
+          },
         },
         before,
       )
   }
 
-  function setArea(next: AnalysisArea | null, force = false) {
-    if (!force && area === next) return
-    area = next
-    if (!styleReady) return
-    ensureLayers()
-    const selected: FeatureCollection = next
+  function renderSelection() {
+    if (!styleReady || disposed) return
+    const role = area && state?.draft === area ? 'candidate' : 'confirmed'
+    if (
+      lastRendered?.area === area &&
+      lastRendered.prepared === preparedArea &&
+      lastRendered.role === role
+    )
+      return
+    lastRendered = { area, prepared: preparedArea, role }
+    const features: FeatureCollection['features'] = []
+    if (area && preparedArea)
+      features.push({
+        type: 'Feature',
+        properties: { id: area.id, role },
+        geometry: preparedArea.boundary,
+      })
+    ;(map.getSource(SOURCE) as GeoJSONSource).setData({ type: 'FeatureCollection', features })
+  }
+
+  function refreshProjection(force = false) {
+    if (!styleReady || disposed) return
+    const view = options.getView()
+    const mask = preparedArea?.outside ?? null
+    container.dataset.analysisMask = mask ? 'outside' : area ? 'outline-and-fill' : ''
+    if (!force && lastMask === mask && lastMaskView === view) return
+    lastMask = mask
+    lastMaskView = view
+    const data: FeatureCollection = mask
       ? {
           type: 'FeatureCollection',
-          features: [
-            { type: 'Feature', properties: { id: next.id }, geometry: wrappedArea(next.geometry) },
-          ],
+          features: [{ type: 'Feature', properties: {}, geometry: mask }],
         }
       : empty
-    const outside: FeatureCollection = next
-      ? {
-          type: 'FeatureCollection',
-          features: [{ type: 'Feature', properties: {}, geometry: outsideAreaMask(next.geometry) }],
-        }
-      : empty
-    ;(map.getSource(SOURCE) as GeoJSONSource).setData(selected)
-    ;(map.getSource(MASK) as GeoJSONSource).setData(outside)
-    map.getContainer().dataset.analysisArea = next?.id ?? ''
-    if (!next) {
-      setAnalysisZoomFloor(map, null)
-      map.setMinZoom(minimumZoomForView(map, options.getView()))
+    ;(map.getSource(MASK) as GeoJSONSource).setData(data)
+    if (area && preparedArea && !mask) {
+      notice.dataset.kind = 'mask'
+      notice.textContent =
+        'Outside dimming is unavailable for this boundary. Its outline and complete analysis geometry are preserved.'
+      notice.hidden = false
+    } else if (notice.dataset.kind === 'mask') {
+      notice.hidden = true
+      notice.textContent = ''
+      delete notice.dataset.kind
     }
   }
 
+  function setArea(next: AnalysisArea | null, force = false) {
+    if (disposed) return
+    if (!force && area === next) return
+    geometryPreparer.cancel()
+    area = next
+    notice.hidden = true
+    notice.textContent = ''
+    delete notice.dataset.kind
+    preparedArea = null
+    lastRendered = null
+    container.removeAttribute('data-analysis-preparing')
+    if (!styleReady) return
+    ensureLayers()
+    const display = (prepared: AnalysisDisplayGeometry | null) => {
+      if (disposed || !styleReady || area !== next) return
+      preparedArea = prepared
+      renderSelection()
+      refreshProjection()
+      container.removeAttribute('data-analysis-preparing')
+    }
+    if (!next || (next.type === 'country' && !next.displayBoundary)) display(null)
+    container.dataset.analysisArea = next?.id ?? ''
+    container.dataset.analysisCredits =
+      next?.type === 'country' && next.source
+        ? `${next.source.name} · ${next.source.dataset}${next.source.version ? ` · ${next.source.version}` : ''}`
+        : ''
+    if (!next) {
+      setAnalysisZoomFloor(map, null)
+      map.setMinZoom(Math.min(map.getZoom(), minimumZoomForView(map, options.getView())))
+    } else if (next.displayBoundary) {
+      display({ boundary: next.displayBoundary, outside: next.displayMask ?? null })
+    } else if (next.type === 'country') {
+      container.dataset.analysisPreparing = next.id
+      geometryPreparer.prepare(next.geometry, display)
+    } else display(fallbackAnalysisDisplayGeometry(next.geometry))
+  }
+
   function stopDrawing() {
+    clearReadout()
     cancelAnimationFrame(frame)
     frame = 0
     if (!draw) return
@@ -173,6 +407,7 @@ export function createAnalysisController(
 
   function reportChange() {
     if (changing || !draw || !state?.tool) return
+    requestReadout()
     cancelAnimationFrame(frame)
     frame = requestAnimationFrame(() => {
       frame = 0
@@ -183,7 +418,8 @@ export function createAnalysisController(
           Math.max(0, current.geometry.coordinates[0].length - (finishedId === null ? 2 : 1)),
       )
       if (finishedId === null) {
-        options.onChange(null, null, count)
+        if (count !== state.vertices || state.error || state.draft)
+          options.onChange(null, null, count)
       } else {
         const candidate = drawnArea(current.geometry, state.tool, drawId)
         options.onChange(candidate, validateDrawnArea(candidate.geometry), count)
@@ -204,10 +440,15 @@ export function createAnalysisController(
     options.onFinish(candidate, error)
   }
 
-  function configure(next: AnalysisState, enabled: boolean) {
+  function configure(next: AnalysisState, enabled: boolean, selectCountry = false) {
     state = next
     open = enabled
+    picking = enabled && selectCountry
+    requestReadout()
     if (!styleReady) return
+    countryPicking.setEnabled(picking)
+    renderSelection()
+    refreshProjection()
     const active = enabled && (next.phase === 'drawing' || next.phase === 'editing') && next.tool
     if (!active || !next.tool) {
       stopDrawing()
@@ -263,35 +504,7 @@ export function createAnalysisController(
     rememberedDoubleClick = map.doubleClickZoom.isEnabled()
     draw = new TerraDraw({
       adapter: new AnalysisDrawAdapter(map),
-      modes: [
-        polygonMode,
-        rectangleMode,
-        new TerraDrawSelectMode({
-          projection: 'globe',
-          keyEvents: null,
-          allowManualDeselection: false,
-          flags: {
-            polygon: {
-              feature: {
-                selfIntersectable: true,
-                draggable: true,
-                coordinates: { draggable: true, deletable: true, midpoints: true },
-              },
-            },
-            rectangle: { feature: { draggable: true, coordinates: { resizable: 'opposite' } } },
-          },
-          styles: {
-            selectedPolygonFillOpacity: 0,
-            selectedPolygonOutlineColor: '#ffffff',
-            selectedPolygonOutlineWidth: 2,
-            selectionPointColor: '#2E96F5',
-            selectionPointWidth: 6,
-            selectionPointOutlineColor: '#ffffff',
-            selectionPointOutlineWidth: 2,
-            midPointColor: '#ffffff',
-          },
-        }),
-      ],
+      modes: [polygonMode, rectangleMode, createAnalysisSelectMode(next.tool)],
     })
     changing = true
     draw.start()
@@ -335,12 +548,13 @@ export function createAnalysisController(
   }
 
   function keyDown(event: KeyboardEvent) {
-    if (!draw || event.defaultPrevented || event.isComposing) return
-    if (event.key === 'Escape') {
+    if (event.defaultPrevented || event.isComposing) return
+    if (event.key === 'Escape' && open && (picking || (state && state.phase !== 'idle'))) {
       event.preventDefault()
       event.stopPropagation()
+      clearReadout()
       options.onCancel()
-    } else if (event.key === 'Enter') {
+    } else if (draw && event.key === 'Enter') {
       event.preventDefault()
       event.stopPropagation()
       finish()
@@ -348,8 +562,14 @@ export function createAnalysisController(
   }
 
   function fit(selected: AnalysisArea) {
-    if (!styleReady) { pendingFit = selected; return }
+    if (!styleReady) {
+      pendingFit = selected
+      return
+    }
     options.markNavigated()
+    notice.hidden = true
+    notice.textContent = ''
+    delete notice.dataset.kind
     const container = map.getContainer()
     const bounds = container.getBoundingClientRect()
     const calendar = document.querySelector('.date-popover')?.getBoundingClientRect()
@@ -370,11 +590,28 @@ export function createAnalysisController(
       left: pad,
       right: pad + 12,
     }
+    if (options.getView() === 'globe' && selected.bounds[1][0] - selected.bounds[0][0] > 165) {
+      notice.textContent =
+        'This main territory spans a globe hemisphere. Pan to inspect the remaining parts; the complete country stays in the analysis area.'
+      notice.hidden = false
+      const longitude = (selected.bounds[0][0] + selected.bounds[1][0]) / 2
+      const latitude = Math.max(
+        -75,
+        Math.min(75, (selected.bounds[0][1] + selected.bounds[1][1]) / 2),
+      )
+      map.easeTo({
+        center: [longitude, latitude],
+        zoom: Math.max(map.getMinZoom(), Math.min(1.5, map.getZoom())),
+        duration: matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 650,
+        essential: false,
+      })
+      return
+    }
     setAnalysisZoomFloor(map, -2)
     map.setMinZoom(-2)
     const camera = map.cameraForBounds(selected.bounds, {
       padding,
-      maxZoom: selected.type === 'country' ? 10 : 13,
+      maxZoom: selected.type === 'country' ? Math.min(15, map.getMaxZoom()) : 13,
     })
     if (!camera) return
     const floor = Math.min(camera.zoom ?? 2, 2)
@@ -394,9 +631,11 @@ export function createAnalysisController(
     const current = area
     stopDrawing()
     request = -1
+    lastRendered = null
+    lastMask = undefined
     setArea(current, true)
     if (state?.phase === 'drawing') options.onCancel()
-    else if (state) configure(state, open)
+    else if (state) configure(state, open, picking)
     if (pendingFit) {
       const selected = pendingFit
       pendingFit = null
@@ -405,6 +644,8 @@ export function createAnalysisController(
   }
 
   function styleLoading() {
+    geometryPreparer.cancel()
+    container.removeAttribute('data-analysis-preparing')
     styleReady = false
     stopDrawing()
     request = -1
@@ -412,6 +653,12 @@ export function createAnalysisController(
   }
 
   map.getCanvas().addEventListener('keydown', keyDown)
+  map.on('mousemove', pointerMove)
+  map.on('touchmove', pointerMove)
+  map.on('mouseout', clearReadout)
+  map.on('touchend', clearReadout)
+  map.on('touchcancel', clearReadout)
+  map.on('movestart', clearReadout)
   map.on('style.load', styleLoad)
   map.on('styledataloading', styleLoading)
   ensureLayers()
@@ -422,17 +669,34 @@ export function createAnalysisController(
     finish,
     fit,
     isDrawing: () => Boolean(draw),
+    refreshProjection,
+    updateReadout: requestReadout,
     destroy() {
       if (disposed) return
       disposed = true
+      geometryPreparer.destroy()
+      countryPicking.destroy()
+      themeObserver.disconnect()
+      notice.remove()
       stopDrawing()
+      readoutObserver.disconnect()
+      readout.remove()
       map.getCanvas().removeEventListener('keydown', keyDown)
+      map.off('mousemove', pointerMove)
+      map.off('touchmove', pointerMove)
+      map.off('mouseout', clearReadout)
+      map.off('touchend', clearReadout)
+      map.off('touchcancel', clearReadout)
+      map.off('movestart', clearReadout)
       map.off('style.load', styleLoad)
       map.off('styledataloading', styleLoading)
       for (const layer of [...LAYERS].reverse()) if (map.getLayer(layer)) map.removeLayer(layer)
       for (const source of [SOURCE, MASK]) if (map.getSource(source)) map.removeSource(source)
       setAnalysisZoomFloor(map, null)
       map.getContainer().removeAttribute('data-analysis-area')
+      map.getContainer().removeAttribute('data-analysis-credits')
+      map.getContainer().removeAttribute('data-analysis-preparing')
+      map.getContainer().removeAttribute('data-analysis-mask')
     },
   }
 }

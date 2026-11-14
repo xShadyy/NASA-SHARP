@@ -90,3 +90,138 @@ test('clear removes both draft and confirmed areas and stops drawing', () => {
   assert.equal(cleared.phase, 'idle')
   assert.equal(cleared.tool, null)
 })
+
+test('loading and a failed replacement retain the confirmed area and cannot confirm a partial country', () => {
+  const confirmed = analysisReducer(
+    analysisReducer(initialAnalysisState, { type: 'preview', area: original }),
+    { type: 'confirm' },
+  )
+  const pending = analysisReducer(confirmed, {
+    type: 'country-loading',
+    country: { id: 'country:POL', name: 'Poland' },
+  })
+  assert.equal(pending.phase, 'loading')
+  assert.equal(pending.pendingCountry?.name, 'Poland')
+  assert.equal(pending.confirmed, original)
+  assert.equal(analysisReducer(pending, { type: 'confirm' }).confirmed, original)
+  const failed = analysisReducer(pending, { type: 'country-failure', error: 'Source unavailable' })
+  assert.equal(failed.confirmed, original)
+  assert.equal(failed.draft, null)
+  assert.equal(failed.pendingCountry, null)
+  assert.equal(failed.error, 'Source unavailable')
+})
+
+test('manual previews, canceling and clearing preserve the camera request while confirmation and fit are explicit', () => {
+  const preview = analysisReducer(initialAnalysisState, { type: 'preview', area: original })
+  assert.equal(preview.fitRequest, 0)
+  const confirmed = analysisReducer(preview, { type: 'confirm' })
+  assert.equal(confirmed.fitRequest, 1)
+  const replacementPreview = analysisReducer(confirmed, { type: 'preview', area: replacement })
+  assert.equal(replacementPreview.fitRequest, 1)
+  const canceled = analysisReducer(replacementPreview, { type: 'cancel' })
+  assert.equal(canceled.fitRequest, 1)
+  const fitted = analysisReducer(canceled, { type: 'fit' })
+  assert.equal(fitted.fitRequest, 2)
+  const cleared = analysisReducer(fitted, { type: 'clear' })
+  assert.equal(cleared.fitRequest, 2)
+  assert.equal(analysisReducer(cleared, { type: 'fit' }).fitRequest, 2)
+})
+
+test('a country requires full source, separate display geometry and a boundary reference before confirmation', () => {
+  const candidate = { ...original, id: 'country:POL', name: 'Poland', type: 'country' as const }
+  const incomplete = analysisReducer(initialAnalysisState, { type: 'preview', area: candidate })
+  assert.equal(analysisReducer(incomplete, { type: 'confirm' }).confirmed, null)
+  const ready = {
+    ...candidate,
+    sourceGeometry: candidate.geometry,
+    displayGeometry: structuredClone(candidate.geometry),
+    displayBoundary: {
+      type: 'MultiPolygon' as const,
+      coordinates: [candidate.geometry.coordinates],
+    },
+    boundaryRef: 'geoBoundaries:6.0.0:POL:ADM0',
+  }
+  const confirmed = analysisReducer(
+    analysisReducer(initialAnalysisState, { type: 'preview', area: ready }),
+    { type: 'confirm' },
+  )
+  assert.equal(confirmed.confirmed?.geometry, candidate.geometry)
+  assert.equal(confirmed.confirmed?.sourceGeometry, candidate.geometry)
+  assert.notEqual(confirmed.confirmed?.displayGeometry, candidate.geometry)
+  assert.equal(confirmed.confirmed?.boundaryRef, ready.boundaryRef)
+})
+
+test('selecting a resolved country requests a fit immediately and confirmation does not repeat it', () => {
+  const geometry = original.geometry
+  const country = {
+    ...original,
+    id: 'country:POL',
+    name: 'Poland',
+    type: 'country' as const,
+    sourceGeometry: geometry,
+    displayGeometry: structuredClone(geometry),
+    displayBoundary:
+      geometry.type === 'Polygon'
+        ? { type: 'MultiPolygon' as const, coordinates: [geometry.coordinates] }
+        : geometry,
+    boundaryRef: 'gbOpen:6.0.0:POL:ADM0:pinned',
+  }
+  const preview = analysisReducer(initialAnalysisState, { type: 'preview', area: country })
+  assert.equal(preview.fitRequest, 1)
+  assert.equal(preview.confirmed, null)
+  assert.equal(preview.draft, country)
+  const confirmed = analysisReducer(preview, { type: 'confirm' })
+  assert.equal(confirmed.fitRequest, 1)
+  assert.equal(confirmed.confirmed, country)
+  assert.equal(confirmed.draft, null)
+})
+
+test('a replacement country fits its own preview while cancellation and failure retain the previous AOI', () => {
+  const country = {
+    ...original,
+    id: 'country:POL',
+    name: 'Poland',
+    type: 'country' as const,
+    sourceGeometry: original.geometry,
+    displayGeometry: structuredClone(original.geometry),
+    displayBoundary: {
+      type: 'MultiPolygon' as const,
+      coordinates:
+        original.geometry.type === 'Polygon'
+          ? [original.geometry.coordinates]
+          : original.geometry.coordinates,
+    },
+    boundaryRef: 'gbOpen:6.0.0:POL:ADM0:pinned',
+  }
+  const confirmed = analysisReducer(
+    analysisReducer(initialAnalysisState, { type: 'preview', area: country }),
+    { type: 'confirm' },
+  )
+  const loading = analysisReducer(confirmed, {
+    type: 'country-loading',
+    country: { id: 'country:FRA', name: 'France' },
+  })
+  assert.equal(loading.fitRequest, 1)
+  assert.equal(loading.confirmed, country)
+  const replacementCountry = {
+    ...country,
+    id: 'country:FRA',
+    name: 'France',
+    geometry: replacement.geometry,
+    sourceGeometry: replacement.geometry,
+    boundaryRef: 'gbOpen:6.0.0:FRA:ADM0:pinned',
+  }
+  const preview = analysisReducer(loading, { type: 'preview', area: replacementCountry })
+  assert.equal(preview.fitRequest, 2)
+  assert.equal(preview.confirmed, country)
+  assert.equal(preview.draft, replacementCountry)
+  const canceled = analysisReducer(preview, { type: 'cancel' })
+  assert.equal(canceled.fitRequest, 2)
+  assert.equal(canceled.confirmed, country)
+  const failed = analysisReducer(loading, { type: 'country-failure', error: 'Offline' })
+  assert.equal(failed.fitRequest, 1)
+  assert.equal(failed.confirmed, country)
+  const cleared = analysisReducer(preview, { type: 'clear' })
+  assert.equal(cleared.fitRequest, 2)
+  assert.equal(cleared.confirmed, null)
+})

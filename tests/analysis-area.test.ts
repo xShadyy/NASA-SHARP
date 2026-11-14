@@ -4,6 +4,7 @@ import test from 'node:test'
 import type { MultiPolygon, Polygon, Position } from 'geojson'
 import {
   areaBounds,
+  countryFocusBounds,
   drawnArea,
   outsideAreaMask,
   validateDrawnArea,
@@ -173,4 +174,72 @@ test('the existing island, small-country and antimeridian boundary records rende
     assert.deepEqual(geometry.coordinates, source.polygons, name)
     if (name === 'Fiji') assert.ok(areaBounds(geometry)[1][0] - areaBounds(geometry)[0][0] < 10)
   }
+})
+
+test('country framing selects the primary region without changing its boundary or overseas parts', () => {
+  const records = JSON.parse(
+    readFileSync(new URL('../public/map-data/country-lookup.json', import.meta.url), 'utf8'),
+  ) as { name: string; polygons: number[][][][] }[]
+  const places = JSON.parse(
+    readFileSync(new URL('../public/map-data/search-places.json', import.meta.url), 'utf8'),
+  ) as { name: string; bounds?: [[number, number], [number, number]] }[]
+  for (const name of ['Netherlands', 'France']) {
+    const record = records.find((item) => item.name === name)!
+    const place = places.find((item) => item.name === name)!
+    const geometry: MultiPolygon = { type: 'MultiPolygon', coordinates: record.polygons }
+    const original = structuredClone(geometry)
+    const bounds = countryFocusBounds(geometry, place.bounds)
+    assert.ok(bounds[0][0] > -10, name)
+    assert.ok(bounds[1][0] < 15, name)
+    assert.ok(bounds[0][1] > 40, name)
+    assert.ok(bounds[1][1] < 55, name)
+    assert.deepEqual(geometry, original)
+  }
+})
+
+test('primary-region framing includes precise boundary points beyond an older focus window', () => {
+  const geometry = polygon([
+    [3, 50],
+    [7.25, 50],
+    [7.25, 54],
+    [3, 54],
+    [3, 50],
+  ])
+  assert.deepEqual(
+    countryFocusBounds(geometry, [
+      [3.35, 50.75],
+      [7.2, 53.6],
+    ]),
+    [
+      [3, 50],
+      [7.25, 54],
+    ],
+  )
+  assert.deepEqual(
+    countryFocusBounds(crossing, [
+      [177, -21],
+      [182, -16],
+    ]),
+    [
+      [179, -18],
+      [181, -16],
+    ],
+  )
+})
+
+test('large detailed boundaries retain every coordinate without spread-argument limits', () => {
+  const ring: number[][] = []
+  for (let index = 0; index < 150_000; index++) {
+    const angle = (index / 150_000) * Math.PI * 2
+    ring.push([5 + Math.cos(angle), 52 + Math.sin(angle)])
+  }
+  ring.push([...ring[0]])
+  const geometry = polygon(ring)
+  assert.deepEqual(areaBounds(geometry), [
+    [4, 51],
+    [6, 53],
+  ])
+  const wrapped = wrappedArea(geometry)
+  assert.equal(wrapped.coordinates[0][0].length, ring.length)
+  assert.deepEqual(wrapped.coordinates[0][0][37001], ring[37001])
 })

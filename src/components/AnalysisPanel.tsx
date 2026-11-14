@@ -1,8 +1,9 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useDeferredValue, useId, useMemo, useState } from 'react'
 import { Command as CommandPrimitive } from 'cmdk'
 import {
   ArrowCounterClockwiseIcon,
   CheckCircleIcon,
+  CrosshairIcon,
   GlobeHemisphereWestIcon,
   PolygonIcon,
   RectangleIcon,
@@ -11,20 +12,30 @@ import {
 import { Button } from '@/components/ui/button'
 import { Command, CommandItem, CommandList } from '@/components/ui/command'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { loadAnalysisCountries, resolveAnalysisCountry } from '@/lib/analysis-countries'
-import { areaPolygons, type AnalysisArea } from '@/lib/analysis-area'
+import { areaPolygons } from '@/lib/analysis-area'
 import type { AnalysisState } from '@/lib/analysis-state'
 import { matchLocalPlaces, type SearchPlace } from '@/lib/locations'
+import type { MapView } from '@/map/projection'
 import './AnalysisPanel.css'
 
 type AnalysisPanelProps = {
   state: AnalysisState
   ready: boolean
-  onPreview: (area: AnalysisArea) => void
+  view: MapView
+  countries: SearchPlace[]
+  catalogueLoading: boolean
+  catalogueError: string
+  picking: boolean
+  canRetryBoundary: boolean
+  onRetryCatalogue: () => void
+  onRetryBoundary: () => void
+  onCountrySelect: (countryId: string) => void
+  onPickingChange: (enabled: boolean) => void
   onDraw: (tool: 'polygon' | 'rectangle') => void
   onFinish: () => void
   onEdit: () => void
   onConfirm: () => void
+  onFitArea: () => void
   onCancel: () => void
   onClear: () => void
   onClose: () => void
@@ -33,11 +44,20 @@ type AnalysisPanelProps = {
 export function AnalysisPanel({
   state,
   ready,
-  onPreview,
+  countries,
+  catalogueLoading,
+  catalogueError,
+  picking,
+  canRetryBoundary,
+  onRetryCatalogue,
+  onRetryBoundary,
+  onCountrySelect,
+  onPickingChange,
   onDraw,
   onFinish,
   onEdit,
   onConfirm,
+  onFitArea,
   onCancel,
   onClear,
   onClose,
@@ -47,84 +67,39 @@ export function AnalysisPanel({
       ? 'country'
       : 'draw',
   )
-  const [countries, setCountries] = useState<SearchPlace[]>([])
-  const [catalogueLoading, setCatalogueLoading] = useState(true)
-  const [catalogueError, setCatalogueError] = useState('')
-  const [attempt, setAttempt] = useState(0)
-  const [query, setQuery] = useState('')
-  const [loadingCountry, setLoadingCountry] = useState<SearchPlace | null>(null)
-  const [boundaryError, setBoundaryError] = useState('')
-  const [lastCountry, setLastCountry] = useState<SearchPlace | null>(null)
-  const request = useRef(0)
+  const selectedCountry =
+    state.pendingCountry ?? (state.draft?.type === 'country' ? state.draft : null)
+  const [query, setQuery] = useState(() => {
+    if (state.pendingCountry) return state.pendingCountry.name
+    const selected = state.draft ?? state.confirmed
+    return selected?.type === 'country' ? selected.name : ''
+  })
+  const [queryCountry, setQueryCountry] = useState(() => ({
+    id: selectedCountry?.id ?? null,
+    request: state.pendingCountry,
+  }))
+  if (
+    queryCountry.id !== (selectedCountry?.id ?? null) ||
+    (state.pendingCountry && queryCountry.request !== state.pendingCountry)
+  ) {
+    setQueryCountry({ id: selectedCountry?.id ?? null, request: state.pendingCountry })
+    if (selectedCountry) setQuery(selectedCountry.name)
+  }
+  const deferredQuery = useDeferredValue(query)
   const id = useId()
   const area = state.draft ?? state.confirmed
-  const results = query.trim() ? matchLocalPlaces(countries, query, 242) : countries
-  const activeDraft = state.phase !== 'idle' || Boolean(loadingCountry)
-
-  useEffect(() => {
-    let active = true
-    loadAnalysisCountries().then(
-      (items) => {
-        if (active) {
-          setCountries(items)
-          setCatalogueLoading(false)
-        }
-      },
-      (error: unknown) => {
-        if (active) {
-          setCatalogueError(
-            error instanceof Error ? error.message : 'Country catalogue could not be loaded.',
-          )
-          setCatalogueLoading(false)
-        }
-      },
-    )
-    return () => {
-      active = false
-    }
-  }, [attempt])
-
-  useEffect(
-    () => () => {
-      request.current++
-    },
-    [],
+  const results = useMemo(
+    () =>
+      deferredQuery.trim()
+        ? matchLocalPlaces(countries, deferredQuery, countries.length)
+        : countries,
+    [countries, deferredQuery],
   )
-
-  function cancel() {
-    request.current++
-    setLoadingCountry(null)
-    setBoundaryError('')
-    onCancel()
-  }
-
-  async function chooseCountry(country: SearchPlace) {
-    const current = ++request.current
-    onCancel()
-    setLastCountry(country)
-    setLoadingCountry(country)
-    setBoundaryError('')
-    setQuery(country.name)
-    try {
-      const resolved = await resolveAnalysisCountry(country)
-      if (request.current === current) {
-        onPreview(resolved)
-        setLoadingCountry(null)
-      }
-    } catch (error) {
-      if (request.current === current) {
-        setBoundaryError(
-          error instanceof Error ? error.message : 'The country boundary could not be loaded.',
-        )
-        setLoadingCountry(null)
-      }
-    }
-  }
+  const activeDraft = state.phase !== 'idle'
+  const loadingCountry = state.pendingCountry
 
   function draw(tool: 'polygon' | 'rectangle') {
-    request.current++
-    setLoadingCountry(null)
-    setBoundaryError('')
+    onCancel()
     onDraw(tool)
   }
 
@@ -133,18 +108,15 @@ export function AnalysisPanel({
       className="analysis-panel"
       aria-labelledby={`${id}-title`}
       onKeyDown={(event) => {
-        if (event.key === 'Escape' && !event.defaultPrevented && activeDraft) {
+        if (event.key === 'Escape' && !event.defaultPrevented && (activeDraft || picking)) {
           event.preventDefault()
           event.stopPropagation()
-          cancel()
+          onCancel()
         }
       }}
     >
       <header className="analysis-panel-header">
-        <div>
-          <span className="analysis-eyebrow">WORKSPACE</span>
-          <h1 id={`${id}-title`}>Analysis</h1>
-        </div>
+        <h1 id={`${id}-title`}>Analysis</h1>
         <Button
           type="button"
           variant="ghost"
@@ -168,13 +140,13 @@ export function AnalysisPanel({
             aria-label="Area selection method"
             onValueChange={(value) => {
               if ((value !== 'country' && value !== 'draw') || value === method) return
-              cancel()
+              onCancel()
               setMethod(value)
             }}
           >
             <ToggleGroupItem value="country">
               <GlobeHemisphereWestIcon size={18} />
-              Country
+              Select country
             </ToggleGroupItem>
             <ToggleGroupItem value="draw">
               <PolygonIcon size={18} />
@@ -184,9 +156,23 @@ export function AnalysisPanel({
 
           {method === 'country' ? (
             <div className="analysis-country-section">
-              <span className="analysis-field-label">
-                Country
-              </span>
+              <span className="analysis-field-label">Country</span>
+              <Button
+                type="button"
+                variant="outline"
+                className="analysis-map-pick"
+                aria-pressed={picking}
+                disabled={!ready || catalogueLoading || Boolean(catalogueError)}
+                onClick={() => onPickingChange(!picking)}
+              >
+                <CrosshairIcon size={18} />
+                {picking ? 'Selecting on map' : 'Select on map'}
+              </Button>
+              {picking && (
+                <p className="analysis-picking-hint" role="status">
+                  Click a highlighted country. Escape cancels selection.
+                </p>
+              )}
               {catalogueLoading && (
                 <p className="analysis-notice" role="status">
                   Loading countries.
@@ -195,16 +181,7 @@ export function AnalysisPanel({
               {catalogueError && (
                 <div className="analysis-error" role="alert">
                   <p>{catalogueError}</p>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      setCatalogueLoading(true)
-                      setCatalogueError('')
-                      setAttempt((value) => value + 1)
-                    }}
-                  >
+                  <Button type="button" size="sm" variant="outline" onClick={onRetryCatalogue}>
                     Retry country list
                   </Button>
                 </div>
@@ -218,7 +195,7 @@ export function AnalysisPanel({
                   <CommandPrimitive.Input
                     value={query}
                     onValueChange={setQuery}
-                    placeholder="Search countries"
+                    placeholder="Country, alias or ISO code"
                     className="analysis-country-input"
                     disabled={catalogueLoading}
                     aria-label="Search countries"
@@ -229,7 +206,8 @@ export function AnalysisPanel({
                         key={country.id}
                         value={country.id}
                         onSelect={() => {
-                          void chooseCountry(country)
+                          setQuery(country.name)
+                          onCountrySelect(country.id)
                         }}
                         aria-label={country.name}
                       >
@@ -245,26 +223,15 @@ export function AnalysisPanel({
                   </CommandList>
                 </Command>
               )}
-              <p className="analysis-source-note">
-                Generalized Natural Earth boundaries, with the source’s islands and interior holes
-                retained.
-              </p>
               {loadingCountry && (
                 <p className="analysis-notice" role="status">
                   Loading the boundary for {loadingCountry.name}.
                 </p>
               )}
-              {boundaryError && (
+              {state.error && canRetryBoundary && (
                 <div className="analysis-error" role="alert">
-                  <p>{boundaryError}</p>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      if (lastCountry) void chooseCountry(lastCountry)
-                    }}
-                  >
+                  <p>{state.error}</p>
+                  <Button type="button" variant="outline" size="sm" onClick={onRetryBoundary}>
                     Retry boundary
                   </Button>
                 </div>
@@ -295,15 +262,6 @@ export function AnalysisPanel({
                   <span>Draw rectangle</span>
                 </Button>
               </div>
-              <div className="analysis-draw-instructions" role="status">
-                {state.phase === 'drawing'
-                  ? state.tool === 'rectangle'
-                    ? 'Click one corner on the map, then click the opposite corner to finish. Escape cancels.'
-                    : `Click to add vertices, then click the first vertex or choose Finish drawing. ${state.vertices} vertices placed. Escape cancels.`
-                  : state.phase === 'editing'
-                    ? 'Drag the boundary handles to adjust the area. Polygon edge handles add vertices. Choose Finish editing when ready.'
-                    : 'Draw across any country borders. The shape you draw defines the area; it is not clipped to a country.'}
-              </div>
               {state.phase === 'review' && state.draft && state.draft.type !== 'country' && (
                 <Button
                   type="button"
@@ -333,11 +291,13 @@ export function AnalysisPanel({
 
         <section className="analysis-selection" aria-label="Selection summary" aria-live="polite">
           <span className="analysis-status">
-            {activeDraft
-              ? 'Draft preview'
-              : state.confirmed
-                ? 'Confirmed area'
-                : 'No area selected'}
+            {state.phase === 'loading'
+              ? 'Resolving country boundary'
+              : activeDraft
+                ? 'Candidate'
+                : state.confirmed
+                  ? 'Confirmed area'
+                  : 'No area selected'}
           </span>
           <h3>{loadingCountry?.name ?? area?.name ?? 'Define your area'}</h3>
           {area && !loadingCountry ? (
@@ -353,17 +313,21 @@ export function AnalysisPanel({
             </p>
           ) : (
             <p>
-              {state.phase === 'drawing'
-                ? 'Your boundary will appear here when the drawing is complete.'
-                : 'Select a country or draw a polygon or rectangle on the map.'}
+              {state.phase === 'loading'
+                ? state.confirmed
+                  ? 'Loading the full country boundary. Your confirmed area stays selected.'
+                  : 'Loading the full country boundary before confirmation.'
+                : state.phase === 'drawing'
+                  ? 'Your boundary will appear here when the drawing is complete.'
+                  : 'Select a country or draw a polygon or rectangle on the map.'}
             </p>
           )}
           {state.confirmed && activeDraft && (
             <p className="analysis-confirmed-note">
-              Confirmed area: {state.confirmed.name}. Cancel restores it.
+              Confirmed area: {state.confirmed.name}. Escape restores it.
             </p>
           )}
-          {state.error && (
+          {state.error && method !== 'country' && (
             <p className="analysis-error" role="alert">
               {state.error}
             </p>
@@ -371,30 +335,51 @@ export function AnalysisPanel({
           {!activeDraft && state.confirmed && (
             <p className="analysis-confirmed-note">Area confirmed. No analysis has been run.</p>
           )}
+          {area?.type === 'country' && areaPolygons(area.geometry).length > 1 && (
+            <p className="analysis-confirmed-note">
+              Fit shows the main territory. Islands and distant territories remain in the analysis
+              area.
+            </p>
+          )}
+          {area && (
+            <Button
+              type="button"
+              variant="outline"
+              className="analysis-fit-area"
+              onClick={onFitArea}
+              disabled={!ready || state.phase === 'loading'}
+            >
+              <CrosshairIcon size={16} />
+              Fit area
+            </Button>
+          )}
         </section>
       </div>
       <footer className="analysis-panel-footer">
         {activeDraft ? (
-          <>
-            <Button
-              type="button"
-              className="analysis-confirm"
-              disabled={
-                !ready ||
-                !state.draft ||
-                Boolean(state.error) ||
-                Boolean(loadingCountry) ||
-                state.phase === 'drawing'
-              }
-              onClick={onConfirm}
-            >
-              <CheckCircleIcon size={18} />
-              Use this area
-            </Button>
-            <Button type="button" variant="outline" onClick={cancel}>
-              Cancel
-            </Button>
-          </>
+          <Button
+            type="button"
+            className="analysis-confirm"
+            disabled={
+              !ready ||
+              !state.draft ||
+              Boolean(state.error) ||
+              Boolean(loadingCountry) ||
+              state.phase === 'drawing' ||
+              state.phase === 'loading' ||
+              (state.draft?.type === 'country' &&
+                !(
+                  state.draft.sourceGeometry &&
+                  state.draft.displayGeometry &&
+                  state.draft.displayBoundary &&
+                  state.draft.boundaryRef
+                ))
+            }
+            onClick={onConfirm}
+          >
+            <CheckCircleIcon size={18} />
+            Use this area
+          </Button>
         ) : (
           area && (
             <Button
@@ -402,21 +387,22 @@ export function AnalysisPanel({
               variant="outline"
               onClick={() => {
                 setMethod(area.type === 'country' ? 'country' : 'draw')
-                onEdit()
+                if (area.type === 'country') {
+                  setQuery('')
+                  onCancel()
+                  onPickingChange(true)
+                } else onEdit()
               }}
             >
-              Edit area
+              {area.type === 'country' ? 'Replace country' : 'Edit area'}
             </Button>
           )
         )}
-        {(state.confirmed || state.draft || state.phase !== 'idle' || loadingCountry) && (
+        {(state.confirmed || state.draft || state.phase !== 'idle' || picking) && (
           <Button
             type="button"
             variant="ghost"
             onClick={() => {
-              request.current++
-              setLoadingCountry(null)
-              setBoundaryError('')
               setQuery('')
               onClear()
             }}

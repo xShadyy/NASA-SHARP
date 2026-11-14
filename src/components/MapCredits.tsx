@@ -34,6 +34,11 @@ const credits = [
   { label: '© OpenMapTiles', href: 'https://www.openmaptiles.org/' },
   { label: '© OpenStreetMap contributors', href: 'https://www.openstreetmap.org/copyright' },
   { label: 'Natural Earth', href: 'https://www.naturalearthdata.com/about/terms-of-use/' },
+  {
+    label:
+      'Country analysis boundaries: geoBoundaries gbOpen 6.0.0 · CC BY 4.0 and original source licenses',
+    href: 'https://github.com/wmgeolab/geoBoundaries/tree/1289e40e366c7b320550be1ee0614a9472d572d4/releaseData/gbOpen',
+  },
   { label: 'Place search: Photon / OpenStreetMap', href: 'https://photon.komoot.io/' },
   {
     label:

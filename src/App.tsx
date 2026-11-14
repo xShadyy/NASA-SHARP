@@ -1,4 +1,13 @@
-import { lazy, Suspense, useEffect, useReducer, useRef, useState, type RefObject } from 'react'
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useReducer,
+  useRef,
+  useState,
+  type CSSProperties,
+  type RefObject,
+} from 'react'
 import { MantineProvider } from '@mantine/core'
 import {
   ArrowsClockwiseIcon,
@@ -31,6 +40,7 @@ import {
 import { MeasurementPanel } from '@/components/MeasurementPanel'
 import { AnalysisPanel } from '@/components/AnalysisPanel'
 import { analysisReducer, initialAnalysisState } from '@/lib/analysis-state'
+import { useAnalysisCountrySelection } from '@/hooks/use-analysis-country-selection'
 import { CapturePanel } from '@/components/CapturePanel'
 import { CaptureSelection } from '@/components/CaptureSelection'
 import { LocationNameDialog } from '@/components/LocationNameDialog'
@@ -172,7 +182,7 @@ function ExplorerSidebar({
   return (
     <Sidebar id="explorer-sidebar" collapsible="icon" aria-label="Explorer navigation">
       <SidebarHeader>
-        <span className="sidebar-title">Ethereal</span>
+        <span className="sidebar-title">SHARP</span>
         <SidebarTrigger className="sidebar-collapse-trigger" />
         <Separator className="rail-separator" />
       </SidebarHeader>
@@ -402,6 +412,7 @@ function App() {
   const [activeNav, setActiveNav] = useState('Saved locations')
   const [analysis, dispatchAnalysis] = useReducer(analysisReducer, initialAnalysisState)
   const analysisOpen = activeNav === 'Analysis'
+  const countrySelection = useAnalysisCountrySelection(analysisOpen, analysis, dispatchAnalysis)
   const [camera, setCamera] = useState<MapCameraState>({
     ready: false,
     zoom: 1,
@@ -411,9 +422,6 @@ function App() {
     latitude: 12,
     view: 'globe',
   })
-  useEffect(() => {
-    if (!analysisOpen && analysis.phase !== 'idle') dispatchAnalysis({ type: 'cancel' })
-  }, [analysisOpen, analysis.phase])
   const [sharedNavigation, setSharedNavigation] = useState<SharedCoordinates | null>(null)
   const [shareRevision, setShareRevision] = useState(0)
   const restoringHashRef = useRef(false)
@@ -472,33 +480,25 @@ function App() {
     document.documentElement.dataset.theme = theme
     try {
       localStorage.setItem('wildfire-theme', theme)
-    } catch {
-      /* Storage can be unavailable. */
-    }
+    } catch {}
   }, [theme])
 
   useEffect(() => {
     try {
       localStorage.setItem('wildfire-distance-unit', distanceUnit)
-    } catch {
-      /* Storage can be unavailable. */
-    }
+    } catch {}
   }, [distanceUnit])
 
   useEffect(() => {
     try {
       localStorage.setItem('wildfire-area-unit', areaUnit)
-    } catch {
-      /* Storage can be unavailable. */
-    }
+    } catch {}
   }, [areaUnit])
 
   useEffect(() => {
     try {
       localStorage.setItem('ethereal-measurement-colors-v1', JSON.stringify(measurementColors))
-    } catch {
-      /* Color choices still work for this session. */
-    }
+    } catch {}
   }, [measurementColors])
 
   useEffect(() => {
@@ -513,17 +513,13 @@ function App() {
         LAYER_STORAGE_KEY,
         JSON.stringify({ ...referenceLayers, space: showSpace }),
       )
-    } catch {
-      /* Layer preferences still work for this session. */
-    }
+    } catch {}
   }, [referenceLayers, showSpace])
 
   useEffect(() => {
     try {
       localStorage.setItem('ethereal-map-background-v1', background)
-    } catch {
-      /* Background selection still works for this session. */
-    }
+    } catch {}
   }, [background])
 
   useEffect(() => {
@@ -541,8 +537,6 @@ function App() {
     }
   }, [])
 
-  // MapLibre's built-in hash includes zoom and bearing. Share only the center,
-  // updating after map movement ends rather than for every pointer frame.
   useEffect(() => {
     if (!camera.ready || restoringHashRef.current) return
     writeShareHash({ longitude: camera.longitude, latitude: camera.latitude })
@@ -651,7 +645,7 @@ function App() {
   }
 
   function chooseMode(nextMode: 'orbit' | MeasurementMode) {
-    if (nextMode !== 'orbit') dispatchAnalysis({ type: 'cancel' })
+    if (nextMode !== 'orbit') countrySelection.cancel()
     if (nextMode !== 'orbit') setLastMeasurementMode(nextMode)
     setMode(nextMode)
   }
@@ -684,7 +678,7 @@ function App() {
   }
 
   function beginCaptureSelection() {
-    dispatchAnalysis({ type: 'cancel' })
+    countrySelection.cancel()
     chooseMode('orbit')
     setCaptureOpen(true)
     setSelectingCapture(true)
@@ -710,9 +704,7 @@ function App() {
     try {
       if (document.fullscreenElement) await document.exitFullscreen()
       else await document.documentElement.requestFullscreen()
-    } catch {
-      /* Fullscreen can be unavailable in an embedded browser. */
-    }
+    } catch {}
   }
 
   return (
@@ -722,14 +714,16 @@ function App() {
           <header className="app-header">
             <div
               className="header-brand"
-              aria-label="Ethereal SHARP: Satellite Harmonization and Activity Records Platform"
+              aria-label="SHARP - Satellite Harmonization and Activity Records Platform"
+              title="SHARP - Satellite Harmonization and Activity Records Platform"
             >
               <span className="brand-symbol">
                 <GlobeHemisphereWestIcon size={19} weight="regular" />
               </span>
               <span className="brand-copy">
-                <span className="brand-title">
-                  ETHEREAL <span className="brand-suffix">/ SHARP</span>
+                <span className="brand-title">SHARP</span>
+                <span className="brand-separator" aria-hidden="true">
+                  -
                 </span>
                 <span className="brand-subtitle">
                   Satellite Harmonization and Activity Records Platform
@@ -833,10 +827,21 @@ function App() {
             </div>
           </header>
 
-          <SidebarProvider defaultOpen={false} className="app-body">
+          <SidebarProvider
+            defaultOpen={false}
+            className="app-body"
+            data-analysis-open={analysisOpen}
+            style={
+              {
+                '--sidebar-width': analysisOpen ? '360px' : '234px',
+                '--sidebar-width-icon': analysisOpen ? '70px' : '46px',
+              } as CSSProperties
+            }
+          >
             <ExplorerSidebar
               activeNav={activeNav}
               setActiveNav={(name) => {
+                if (name !== 'Analysis') countrySelection.cancel()
                 if (name === 'Analysis') {
                   chooseMode('orbit')
                   setCaptureOpen(false)
@@ -855,7 +860,19 @@ function App() {
                 <AnalysisPanel
                   state={analysis}
                   ready={camera.ready}
-                  onPreview={(area) => dispatchAnalysis({ type: 'preview', area })}
+                  view={camera.view}
+                  countries={countrySelection.countries}
+                  catalogueLoading={countrySelection.catalogueLoading}
+                  catalogueError={countrySelection.catalogueError}
+                  picking={countrySelection.picking}
+                  canRetryBoundary={Boolean(countrySelection.lastCountryId)}
+                  onRetryCatalogue={countrySelection.retryCatalogue}
+                  onRetryBoundary={() => {
+                    if (countrySelection.lastCountryId)
+                      countrySelection.selectCountry(countrySelection.lastCountryId)
+                  }}
+                  onCountrySelect={countrySelection.selectCountry}
+                  onPickingChange={countrySelection.setPicking}
                   onDraw={(tool) => {
                     chooseMode('orbit')
                     setCaptureOpen(false)
@@ -864,14 +881,19 @@ function App() {
                   }}
                   onFinish={() => mapRef.current?.finishAnalysisDrawing()}
                   onEdit={() => {
+                    countrySelection.stopPicking()
                     chooseMode('orbit')
                     dispatchAnalysis({ type: 'edit' })
                   }}
-                  onConfirm={() => dispatchAnalysis({ type: 'confirm' })}
-                  onCancel={() => dispatchAnalysis({ type: 'cancel' })}
-                  onClear={() => dispatchAnalysis({ type: 'clear' })}
+                  onConfirm={() => {
+                    countrySelection.setPicking(false)
+                    dispatchAnalysis({ type: 'confirm' })
+                  }}
+                  onFitArea={() => dispatchAnalysis({ type: 'fit' })}
+                  onCancel={countrySelection.cancel}
+                  onClear={countrySelection.clear}
                   onClose={() => {
-                    dispatchAnalysis({ type: 'cancel' })
+                    countrySelection.cancel()
                     setActiveNav('Saved locations')
                   }}
                 />
@@ -893,13 +915,17 @@ function App() {
                     ref={mapRef}
                     analysis={analysis}
                     analysisOpen={analysisOpen}
+                    analysisPicking={countrySelection.picking}
+                    onCountryPick={countrySelection.selectCountry}
                     onAnalysisChange={(area, error, vertices) =>
                       dispatchAnalysis({ type: 'drawing', area, error, vertices })
                     }
                     onAnalysisFinish={(area, error) =>
                       dispatchAnalysis({ type: 'finish', area, error })
                     }
-                    onAnalysisCancel={() => dispatchAnalysis({ type: 'cancel' })}
+                    onAnalysisCancel={countrySelection.cancel}
+                    analysisDistanceUnit={distanceUnit}
+                    analysisAreaUnit={areaUnit}
                     initialView="globe"
                     initialCoordinates={initialCoordinates}
                     sharedNavigation={sharedNavigation}

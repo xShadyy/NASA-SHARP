@@ -23,6 +23,7 @@ import {
 import { createNonFireOverlayController, type OverlayStatus } from '@/map/non-fire-overlays'
 import { createGraticuleController } from '@/map/graticule'
 import { createScaleBar } from '@/map/scale-bar'
+import { createReferenceTileCache } from '@/map/reference-tile-cache'
 import { createAnalysisController, type AnalysisController } from '@/map/analysis-controller'
 import type { AnalysisState } from '@/lib/analysis-state'
 import type { AnalysisArea } from '@/lib/analysis-area'
@@ -37,7 +38,12 @@ import {
   SKY_BACKGROUND_ERROR,
   SKY_BACKGROUND_LAYER_ID,
 } from '@/map/sky-background'
-import type { MeasurementMode, MeasurementUnit } from '@/lib/measurement-units'
+import type {
+  AreaUnit,
+  DistanceUnit,
+  MeasurementMode,
+  MeasurementUnit,
+} from '@/lib/measurement-units'
 import type { MeasurementColor, MeasurementColors } from '@/map/measurement-colors'
 import type { LocationTarget } from '@/lib/locations'
 import type { SharedCoordinates } from '@/lib/share-hash'
@@ -90,6 +96,10 @@ export type EarthMapHandle = {
 type EarthMapProps = {
   analysis: AnalysisState
   analysisOpen: boolean
+  analysisPicking: boolean
+  onCountryPick: (countryId: string) => void
+  analysisDistanceUnit: DistanceUnit
+  analysisAreaUnit: AreaUnit
   onAnalysisChange: (area: AnalysisArea | null, error: string | null, vertices: number) => void
   onAnalysisFinish: (area: AnalysisArea, error: string | null) => void
   onAnalysisCancel: () => void
@@ -149,13 +159,16 @@ function displayCoordinates(
   if (output.textContent !== text) output.textContent = text
 }
 
-// v6 ships a separate module worker. Let Vite emit it with its shared chunks.
 setWorkerUrl(mapWorkerUrl)
 
 export function EarthMap({
   ref,
   analysis,
   analysisOpen,
+  analysisPicking,
+  onCountryPick,
+  analysisDistanceUnit,
+  analysisAreaUnit,
   onAnalysisChange,
   onAnalysisFinish,
   onAnalysisCancel,
@@ -191,9 +204,11 @@ export function EarthMap({
   const measurementsRef = useRef<MeasurementController | null>(null)
   const analysisRef = useRef<AnalysisController | null>(null)
   const analysisFitRef = useRef(-1)
+  const analysisUnitsRef = useRef({ distance: analysisDistanceUnit, area: analysisAreaUnit })
   const reportAnalysisChange = useEffectEvent(onAnalysisChange)
   const reportAnalysisFinish = useEffectEvent(onAnalysisFinish)
   const reportAnalysisCancel = useEffectEvent(onAnalysisCancel)
+  const reportCountryPick = useEffectEvent(onCountryPick)
   const skyRef = useRef<ReturnType<typeof createSkyBackgroundLayer> | null>(null)
   const graticuleRef = useRef<ReturnType<typeof createGraticuleController> | null>(null)
   const coordinatesRef = useRef<HTMLOutputElement>(null)
@@ -245,7 +260,9 @@ export function EarthMap({
       onChange: (area, error, vertices) => reportAnalysisChange(area, error, vertices),
       onFinish: (area, error) => reportAnalysisFinish(area, error),
       onCancel: () => reportAnalysisCancel(),
+      onCountryPick: (countryId) => reportCountryPick(countryId),
       getView: () => viewRef.current,
+      getUnits: () => analysisUnitsRef.current,
       markNavigated: () => {
         interactedRef.current = true
         projectionRef.current?.markNavigated()
@@ -260,23 +277,35 @@ export function EarthMap({
   }, [mapInstance])
 
   useEffect(() => {
+    analysisUnitsRef.current = { distance: analysisDistanceUnit, area: analysisAreaUnit }
+    analysisRef.current?.updateReadout()
+  }, [analysisDistanceUnit, analysisAreaUnit])
+
+  useEffect(() => {
     const controller = analysisRef.current
     if (!controller) return
-    const area = analysis.draft && !analysis.error ? analysis.draft : analysis.confirmed
+    const replacingCountry =
+      analysis.phase === 'loading' ||
+      (analysisPicking && analysis.confirmed?.type === 'country' && !analysis.draft)
+    const area = replacingCountry
+      ? null
+      : analysis.draft && !analysis.error
+        ? analysis.draft
+        : analysis.confirmed
     controller.setArea(area)
-    controller.configure(analysis, analysisOpen)
-    if (area && analysis.fitRequest !== analysisFitRef.current) {
+    controller.configure(analysis, analysisOpen, analysisPicking)
+    controller.refreshProjection()
+    if (analysis.fitRequest !== analysisFitRef.current) {
       analysisFitRef.current = analysis.fitRequest
-      controller.fit(area)
+      if (area && analysis.fitRequest > 0) controller.fit(area)
     }
-  }, [analysis, analysisOpen, mapInstance])
+  }, [analysis, analysisOpen, analysisPicking, mapInstance, view])
 
   useEffect(() => {
     dataDateRef.current = dataDate
     overlaysRef.current?.set(referenceLayers, dataDate)
   }, [referenceLayers, dataDate, ready])
 
-  // Keep settings available to map callbacks without rebuilding the map or listeners.
   useEffect(() => {
     settingsRef.current = {
       referenceLayers,
@@ -354,6 +383,7 @@ export function EarthMap({
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
+    const referenceTiles = createReferenceTileCache()
     let active = true
     const nasaRetries = nasaRetriesRef.current
     let map: MapLibreMap | undefined
@@ -369,7 +399,6 @@ export function EarthMap({
     }
 
     async function initialize(container: HTMLDivElement) {
-      // MapLibre v6 can use the app's self-hosted Web fonts for map labels as well.
       await document.fonts.load('400 16px "Fira Sans"').catch(() => undefined)
       if (!active) return
       try {
@@ -383,17 +412,17 @@ export function EarthMap({
           minZoom: MIN_ZOOM,
           maxZoom: maximumZoomForView(initialView),
           maxPitch: 0,
+          maxTileCacheZoomLevels: 8,
+          maxTileCacheSize: 256,
+          fadeDuration: 0,
+          transformRequest: referenceTiles.transformRequest,
           keyboard: false,
           dragRotate: false,
           pitchWithRotate: false,
           touchPitch: false,
-          // Keep normal surface navigation while preventing every gesture or
-          // camera transition from tilting, rolling or turning north sideways.
           transformCameraUpdate: () => ({ bearing: 0, pitch: 0, roll: 0 }),
           attributionControl: false,
           canvasContextAttributes: { antialias: true },
-          // The app writes a coordinates-only hash after movement ends.
-          // MapLibre's camera hash would add zoom and bearing.
           hash: false,
         })
         mapRef.current = map
@@ -457,8 +486,6 @@ export function EarthMap({
           })
           measurementsRef.current.setMode(settingsRef.current.measurementMode)
           measurementsRef.current.setUnit(settingsRef.current.measurementUnit)
-          // Future observation layers attach to this same map above borders and
-          // before FIRE_LAYER_BEFORE_ID (exported by map/basemaps).
           setMapView(currentMap, viewRef.current)
           graticuleRef.current = createGraticuleController(
             currentMap,
@@ -493,8 +520,6 @@ export function EarthMap({
           const valid = Math.hypot(projected.x - point.x, projected.y - point.y) <= 1
           const wrapped = geographic.wrap()
           setContextCoordinates(valid ? [wrapped.lng, wrapped.lat] : null)
-          // MapLibre consumes the canvas's native menu event. Forward its screen
-          // position to the shadcn trigger outside the map's event handlers.
           contextTriggerRef.current?.dispatchEvent(
             new MouseEvent('contextmenu', {
               bubbles: true,
@@ -518,7 +543,6 @@ export function EarthMap({
           clearCoordinates()
         })
         currentMap.on('mousemove', (event: MapMouseEvent) => {
-          // Coalesce pointer events without rerendering React or its tool windows.
           coordinateEvent = event
           if (coordinateFrameRef.current) return
           coordinateFrameRef.current = requestAnimationFrame(() => {
@@ -526,7 +550,6 @@ export function EarthMap({
             const latest = coordinateEvent
             coordinateEvent = null
             if (!active || !latest) return
-            // A round trip rejects space, where unproject clamps to the horizon.
             const projected = currentMap.project(latest.lngLat)
             if (Math.hypot(projected.x - latest.point.x, projected.y - latest.point.y) > 1) {
               displayCoordinates(coordinatesRef.current)
@@ -564,8 +587,6 @@ export function EarthMap({
           const sourceId = 'sourceId' in event ? event.sourceId : undefined
           if (typeof sourceId === 'string' && sourceId.startsWith('context-')) return
           if (sourceId === NASA_SOURCE_ID) {
-            // Retry just the failed tile. A single temporary 502 must not hide
-            // every successfully loaded Blue Marble tile on the globe.
             const tile = (
               event as typeof event & {
                 tile?: { tileID?: { canonical?: { x: number; y: number; z: number } } }
@@ -663,6 +684,7 @@ export function EarthMap({
       scaleRef.current?.destroy()
       scaleRef.current = null
       map?.remove()
+      referenceTiles.destroy()
       skyRef.current = null
     }
   }, [initialCoordinates, initialView])
@@ -674,7 +696,6 @@ export function EarthMap({
     projectionRef.current?.markNavigated()
     map.stop()
     const [longitude, latitude] = destination.coordinates
-    // Mercator has no finite polar coordinates. A polar destination uses the globe.
     if (Math.abs(latitude) > 85 && viewRef.current === 'map') {
       viewRef.current = 'globe'
       projectionRef.current?.setView('globe')
@@ -698,7 +719,6 @@ export function EarthMap({
           destination.kind === 'continent' ? 4.5 : destination.kind === 'country' ? 8 : 14,
         ),
       })
-      // Bounds padding is only for this jump; keep subsequent navigation centered.
       map.setPadding({ top: 0, bottom: 0, left: 0, right: 0 })
     } else {
       map.jumpTo({
@@ -710,8 +730,6 @@ export function EarthMap({
       })
     }
     projectionRef.current?.refreshZoomLimits()
-    // Saved places reopen with geographic context; search and GPS retain their
-    // closer arrival zoom. The view-specific minimum keeps the map filled.
     if (savedNavigation)
       map.setZoom(Math.max(minimumZoomForView(map, viewRef.current), map.getZoom() - 1.5))
     const settings = settingsRef.current
@@ -732,8 +750,6 @@ export function EarthMap({
     if (!map) return
     interactedRef.current = true
     map.stop()
-    // Mercator cannot display polar centers. Keep the current projection for
-    // other coordinates and change only when a polar link requires the globe.
     if (Math.abs(sharedNavigation.latitude) > 85 && viewRef.current === 'map') {
       viewRef.current = 'globe'
       setView('globe')

@@ -10,14 +10,31 @@ export type AnalysisArea = {
   name: string
   type: AreaKind
   geometry: AreaGeometry
+  sourceGeometry?: AreaGeometry
+  displayGeometry?: AreaGeometry
+  displayBoundary?: MultiPolygon
+  displayMask?: MultiPolygon | null
+  boundaryRef?: string
   bounds: AreaBounds
-  source?: { name: string; dataset: string; url: string }
+  fullBounds?: AreaBounds
+  source?: {
+    name: string
+    dataset: string
+    url: string
+    version?: string
+    commit?: string
+    iso3?: string
+    license?: string
+    attribution?: string
+    year?: string
+  }
 }
 
 export const areaPolygons = (geometry: AreaGeometry) =>
   geometry.type === 'Polygon' ? [geometry.coordinates] : geometry.coordinates
 
 export function wrapLongitude(value: number) {
+  if (value >= -180 && value < 180) return value
   return ((((value + 180) % 360) + 360) % 360) - 180
 }
 
@@ -48,12 +65,75 @@ export function areaBounds(geometry: AreaGeometry): AreaBounds {
     }
   }
   const west = wrapLongitude(start)
-  const south = Math.min(...points.map((point) => point[1]))
-  const north = Math.max(...points.map((point) => point[1]))
+  let south = Infinity
+  let north = -Infinity
+  for (const point of points) {
+    south = Math.min(south, point[1])
+    north = Math.max(north, point[1])
+  }
   return [
     [west, south],
     [west + Math.max(0, 360 - gap), north],
   ]
+}
+
+function ringBounds(ring: Position[]): [number, number, number, number] {
+  let west = Infinity
+  let south = Infinity
+  let east = -Infinity
+  let north = -Infinity
+  for (const [longitude, latitude] of ring) {
+    west = Math.min(west, longitude)
+    south = Math.min(south, latitude)
+    east = Math.max(east, longitude)
+    north = Math.max(north, latitude)
+  }
+  return [west, south, east, north]
+}
+
+export function countryFocusBounds(geometry: AreaGeometry, preferred?: AreaBounds): AreaBounds {
+  const reference = preferred ? (preferred[0][0] + preferred[1][0]) / 2 : undefined
+  const polygons = areaPolygons(geometry).map((polygon) => {
+    const outer = unwrapRing(polygon[0], reference)
+    const bounds = ringBounds(outer)
+    const size =
+      sphericalRingArea(outer) -
+      polygon
+        .slice(1)
+        .reduce((total, hole) => total + sphericalRingArea(unwrapRing(hole, reference)), 0)
+    return { bounds, size }
+  })
+  const preferredPolygons = preferred
+    ? polygons.filter(
+        ({ bounds }) =>
+          bounds[0] <= preferred[1][0] &&
+          bounds[2] >= preferred[0][0] &&
+          bounds[1] <= preferred[1][1] &&
+          bounds[3] >= preferred[0][1],
+      )
+    : polygons
+  const candidates = preferredPolygons.length ? preferredPolygons : polygons
+  const largest = candidates.reduce<(typeof candidates)[number] | null>(
+    (current, polygon) => (!current || polygon.size > current.size ? polygon : current),
+    null,
+  )
+  if (!largest) return areaBounds(geometry)
+  return [
+    [largest.bounds[0], largest.bounds[1]],
+    [largest.bounds[2], largest.bounds[3]],
+  ]
+}
+
+function sphericalRingArea(ring: Position[]) {
+  let sum = 0
+  for (let index = 1; index < ring.length; index++) {
+    const previous = ring[index - 1]
+    const point = ring[index]
+    sum +=
+      (point[0] - previous[0]) *
+      (2 + Math.sin((previous[1] * Math.PI) / 180) + Math.sin((point[1] * Math.PI) / 180))
+  }
+  return Math.abs(sum)
 }
 
 function orientation(a: Position, b: Position, c: Position) {
@@ -164,9 +244,11 @@ export function wrappedArea(geometry: AreaGeometry): MultiPolygon {
       : unwrapRing(rawOuter)
     const reference = outer.reduce((sum, point) => sum + point[0], 0) / outer.length
     const rings = [outer, ...polygon.slice(1).map((ring) => unwrapRing(ring, reference))]
-    const xs = outer.map((point) => point[0])
-    const west = Math.min(...xs),
-      east = Math.max(...xs)
+    const [west, south, east, north] = ringBounds(outer)
+    if (west >= -180 && east <= 180 && south >= -90 && north <= 90) {
+      result.push(rings)
+      continue
+    }
     for (
       let shift = Math.ceil((-180 - east) / 360);
       shift <= Math.floor((180 - west) / 360);
@@ -182,12 +264,24 @@ export function wrappedArea(geometry: AreaGeometry): MultiPolygon {
 }
 
 export function outsideAreaMask(geometry: AreaGeometry): MultiPolygon {
-  const selected = wrappedArea(geometry).coordinates as polygonClipping.MultiPolygon
+  const selected = wrappedArea(geometry).coordinates.map((polygon) => ({
+    polygon: polygon as polygonClipping.Polygon,
+    bounds: ringBounds(polygon[0]),
+  }))
   const coordinates: polygonClipping.MultiPolygon = []
   for (let west = -180; west < 180; west += 60) {
     for (let south = -90; south < 90; south += 30) {
+      const nearby = selected
+        .filter(
+          ({ bounds }) =>
+            bounds[0] <= west + 60 &&
+            bounds[2] >= west &&
+            bounds[1] <= south + 30 &&
+            bounds[3] >= south,
+        )
+        .map(({ polygon }) => polygon)
       coordinates.push(
-        ...polygonClipping.difference(rectangle(west, south, west + 60, south + 30), selected),
+        ...polygonClipping.difference(rectangle(west, south, west + 60, south + 30), nearby),
       )
     }
   }
