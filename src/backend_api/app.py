@@ -3,6 +3,7 @@
 import asyncio
 import csv
 import io
+import json
 import logging
 import math
 import os
@@ -26,6 +27,7 @@ from fastapi.responses import JSONResponse
 from starlette.requests import ClientDisconnect
 
 from cache import BatchCache
+from dashboard_summary import DashboardSummary
 from harmonize import (
     CanonicalStore,
     Coverage,
@@ -34,6 +36,7 @@ from harmonize import (
     calendar_document,
     capabilities_payload,
     geometry_bbox,
+    geometry_contains,
     map_source_document,
     observation_document,
     observations_document,
@@ -48,6 +51,26 @@ FIRMS_URL = "https://firms.modaps.eosdis.nasa.gov"
 VIIRS_RANKS = {"l": 0, "n": 1, "h": 2}
 VIIRS_CLASSES = {"l": "low", "n": "nominal", "h": "high"}
 MAX_CSV_BYTES = 50 * 1024 * 1024
+NETHERLANDS_EUROPE_GEOMETRY = {
+    "type": "Polygon",
+    "coordinates": [[
+        [6.9051, 53.4822],
+        [7.0921, 53.144],
+        [6.8429, 52.2284],
+        [6.5894, 51.852],
+        [5.9887, 51.8516],
+        [6.1567, 50.8037],
+        [5.607, 51.0373],
+        [4.974, 51.475],
+        [4.0471, 51.2673],
+        [3.315, 51.3458],
+        [3.8303, 51.6205],
+        [4.706, 53.0918],
+        [6.0742, 53.5104],
+        [6.9051, 53.4822],
+    ]],
+}
+NETHERLANDS_EUROPE_BOUNDS = "3.315,50.8037,7.0921,53.5104"
 # The upstream API places the credential in the URL.
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -150,13 +173,19 @@ def optional_number(row: dict, name: str) -> float | None:
 def parse_area(area: str) -> str:
     if area.strip().lower() == "world":
         return "world"
+    if area.strip().lower() == "netherlands":
+        return NETHERLANDS_EUROPE_BOUNDS
     try:
         west, south, east, north = map(number, area.split(","))
         if -180 <= west < east <= 180 and -90 <= south < north <= 90:
             return ",".join(format(Decimal(str(value or 0.0)), "f") for value in (west, south, east, north))
     except ValueError:
         pass
-    raise HTTPException(422, "Use world or west,south,east,north with increasing bounds. Split areas crossing 180° into two queries.")
+    raise HTTPException(
+        422,
+        "Use world, netherlands, or west,south,east,north with increasing bounds. "
+        "Split areas crossing 180° into two queries.",
+    )
 
 
 def parse_features(text: str, source: Source) -> list[dict]:
@@ -282,13 +311,19 @@ async def load_batch(app: FastAPI, product: Source, bounds: str, day: date, toda
         return features, fetched, False
 
 
-def filter_features(batches, lower, upper, zone, daynight, modis_min, viirs_min):
+def filter_features(
+    batches, lower, upper, zone, daynight, modis_min, viirs_min, geometry=None
+):
     features = []
     for batch in batches:
         for feature in batch:
             props = feature["properties"]
             acquired = datetime.fromisoformat(props["acquired_at"])
             if not lower <= acquired < upper:
+                continue
+            if geometry and not geometry_contains(
+                *feature["geometry"]["coordinates"], geometry
+            ):
                 continue
             if daynight != "all" and props["daynight"] != {"day": "D", "night": "N"}[daynight]:
                 continue
@@ -317,8 +352,12 @@ async def hotspots(
     source: Annotated[list[Source] | None, Query(max_length=8)] = None,
     modis_min_confidence: Annotated[int, Query(ge=0, le=100)] = 0,
     viirs_min_confidence: Annotated[str, Query(pattern="^[lnh]$")] = "l",
+    summary: bool = False,
 ):
     require_firms_key(request)
+    country_geometry = (
+        NETHERLANDS_EUROPE_GEOMETRY if area.strip().lower() == "netherlands" else None
+    )
     bounds = parse_area(area)
     zone = timezone(tz)
     today = datetime.now(UTC).date()
@@ -332,37 +371,159 @@ async def hotspots(
         fetched_at = []
         cache_hits = 0
         failures = []
-        for day in dates:
+        product_summary = DashboardSummary() if summary else None
+
+        async def load_summary_day(day: date):
+            batch_key = request.app.state.cache.key(
+                product.value, bounds, day.isoformat()
+            )
+            day_start = datetime.combine(day, time.min, tzinfo=UTC)
+            day_end = day_start + timedelta(days=1)
+            window_key: str | list[str] = (
+                "full_utc_day"
+                if lower <= day_start and upper >= day_end
+                else [lower.isoformat(), upper.isoformat()]
+            )
+            summary_key = json.dumps(
+                [
+                    1,
+                    batch_key,
+                    "netherlands-europe-v1"
+                    if country_geometry is not None
+                    else None,
+                    window_key,
+                    daynight,
+                    modis_min_confidence,
+                    VIIRS_RANKS[viirs_min_confidence],
+                ],
+                separators=(",", ":"),
+            )
             try:
-                features, fetched, cached = await load_batch(request.app, product, bounds, day, today)
+                cached_summary = await asyncio.to_thread(
+                    request.app.state.cache.get_summary, summary_key, batch_key
+                )
+                if cached_summary is not None:
+                    summary_json, fetched = cached_summary
+                    try:
+                        daily_summary = DashboardSummary.from_cache(summary_json)
+                        return day, daily_summary, fetched, True, None
+                    except (KeyError, TypeError, ValueError):
+                        logging.warning("Could not read dashboard summary cache; recalculating.")
+            except sqlite3.Error:
+                logging.warning("Could not read dashboard summary cache; recalculating.")
+
+            try:
+                features, fetched, batch_cached = await load_batch(
+                    request.app, product, bounds, day, today
+                )
             except FIRMSFailure as exc:
-                failures.append({"date": day.isoformat(), "detail": str(exc)})
-                continue
-            batches.append(features)
-            fetched_at.append(fetched)
-            cache_hits += cached
-        selected = await asyncio.to_thread(
-            filter_features, batches, lower, upper, zone, daynight, modis_min_confidence,
-            viirs_min_confidence,
-        )
-        return selected, {
+                return day, None, None, False, str(exc)
+            daily_summary = DashboardSummary()
+            lower_key = lower.astimezone(UTC).isoformat(timespec="microseconds").replace(
+                "+00:00", "Z"
+            )
+            upper_key = upper.astimezone(UTC).isoformat(timespec="microseconds").replace(
+                "+00:00", "Z"
+            )
+            await asyncio.to_thread(
+                daily_summary.add_filtered,
+                features,
+                lower_key,
+                upper_key,
+                daynight,
+                modis_min_confidence,
+                VIIRS_RANKS[viirs_min_confidence],
+                country_geometry,
+            )
+            try:
+                await asyncio.to_thread(
+                    request.app.state.cache.put_summary,
+                    summary_key,
+                    batch_key,
+                    daily_summary.to_cache(),
+                    fetched,
+                )
+            except sqlite3.Error:
+                logging.warning("Could not write dashboard summary cache; serving calculated data.")
+            return day, daily_summary, fetched, batch_cached, None
+
+        if summary:
+            day_results = await asyncio.gather(*(load_summary_day(day) for day in dates))
+            for day, daily_summary, fetched, cached, failure in day_results:
+                if failure is not None:
+                    failures.append({"date": day.isoformat(), "detail": failure})
+                    continue
+                assert daily_summary is not None and fetched is not None
+                product_summary.merge(daily_summary)
+                fetched_at.append(fetched)
+                cache_hits += cached
+            day_results.clear()
+            selected_count = product_summary.count
+            selected_features = None
+        else:
+            for day in dates:
+                try:
+                    features, fetched, cached = await load_batch(
+                        request.app, product, bounds, day, today
+                    )
+                except FIRMSFailure as exc:
+                    failures.append({"date": day.isoformat(), "detail": str(exc)})
+                    continue
+                batches.append(features)
+                fetched_at.append(fetched)
+                cache_hits += cached
+            selected_features = await asyncio.to_thread(
+                filter_features,
+                batches,
+                lower,
+                upper,
+                zone,
+                daynight,
+                modis_min_confidence,
+                viirs_min_confidence,
+                country_geometry,
+            )
+            selected_count = len(selected_features)
+        report = {
             "source": product.value,
-            "status": ("partial" if batches else "error") if failures else "ok",
-            "count": len(selected),
-            "successful_days": len(batches),
+            "status": ("partial" if fetched_at else "error") if failures else "ok",
+            "count": selected_count,
+            "successful_days": len(fetched_at),
             "cache_hits": cache_hits,
             "oldest_fetched_at": (
                 datetime.fromtimestamp(min(fetched_at), UTC).isoformat() if fetched_at else None
             ),
             "failed_days": failures,
         }
+        return (product_summary if summary else selected_features), report
 
     results = await asyncio.gather(*(load_product(product) for product in sources))
     reports = [report for _, report in results]
     if all(report["status"] == "error" for report in reports):
         raise HTTPException(502, detail={"sources": reports})
 
-    features = [feature for batch, _ in results for feature in batch]
+    if summary:
+        combined_summary = DashboardSummary()
+        for product_summary, _ in results:
+            combined_summary.merge(product_summary)
+        results.clear()
+        summary_payload = combined_summary.payload(dates, zone)
+        features = summary_payload.pop("features")
+        return {
+            "type": "FeatureCollection",
+            "features": features,
+            "count": combined_summary.count,
+            "partial": any(report["status"] != "ok" for report in reports),
+            "sources": reports,
+            "window": {
+                "start_utc": lower.isoformat(),
+                "end_utc_exclusive": upper.isoformat(),
+                "timezone": zone.key,
+            },
+            "summary": summary_payload,
+        }
+
+    features = [feature for selected, _ in results for feature in selected]
     features.sort(key=lambda feature: feature["properties"]["acquired_at"], reverse=True)
     return {
         "type": "FeatureCollection",

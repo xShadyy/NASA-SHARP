@@ -34,11 +34,25 @@ export type HotspotResponse = {
     end_utc_exclusive: string
     timezone: string
   }
+  summary: HotspotSummary
 }
 
 export type DailyActivity = { date: string; count: number }
 export type CountBucket = { label: string; count: number }
 export type DetectionCell = { label: string; count: number; longitude: number; latitude: number }
+export type HotspotSummary = {
+  daily: DailyActivity[]
+  products: CountBucket[]
+  daynight: CountBucket[]
+  confidence: CountBucket[]
+  frp: CountBucket[]
+  frpReported: number
+  medianFrp: number | null
+  hourly: Array<{ hour: number; count: number }>
+  topCells: DetectionCell[]
+  latest: HotspotDetection | null
+  highestFrp: HotspotDetection | null
+}
 
 export function utcDateString(date: Date) {
   return date.toISOString().slice(0, 10)
@@ -63,8 +77,7 @@ export function aggregateDailyActivity(
   days: number,
 ): DailyActivity[] {
   const counts = new Map<string, number>()
-  for (let offset = 0; offset < days; offset++)
-    counts.set(shiftUtcDate(startDate, offset), 0)
+  for (let offset = 0; offset < days; offset++) counts.set(shiftUtcDate(startDate, offset), 0)
   for (const feature of features) {
     const date = feature.properties.acquired_at.slice(0, 10)
     if (counts.has(date)) counts.set(date, counts.get(date)! + 1)
@@ -110,12 +123,7 @@ export function confidenceBuckets(features: HotspotDetection[]) {
     if (sensor === 'VIIRS') {
       label = typeof confidence === 'string' ? `VIIRS ${confidence.toUpperCase()}` : 'VIIRS unknown'
     } else if (typeof confidence === 'number') {
-      label =
-        confidence >= 80
-          ? 'MODIS 80–100'
-          : confidence >= 30
-            ? 'MODIS 30–79'
-            : 'MODIS 0–29'
+      label = confidence >= 80 ? 'MODIS 80–100' : confidence >= 30 ? 'MODIS 30–79' : 'MODIS 0–29'
     } else {
       label = 'MODIS unknown'
     }
@@ -170,7 +178,9 @@ export function medianFrp(features: HotspotDetection[]) {
 export function highestFrp(features: HotspotDetection[]) {
   return features.reduce<HotspotDetection | null>((highest, feature) => {
     const frp = feature.properties.frp_mw
-    return frp !== null && Number.isFinite(frp) && frp >= 0 &&
+    return frp !== null &&
+      Number.isFinite(frp) &&
+      frp >= 0 &&
       frp > (highest?.properties.frp_mw ?? -1)
       ? feature
       : highest
@@ -178,9 +188,11 @@ export function highestFrp(features: HotspotDetection[]) {
 }
 
 export function latestDetection(features: HotspotDetection[]) {
-  return features.reduce<HotspotDetection | null>((latest, feature) =>
-    !latest || feature.properties.acquired_at > latest.properties.acquired_at ? feature : latest,
-  null)
+  return features.reduce<HotspotDetection | null>(
+    (latest, feature) =>
+      !latest || feature.properties.acquired_at > latest.properties.acquired_at ? feature : latest,
+    null,
+  )
 }
 
 export function topDetectionCells(
@@ -284,39 +296,76 @@ export function detectionsToCsv(features: HotspotDetection[]) {
     }),
   ]
   const [header, ...data] = rows
-  return `${header.join(',')}\r\n${data
-    .map((row) => row.map(csvCell).join(','))
-    .join('\r\n')}\r\n`
+  return `${header.join(',')}\r\n${data.map((row) => row.map(csvCell).join(',')).join('\r\n')}\r\n`
+}
+
+function isHotspotDetection(value: unknown): value is HotspotDetection {
+  if (!value || typeof value !== 'object') return false
+  const feature = value as Partial<HotspotDetection>
+  return (
+    feature.type === 'Feature' &&
+    feature.geometry?.type === 'Point' &&
+    Array.isArray(feature.geometry.coordinates) &&
+    feature.geometry.coordinates.length === 2 &&
+    feature.geometry.coordinates.every(Number.isFinite) &&
+    typeof feature.properties?.acquired_at === 'string' &&
+    typeof feature.properties?.sensor === 'string' &&
+    typeof feature.properties?.source === 'string'
+  )
+}
+
+function isCountBucket(value: unknown): value is CountBucket {
+  if (!value || typeof value !== 'object') return false
+  const bucket = value as Partial<CountBucket>
+  return typeof bucket.label === 'string' && typeof bucket.count === 'number'
 }
 
 export function isHotspotResponse(value: unknown): value is HotspotResponse {
   if (!value || typeof value !== 'object') return false
   const response = value as Partial<HotspotResponse>
+  const summary = response.summary
   return (
     response.type === 'FeatureCollection' &&
     Array.isArray(response.features) &&
+    response.features.every(isHotspotDetection) &&
     typeof response.count === 'number' &&
     typeof response.partial === 'boolean' &&
     Array.isArray(response.sources) &&
+    summary !== undefined &&
+    Array.isArray(summary.daily) &&
+    summary.daily.every((day) => typeof day?.date === 'string' && typeof day?.count === 'number') &&
+    Array.isArray(summary.products) &&
+    summary.products.every(isCountBucket) &&
+    Array.isArray(summary.daynight) &&
+    summary.daynight.every(isCountBucket) &&
+    Array.isArray(summary.confidence) &&
+    summary.confidence.every(isCountBucket) &&
+    Array.isArray(summary.frp) &&
+    summary.frp.every(isCountBucket) &&
+    typeof summary.frpReported === 'number' &&
+    (summary.medianFrp === null || typeof summary.medianFrp === 'number') &&
+    Array.isArray(summary.hourly) &&
+    summary.hourly.every(
+      (hour) => Number.isInteger(hour?.hour) && typeof hour?.count === 'number',
+    ) &&
+    Array.isArray(summary.topCells) &&
+    summary.topCells.every(
+      (cell) =>
+        typeof cell?.label === 'string' &&
+        typeof cell?.count === 'number' &&
+        Number.isFinite(cell?.longitude) &&
+        Number.isFinite(cell?.latitude),
+    ) &&
+    (summary.latest === null || isHotspotDetection(summary.latest)) &&
+    (summary.highestFrp === null || isHotspotDetection(summary.highestFrp)) &&
     typeof response.window?.start_utc === 'string' &&
     typeof response.window?.end_utc_exclusive === 'string' &&
-    response.features.every(
-      (feature) =>
-        feature?.type === 'Feature' &&
-        feature.geometry?.type === 'Point' &&
-        Array.isArray(feature.geometry.coordinates) &&
-        feature.geometry.coordinates.length === 2 &&
-        feature.geometry.coordinates.every(Number.isFinite) &&
-        typeof feature.properties?.acquired_at === 'string' &&
-        typeof feature.properties?.sensor === 'string' &&
-        typeof feature.properties?.source === 'string',
-    ) &&
     response.sources.every(
-    (source) =>
-      typeof source?.source === 'string' &&
-      (source.status === 'ok' || source.status === 'partial' || source.status === 'error') &&
-      typeof source.successful_days === 'number' &&
-      Array.isArray(source.failed_days),
+      (source) =>
+        typeof source?.source === 'string' &&
+        (source.status === 'ok' || source.status === 'partial' || source.status === 'error') &&
+        typeof source.successful_days === 'number' &&
+        Array.isArray(source.failed_days),
     )
   )
 }

@@ -33,9 +33,10 @@ sources.
   for dashboard integration. Do not assume that a confirmed region is
   persisted, exposed as a stable app-wide selection, or usable by data queries.
 - A Python FastAPI FIRMS service under `src/backend_api/` that proxies NASA
-  FIRMS hotspot CSV data as GeoJSON. Its `/hotspots` endpoint supports `world`
-  or a bounding box, date windows of at most 31 UTC calendar days, sensor/product
-  selection, confidence thresholds, and day/night filtering. Returned feature
+  FIRMS hotspot CSV data as GeoJSON. Its `/hotspots` endpoint supports `world`,
+  a bounding box, or the generalized European Netherlands country boundary;
+  date windows of at most 31 UTC calendar days, sensor/product selection,
+  confidence thresholds, and day/night filtering. Returned feature
   properties include sensor, satellite, product processing, acquisition time,
   confidence, FRP, brightness, scan/track, day/night, and coordinates. Source
   status and partial failures are reported.
@@ -43,8 +44,9 @@ sources.
 ### Explicitly unfinished dependencies
 
 - **Area-of-interest workflow:** Analysis currently is not an implemented,
-  end-to-end feature. Dashboard work must define the required integration
-  contract and must continue to work in Global mode before that contract exists.
+  end-to-end feature. The dashboard must remain usable with its fixed
+  Netherlands default before that contract exists; do not imply that Analysis
+  region selection is already integrated.
 - **MODIS/VIIRS harmonization:** The harmonization script, harmonized data
   product, quality assurance, and historical-query interface are not
   implemented. Long-term calendars, year-over-year summaries, and
@@ -53,8 +55,8 @@ sources.
   full historical harmonized record. Its 31-day query cap does not support a
   multi-year dashboard request.
 
-Implement the dashboard in stages so the working Global/recent view does not
-depend on either unfinished feature. Clearly label unavailable future
+Implement the dashboard in stages so the working Netherlands/recent view does
+not depend on either unfinished feature. Clearly label unavailable future
 capabilities rather than simulating historical results or silently substituting
 other data.
 
@@ -79,13 +81,14 @@ Display:
 
 - Page title and short explanation that values are satellite hotspot
   detections, not confirmed incident counts.
-- Current area scope: **Global** by default, or the name/type of the confirmed
-  Analysis area when the area-selection integration is available.
+- Current area scope: **Netherlands (European part)** by default. Use the
+  repository's generalized national boundary for exact point-in-polygon
+  filtering; explicitly note that Caribbean Netherlands is not included.
 - The selected time interval, inclusive start/end dates, timezone basis, and
   data freshness/coverage status.
-- A time-interval slider with an initial value of **30 days**. The first
-  live-data implementation must stay within the backend's 31 UTC calendar-day
-  limit. Display the selected duration and resulting dates beside the slider.
+- A time-interval slider with an initial value of **1 day** and an adjustable
+  range up to 30 days. Stay within the backend's 31 UTC calendar-day limit.
+  Display the selected duration and resulting dates beside the slider.
 - Appropriate loading, empty, retryable error, and partial-data states.
   Never show a successful-looking zero when a request failed or data is
   unavailable.
@@ -212,7 +215,11 @@ same filtered detection set, not just a headline count:
 8. **Recent detection table:** sortable by acquisition time and FRP; show
    timestamp, sensor/satellite/product, confidence and scale, FRP, day/night,
    and coordinates. Paginate or cap visible rows while stating the number
-   shown and the total matching records.
+   shown and the total matching records. For multi-week intervals,
+   calculate analytics server-side and return a bounded recent-record sample
+   to the browser; clearly distinguish the sample size from the interval total.
+   Cache compact per-day summaries against the exact cached source batch and
+   active filters so repeated periods do not decode and rescan every point.
 
 All counts, percentages, overlays, breakdowns, and exports must derive from
 the same filters and selected period. Show denominators for percentages, report
@@ -373,7 +380,9 @@ responsibility boundaries.
 ### Download and sharing
 
 - Provide CSV export for the currently selected area, date range, and applied
-  filters, consistent with the contest suggestion.
+  filters, consistent with the contest suggestion. If the current API returns
+  only a bounded sample, label the download as a sample; full-interval export
+  requires a separate server-side streaming/export path.
 - Include stable column names, units, acquisition timestamp/timezone,
   sensor/product provenance, coordinates, confidence scale, FRP, and the query
   window in the export or its metadata.
@@ -425,8 +434,11 @@ because MODIS and VIIRS rows have been placed in one table.
   or exclusive, and use one convention throughout requests, charts, and CSVs.
 - The current backend windows are UTC-based by default and capped at 31 UTC
   calendar days. Show this limitation and avoid off-by-one comparisons.
-- The Global default must query `world`. For region mode, query or filter the
-  exact confirmed geometry and report the geometry/area name.
+- The default must query `area=netherlands`; the backend must use its bounding
+  box only to fetch candidate records, then clip both exact summaries and
+  returned features to the generalized European Netherlands polygon. Report
+  the area name and its geometry limitation. Keep `world` available as an API
+  area, but do not use it as the dashboard's initial scope.
 - Treat incomplete source/day results as partial, including per-source status
   where possible. A partial total is not an authoritative complete total.
 
@@ -435,8 +447,8 @@ because MODIS and VIIRS rows have been placed in one table.
 Build the MVP in this order:
 
 1. Add the Wildfire dashboard sidebar entry and responsive dashboard surface.
-2. Make the dashboard work in **Global** mode with a **30-day default** and
-   slider limited to supported live windows.
+2. Make the dashboard default to **Netherlands (European part)** and a
+   **1-day interval**, with the slider adjustable up to 30 days.
 3. Connect to the existing backend `/hotspots` service, with clear loading,
    error, empty, and partial-result handling.
 4. Put **Fire Activity at a Glance** first: summarize the selected interval and
@@ -453,14 +465,14 @@ Build the MVP in this order:
 8. Leave historical calendar, annual/monthly trend, and anomaly sections
    explicitly marked as dependent on harmonization; do not show mock values as
    real results.
-9. Add area selection only after Analysis exposes a stable confirmed-area
-   contract and the backend can produce geometrically correct results for it.
-   Until then, Global mode must remain fully functional.
+9. Keep Analysis-selected areas unavailable until it exposes a stable
+   confirmed-area contract. The fixed Netherlands scope must already use exact
+   generalized-boundary filtering in both summary and full-feature paths.
 
 ### MVP acceptance criteria
 
 - The dashboard is reachable from the existing sidebar on desktop and mobile.
-- On first use, Global and 30 days are selected, the displayed range matches
+- On first use, Netherlands (European part) and 1 day are selected, the displayed range matches
   the request, and the user can adjust the interval within the supported live
   limit.
 - A successful response yields consistent totals and chart bins. A partial
@@ -494,7 +506,7 @@ AI coding agent:
 > 2. Treat the Analysis tool's end-to-end area-selection integration and the
 >    MODIS/VIIRS harmonization pipeline as unfinished. Do not claim or fake
 >    either capability. Ask for clarification only if implementation cannot
->    proceed without a product decision; Global recent-data mode is the
+>    proceed without a product decision; Netherlands recent-data mode is the
 >    required independent path.
 > 3. Check the worktree and preserve unrelated user changes. Keep scope limited
 >    to the dashboard and directly required integration/tests/docs.
@@ -505,14 +517,15 @@ AI coding agent:
 >    active-state, tooltip, keyboard, and mobile-collapse patterns. Put the
 >    dashboard in the existing application workspace and preserve current map
 >    behavior.
-> 5. Implement a dashboard-owned area scope initially fixed to Global and a
->    dashboard-owned date interval initially set to 30 days. Add an accessible
+> 5. Implement a dashboard-owned area scope initially fixed to Netherlands
+>    (European part), using exact generalized-boundary filtering, and a
+>    dashboard-owned date interval initially set to 1 day. Add an accessible
 >    slider and visible selected duration/date range. Clamp the live query to
 >    what the backend supports (no more than 31 UTC calendar days); do not
 >    silently alter the existing global date control.
 > 6. Fetch data through the application's backend, not directly from NASA
 >    FIRMS. Follow the existing service/API configuration conventions. Send
->    the correct `area=world` and date/window parameters. Abort or ignore stale
+>    the correct `area=netherlands` and date/window parameters. Abort or ignore stale
 >    requests when controls change, and surface network, HTTP, malformed
 >    response, and partial-source errors explicitly.
 > 7. Implement typed response handling and pure aggregation helpers for
@@ -527,14 +540,14 @@ AI coding agent:
 >    observation-hour breakdowns, summary freshness/FRP indicators, a top
 >    detection-density grid, and a sortable recent detections table. Reuse
 >    repository UI primitives and styling conventions.
-> 8a. Place **Fire Activity at a Glance** before KPI cards. Use the same
->     selected interval as the dashboard, plus the immediately preceding
->     equal-length interval. Do not run a separate rolling-24-hour query.
->     Apply the same sensor/day-night filters and require complete results for
->     directional comparison. Show explicit
->     loading, unavailable, partial, zero-detection, and comparison-unavailable
->     states. Use factual detection-count language only; never call the result
->     fire severity, threat, danger, or an all-clear.
+>    8a. Place **Fire Activity at a Glance** before KPI cards. Use the same
+>    selected interval as the dashboard, plus the immediately preceding
+>    equal-length interval. Do not run a separate rolling-24-hour query.
+>    Apply the same sensor/day-night filters and require complete results for
+>    directional comparison. Show explicit
+>    loading, unavailable, partial, zero-detection, and comparison-unavailable
+>    states. Use factual detection-count language only; never call the result
+>    fire severity, threat, danger, or an all-clear.
 >    Inspect package dependencies before selecting a chart library; do not add
 >    a dependency if a clear accessible implementation can be built with
 >    existing tools.
