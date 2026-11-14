@@ -14,10 +14,13 @@ from outbound proxy logs or tracing if you use them.
 
 ## 2. Start the backend
 
-Unzip the project. Run these commands from the extracted
-`firms-hotspot-backend` folder with Python 3.11 or newer.
+The backend must be running while using Area Analytics. From the repository
+root, open a **second PowerShell terminal** (leave `npm run dev` running in the
+frontend terminal) and run these commands from `src\backend_api`. Use Python
+3.11 or newer:
 
 ```bash
+cd src/backend_api
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
@@ -27,10 +30,38 @@ printf '\n'
 python -m uvicorn app:app --host 127.0.0.1 --port 8000
 ```
 
-The activation and key prompt above use Bash. In Windows PowerShell, run
-`py -m venv .venv`, use `.\.venv\Scripts\python.exe` in place of
-`python` for the install and launch commands, and set the environment
-variable with `$env:FIRMS_MAP_KEY = Read-Host 'NASA FIRMS map key'`.
+On Windows PowerShell:
+
+```powershell
+Set-Location .\src\backend_api
+py -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+$key = Read-Host 'NASA FIRMS map key' -AsSecureString
+$keyPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($key)
+try {
+  $env:FIRMS_MAP_KEY = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($keyPointer)
+  .\.venv\Scripts\python.exe -m uvicorn app:app --host 127.0.0.1 --port 8000
+} finally {
+  Remove-Item Env:FIRMS_MAP_KEY -ErrorAction SilentlyContinue
+  [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($keyPointer)
+  $key.Dispose()
+}
+```
+
+Keep that terminal open while using Area Analytics. Verify the service from
+another terminal with `Invoke-RestMethod http://127.0.0.1:8000/health`; it
+should return `{"status":"ok"}`. Do not paste the key into the frontend, source
+code, or a `VITE_` environment variable. If you already created a virtual
+environment, you can skip the `py -m venv .venv` command.
+
+The Vite development server proxies Area Analytics `/api` requests to
+`http://127.0.0.1:8000`. Start the frontend from the repository root with
+`npm run dev` in a separate terminal. For a deployment, configure the web
+server to proxy `/api` to the backend on the same origin. A cross-origin API
+base can be configured at build time with `VITE_FIRMS_API_BASE_URL` only when
+the backend is also configured with an appropriately restrictive CORS policy.
+Keep the FIRMS map key on the backend; it must never be placed in a `VITE_`
+variable.
 
 SQLite caches requests automatically. Set `FIRMS_CACHE_PATH` before starting
 the server to choose a different file. By default it uses
@@ -54,17 +85,37 @@ available MODIS or VIIRS product. `/hotspots` defaults to MODIS Terra/Aqua
 and VIIRS NOAA-20/21 near-real-time products. The example queries a bounding
 box over California and surrounding areas.
 
-| Query parameter | Value |
-| --- | --- |
-| `area` | Required. `west,south,east,north` in decimal degrees, or `world`. Split a box crossing the antimeridian into two requests. |
-| `days` | 1–31 UTC calendar days. Without a start date, the window ends today in UTC and includes today's observations so far. |
-| `start_date` | Optional `YYYY-MM-DD`. The window starts on this date and extends forward inclusively. Use this or the precise start/end parameters for standard-processing products. |
-| `start` and `end` | ISO 8601 date and time, inclusive start and exclusive end. Supply both and omit `start_date` and `days`. At most 31 UTC calendar days per query. |
-| `tz` | IANA timezone, for example `Europe/Amsterdam`. Required for timestamps without an offset. The response includes `acquired_at_local` in this zone, with UTC as the default. Explicit timestamp offsets determine the query instants when supplied. Legacy `start_date` and `days` stay in UTC. |
-| `daynight` | `all`, `day`, or `night`. Uses the FIRMS observation flag and excludes unknown flags when filtering. |
-| `source` | Optional and repeatable. Use `MODIS_NRT`, `VIIRS_NOAA20_NRT`, `VIIRS_NOAA21_NRT`, `VIIRS_SNPP_NRT`, or their `_SP` equivalents when available. |
-| `modis_min_confidence` | Integer from 0 to 100, default 0. |
-| `viirs_min_confidence` | `l` (low), `n` (nominal), or `h` (high), default `l`. |
+| Query parameter        | Value                                                                                                                                                                                                                                                                                         |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `area`                 | Required. `west,south,east,north` in decimal degrees, `world`, or `netherlands`. `netherlands` queries and clips to the generalized European Netherlands boundary; Caribbean Netherlands is not included. Split a box crossing the antimeridian into two requests.                            |
+| `days`                 | 1–31 UTC calendar days. Without a start date, the window ends today in UTC and includes today's observations so far.                                                                                                                                                                          |
+| `start_date`           | Optional `YYYY-MM-DD`. The window starts on this date and extends forward inclusively. Use this or the precise start/end parameters for standard-processing products.                                                                                                                         |
+| `start` and `end`      | ISO 8601 date and time, inclusive start and exclusive end. Supply both and omit `start_date` and `days`. At most 31 UTC calendar days per query.                                                                                                                                              |
+| `tz`                   | IANA timezone, for example `Europe/Amsterdam`. Required for timestamps without an offset. The response includes `acquired_at_local` in this zone, with UTC as the default. Explicit timestamp offsets determine the query instants when supplied. Legacy `start_date` and `days` stay in UTC. |
+| `daynight`             | `all`, `day`, or `night`. Uses the FIRMS observation flag and excludes unknown flags when filtering.                                                                                                                                                                                          |
+| `source`               | Optional and repeatable. Use `MODIS_NRT`, `VIIRS_NOAA20_NRT`, `VIIRS_NOAA21_NRT`, `VIIRS_SNPP_NRT`, or their `_SP` equivalents when available.                                                                                                                                                |
+| `modis_min_confidence` | Integer from 0 to 100, default 0.                                                                                                                                                                                                                                                             |
+| `viirs_min_confidence` | `l` (low), `n` (nominal), or `h` (high), default `l`.                                                                                                                                                                                                                                         |
+| `summary`              | Optional boolean. `true` returns exact interval-wide Area Analytics metrics and only the 500 newest matching detection records; omitted/false returns every matching feature.                                                                                                                      |
+
+### Confirmed Analysis geometry
+
+Use `POST /hotspots/area` when querying a confirmed Polygon or MultiPolygon from
+the Analysis tool. Send a JSON body containing `geometry`, `start_date`,
+`days`, and any supported `daynight`, `source`, `modis_min_confidence`,
+`viirs_min_confidence`, or `summary` filters. The geometry is used to request
+candidate FIRMS bounding boxes, then both summary metrics and returned
+detections are clipped to the exact Polygon/MultiPolygon. Areas crossing the
+antimeridian are split into two candidate requests.
+
+Area Analytics uses this endpoint only when Analysis has a confirmed area.
+Otherwise it continues using `area=netherlands` and the generalized European
+Netherlands boundary.
+
+Area Analytics uses `POST /hotspots/stream` with the same query fields, plus
+`area: "netherlands"` or an optional confirmed `geometry`. It streams
+newline-delimited JSON progress events as all selected products finish each
+day, followed by a `result` event containing the usual hotspot response.
 
 For historical data, use `/availability` to select a product with coverage
 for the dates you need. NASA announced the end of Suomi NPP observations
@@ -104,6 +155,12 @@ fails, the backend returns HTTP 502 with a per-source error. Detections can
 include thermal anomalies other than wildfire. Satellite coverage, cloud and
 overpass timing affect what FIRMS can observe.
 
+Area Analytics uses `summary=true` to keep global multi-week queries usable.
+`count` and the summary metrics cover every matching observation; `features`
+contains only the latest 500 records for inspection/export, not the complete
+dataset. Omit `summary` for the full GeoJSON feature list, which can be very
+large for global intervals.
+
 ## How the backend calls NASA
 
 - Availability uses `/api/data_availability/csv/<MAP_KEY>/ALL` and keeps only
@@ -117,6 +174,9 @@ overpass timing affect what FIRMS can observe.
 - A successful daily batch, including an empty CSV with valid headers, is
   cached before time, confidence or day/night filters are applied. The same
   product, bounding box and date can serve different filters and timezones.
+  Concurrent requests for the same product, bounds and date share one
+  in-flight pull, which continues after an interval stream is canceled so a
+  subsequent interval can reuse the result.
   Cache reuse requires identical bounds. Each source reports cache hits,
   the oldest fetch timestamp and any failed UTC dates. A failed date is
   retried on the next request.
@@ -125,6 +185,11 @@ overpass timing affect what FIRMS can observe.
   on writes and the least recently used entries are evicted above 128 MiB
   of compressed payload. SQLite files can retain allocated space for
   reuse. Stop the server before removing the cache files.
+- Area Analytics also caches compact daily summaries, tied to the exact
+  underlying batch version and its expiry. Repeated interval/filter queries
+  can reuse aggregate counts and the bounded recent-record sample without
+  decompressing and reprocessing every cached point. These entries are
+  disposable and capped separately at 32 MiB.
 - The setup binds to localhost. Add access controls before exposing the
   service to other users so requests cannot freely consume your quota.
 
@@ -147,6 +212,16 @@ Account for overpass coverage, cloud and scan geometry when interpreting
 differences or empty intervals. Keep raw point-level FRP by sensor until
 you have validated any pooled FRP statistic. The temporary cache is
 disposable. Use a durable versioned store for reproducible analyses.
+
+The analysis API exposes `GET /capabilities` and `POST` endpoints at
+`/analysis/calendar`, `/analysis/overview`, `/analysis/time-series`,
+`/analysis/observations`, `/analysis/observation`, and `/analysis/map-source`.
+It reads canonical detections from `FIRE_DATA_CSV` (and optionally
+`FIRE_COVERAGE_CSV`) or from the database configured by `DATABASE_URL`.
+When no local rows are available, a configured `FIRMS_MAP_KEY` enables
+live-area analysis for requests up to 31 UTC days. Local-data analysis does
+not require a FIRMS key; `/availability`, `/hotspots`, and
+`/hotspots/area` and `/hotspots/stream` always do.
 
 NASA documentation
 

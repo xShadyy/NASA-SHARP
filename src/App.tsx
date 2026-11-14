@@ -12,7 +12,8 @@ import { MantineProvider } from '@mantine/core'
 import {
   ArrowsClockwiseIcon,
   BookmarkSimpleIcon,
-  CameraIcon,
+  ChartBarIcon,
+  CalendarDotsIcon,
   CaretLeftIcon,
   CaretRightIcon,
   CornersInIcon,
@@ -36,6 +37,7 @@ import {
   type MeasurementUnit,
 } from '@/lib/measurement-units'
 import { MeasurementPanel } from '@/components/MeasurementPanel'
+import { AreaAnalytics } from '@/components/AreaAnalytics'
 import { AnalysisPanel } from '@/components/AnalysisPanel'
 import { analysisReducer, initialAnalysisState } from '@/lib/analysis-state'
 import { utcToday, type AnalysisRange } from '@/lib/analysis-activity'
@@ -138,6 +140,7 @@ function loadMeasurementColors(): MeasurementColors {
 const navigation = [
   { name: 'Saved locations', icon: BookmarkSimpleIcon },
   { name: 'Analysis', icon: PolygonIcon },
+  { name: 'Area Analytics', icon: ChartBarIcon },
 ]
 
 const mantineTheme = {
@@ -164,7 +167,7 @@ function ExplorerSidebar({
   const expanded = isMobile ? openMobile : open
   const selectNav = (name: string) => {
     setActiveNav(name)
-    if (name === 'Analysis') {
+    if (name === 'Area Analytics' || name === 'Analysis') {
       if (isMobile) setOpenMobile(false)
       else setOpen(false)
     }
@@ -464,6 +467,7 @@ function App() {
   const toolbarToggleRef = useRef<HTMLButtonElement>(null)
   const measurementUnit = mode === 'area' ? areaUnit : distanceUnit
   const themeAction = theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme'
+  const areaAnalyticsOpen = activeNav === 'Area Analytics'
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -830,219 +834,229 @@ function App() {
               <main
                 ref={stageRef}
                 className="explorer-stage"
-                aria-label="Global Earth explorer"
+                aria-label={
+                  areaAnalyticsOpen ? 'Area Analytics workspace' : 'Global Earth explorer'
+                }
                 data-capture-selecting={selectingCapture || undefined}
               >
-                <Suspense
-                  fallback={
-                    <div className="map-loading" role="status">
-                      Loading map.
-                    </div>
-                  }
-                >
-                  <EarthMap
-                    ref={mapRef}
-                    analysis={analysis}
-                    analysisOpen={analysisOpen}
-                    analysisPicking={countrySelection.picking}
-                    onCountryPick={countrySelection.selectCountry}
-                    onAnalysisChange={(area, error, vertices) =>
-                      dispatchAnalysis({ type: 'drawing', area, error, vertices })
+                <div className="map-workspace" inert={areaAnalyticsOpen}>
+                  <Suspense
+                    fallback={
+                      <div className="map-loading" role="status">
+                        Loading map.
+                      </div>
                     }
-                    onAnalysisFinish={(area, error) =>
-                      dispatchAnalysis({ type: 'finish', area, error })
-                    }
-                    onAnalysisCancel={countrySelection.cancel}
-                    analysisDistanceUnit={distanceUnit}
-                    analysisAreaUnit={areaUnit}
-                    initialView="globe"
-                    initialCoordinates={initialCoordinates}
-                    sharedNavigation={sharedNavigation}
-                    onSharedNavigationApplied={() => {
-                      window.clearTimeout(restoreTimerRef.current)
-                      restoreTimerRef.current = window.setTimeout(() => {
-                        restoringHashRef.current = false
-                        setShareRevision((current) => current + 1)
-                      }, 0)
-                    }}
-                    dataDate={analysisRange.end}
+                  >
+                    <EarthMap
+                      ref={mapRef}
+                      analysis={analysis}
+                      analysisOpen={analysisOpen}
+                      analysisPicking={countrySelection.picking}
+                      onCountryPick={countrySelection.selectCountry}
+                      onAnalysisChange={(area, error, vertices) =>
+                        dispatchAnalysis({ type: 'drawing', area, error, vertices })
+                      }
+                      onAnalysisFinish={(area, error) =>
+                        dispatchAnalysis({ type: 'finish', area, error })
+                      }
+                      onAnalysisCancel={countrySelection.cancel}
+                      analysisDistanceUnit={distanceUnit}
+                      analysisAreaUnit={areaUnit}
+                      initialView="globe"
+                      initialCoordinates={initialCoordinates}
+                      sharedNavigation={sharedNavigation}
+                      onSharedNavigationApplied={() => {
+                        window.clearTimeout(restoreTimerRef.current)
+                        restoreTimerRef.current = window.setTimeout(() => {
+                          restoringHashRef.current = false
+                          setShareRevision((current) => current + 1)
+                        }, 0)
+                      }}
+                      dataDate={analysisRange.end}
                     fires={fires.features}
                     fireStatus={fires.status}
                     fireMessage={fires.message}
                     onRetryFires={fires.retry}
-                    referenceLayers={referenceLayers}
-                    onReferenceChange={changeReferenceLayer}
-                    showSpace={showSpace}
-                    onSpaceChange={setShowSpace}
-                    background={background}
-                    onBackgroundChange={setBackground}
-                    measurementMode={mode}
-                    measurementUnit={measurementUnit}
-                    measurementColors={measurementColors}
-                    onMeasurementChange={setMeasurement}
-                    onMeasurementStorageError={setStorageNotice}
-                    onRequestSaveLocation={setPendingSave}
-                    onCaptureRegion={beginCaptureSelection}
-                    navigationRequest={destinationRequest}
-                    savedNavigation={savedNavigation}
-                    destination={destination}
-                    destinationSaved={Boolean(
-                      destination &&
-                      savedLocations.some(
-                        (saved) => locationKey(saved) === locationKey(destination),
-                      ),
-                    )}
-                    onSaveLocation={setPendingSave}
-                    onDismissLocation={() => setDestination(null)}
-                    onCameraChange={setCamera}
-                  />
-                </Suspense>
-                {storageNotice && (
-                  <p className="location-storage-notice" role="status">
-                    {storageNotice}
-                  </p>
-                )}
-                {mode !== 'orbit' && (
-                  <MeasurementPanel
-                    containerRef={stageRef}
-                    mode={mode}
-                    unit={measurementUnit}
-                    color={measurementColors[mode]}
-                    canUndo={measurement?.canUndo ?? false}
-                    canClear={measurement?.canClear ?? false}
-                    canFinish={measurement?.canFinish ?? false}
-                    onUndo={() => mapRef.current?.undoMeasurement()}
-                    onClear={() => mapRef.current?.clearMeasurement()}
-                    onFinish={() => mapRef.current?.finishMeasurement()}
-                    onModeChange={chooseMode}
-                    onUnitChange={selectMeasurementUnit}
-                    onColorChange={selectMeasurementColor}
-                    onClose={closeMeasurements}
-                  />
-                )}
-                {captureOpen && (
-                  <div inert={selectingCapture}>
-                    <CapturePanel
-                      containerRef={stageRef}
-                      onClose={closeCapture}
-                      onPreview={createCapturePreview}
-                      region={captureRegion}
-                      onSelectRegion={beginCaptureSelection}
-                      onClearRegion={() => setCaptureRegion(null)}
-                      captureReady={camera.ready && !selectingCapture}
+                      referenceLayers={referenceLayers}
+                      onReferenceChange={changeReferenceLayer}
+                      showSpace={showSpace}
+                      onSpaceChange={setShowSpace}
+                      background={background}
+                      onBackgroundChange={setBackground}
+                      measurementMode={mode}
+                      measurementUnit={measurementUnit}
+                      measurementColors={measurementColors}
+                      onMeasurementChange={setMeasurement}
+                      onMeasurementStorageError={setStorageNotice}
+                      onRequestSaveLocation={setPendingSave}
+                      onCaptureRegion={beginCaptureSelection}
+                      navigationRequest={destinationRequest}
+                      savedNavigation={savedNavigation}
+                      destination={destination}
+                      destinationSaved={Boolean(
+                        destination &&
+                        savedLocations.some(
+                          (saved) => locationKey(saved) === locationKey(destination),
+                        ),
+                      )}
+                      onSaveLocation={setPendingSave}
+                      onDismissLocation={() => setDestination(null)}
+                      onCameraChange={setCamera}
                     />
-                  </div>
-                )}
-                {selectingCapture && (
-                  <CaptureSelection
-                    onSelected={(region) => {
-                      setCaptureRegion(region)
-                      setSelectingCapture(false)
-                    }}
-                    onCancel={() => setSelectingCapture(false)}
+                  </Suspense>
+                  {storageNotice && (
+                    <p className="location-storage-notice" role="status">
+                      {storageNotice}
+                    </p>
+                  )}
+                  {mode !== 'orbit' && (
+                    <MeasurementPanel
+                      containerRef={stageRef}
+                      mode={mode}
+                      unit={measurementUnit}
+                      color={measurementColors[mode]}
+                      canUndo={measurement?.canUndo ?? false}
+                      canClear={measurement?.canClear ?? false}
+                      canFinish={measurement?.canFinish ?? false}
+                      onUndo={() => mapRef.current?.undoMeasurement()}
+                      onClear={() => mapRef.current?.clearMeasurement()}
+                      onFinish={() => mapRef.current?.finishMeasurement()}
+                      onModeChange={chooseMode}
+                      onUnitChange={selectMeasurementUnit}
+                      onColorChange={selectMeasurementColor}
+                      onClose={closeMeasurements}
+                    />
+                  )}
+                  {captureOpen && (
+                    <div inert={selectingCapture}>
+                      <CapturePanel
+                        containerRef={stageRef}
+                        onClose={closeCapture}
+                        onPreview={createCapturePreview}
+                        region={captureRegion}
+                        onSelectRegion={beginCaptureSelection}
+                        onClearRegion={() => setCaptureRegion(null)}
+                        captureReady={camera.ready && !selectingCapture}
+                      />
+                    </div>
+                  )}
+                  {selectingCapture && (
+                    <CaptureSelection
+                      onSelected={(region) => {
+                        setCaptureRegion(region)
+                        setSelectingCapture(false)
+                      }}
+                      onCancel={() => setSelectingCapture(false)}
+                    />
+                  )}
+
+                  <Collapsible
+                    className="globe-tools"
+                    open={!toolbarMinimized}
+                    onOpenChange={(open) => setToolbarMinimized(!open)}
+                    data-minimized={toolbarMinimized || undefined}
+                  >
+                    <CollapsibleContent
+                      forceMount
+                      className="toolbar-reveal"
+                      inert={toolbarMinimized}
+                      aria-hidden={toolbarMinimized || undefined}
+                    >
+                      <div className="toolbar-motion">
+                        <div id="globe-toolbar" className="bottom-toolbar" aria-label="Globe tools">
+                          <ButtonGroup>
+                            <ToolButton
+                              label="Zoom in"
+                              icon={PlusIcon}
+                              onClick={() => mapRef.current?.zoomBy(1)}
+                              disabled={!camera.ready || camera.zoom >= camera.maxZoom}
+                            />
+                            <ToolButton
+                              label="Zoom out"
+                              icon={MinusIcon}
+                              onClick={() => mapRef.current?.zoomBy(-1)}
+                              disabled={!camera.ready || camera.zoom <= camera.minZoom + 0.001}
+                            />
+                            <Separator orientation="vertical" className="toolbar-separator" />
+                            <CurrentLocationButton
+                              onSelect={selectDestination}
+                              className="toolbar-button"
+                            />
+                            <ToolButton
+                              label="Reset view"
+                              icon={CrosshairIcon}
+                              onClick={() => {
+                                mapRef.current?.resetView()
+                                setDestination(null)
+                              }}
+                              disabled={!camera.ready}
+                            />
+                            <ToolButton
+                              label="Orbit mode"
+                              icon={ArrowsClockwiseIcon}
+                              active={mode === 'orbit'}
+                              onClick={() => chooseMode('orbit')}
+                            />
+                            <ToolButton
+                              label="Measurements"
+                              icon={RulerIcon}
+                              active={mode !== 'orbit'}
+                              panel="measurement-panel"
+                              buttonRef={measurementsTriggerRef}
+                              onClick={toggleMeasurements}
+                            />
+                            <ToolButton
+                              label="Screenshot"
+                              icon={CameraIcon}
+                              active={captureOpen}
+                              panel="capture-panel"
+                              buttonRef={captureTriggerRef}
+                              onClick={toggleCapture}
+                            />
+                            <ToolButton
+                              label={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+                              icon={fullscreen ? CornersInIcon : CornersOutIcon}
+                              onClick={() => {
+                                void toggleFullscreen()
+                              }}
+                            />
+                          </ButtonGroup>
+                        </div>
+                      </div>
+                    </CollapsibleContent>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <CollapsibleTrigger asChild>
+                          <Button
+                            ref={toolbarToggleRef}
+                            type="button"
+                            variant="outline"
+                            size="icon-sm"
+                            className="toolbar-toggle"
+                            aria-label={
+                              toolbarMinimized ? 'Show globe tools' : 'Minimize globe tools'
+                            }
+                          >
+                            {toolbarMinimized ? (
+                              <CaretRightIcon size={16} />
+                            ) : (
+                              <CaretLeftIcon size={16} />
+                            )}
+                          </Button>
+                        </CollapsibleTrigger>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        {toolbarMinimized ? 'Show globe tools' : 'Minimize globe tools'}
+                      </TooltipContent>
+                    </Tooltip>
+                  </Collapsible>
+                </div>
+                {areaAnalyticsOpen && (
+                  <AreaAnalytics
+                    analysisArea={analysis.confirmed}
+                    onClose={() => setActiveNav('Saved locations')}
                   />
                 )}
-
-                <Collapsible
-                  className="globe-tools"
-                  open={!toolbarMinimized}
-                  onOpenChange={(open) => setToolbarMinimized(!open)}
-                  data-minimized={toolbarMinimized || undefined}
-                >
-                  <CollapsibleContent
-                    forceMount
-                    className="toolbar-reveal"
-                    inert={toolbarMinimized}
-                    aria-hidden={toolbarMinimized || undefined}
-                  >
-                    <div className="toolbar-motion">
-                      <div id="globe-toolbar" className="bottom-toolbar" aria-label="Globe tools">
-                        <ButtonGroup>
-                          <ToolButton
-                            label="Zoom in"
-                            icon={PlusIcon}
-                            onClick={() => mapRef.current?.zoomBy(1)}
-                            disabled={!camera.ready || camera.zoom >= camera.maxZoom}
-                          />
-                          <ToolButton
-                            label="Zoom out"
-                            icon={MinusIcon}
-                            onClick={() => mapRef.current?.zoomBy(-1)}
-                            disabled={!camera.ready || camera.zoom <= camera.minZoom + 0.001}
-                          />
-                          <Separator orientation="vertical" className="toolbar-separator" />
-                          <CurrentLocationButton
-                            onSelect={selectDestination}
-                            className="toolbar-button"
-                          />
-                          <ToolButton
-                            label="Reset view"
-                            icon={CrosshairIcon}
-                            onClick={() => {
-                              mapRef.current?.resetView()
-                              setDestination(null)
-                            }}
-                            disabled={!camera.ready}
-                          />
-                          <ToolButton
-                            label="Orbit mode"
-                            icon={ArrowsClockwiseIcon}
-                            active={mode === 'orbit'}
-                            onClick={() => chooseMode('orbit')}
-                          />
-                          <ToolButton
-                            label="Measurements"
-                            icon={RulerIcon}
-                            active={mode !== 'orbit'}
-                            panel="measurement-panel"
-                            buttonRef={measurementsTriggerRef}
-                            onClick={toggleMeasurements}
-                          />
-                          <ToolButton
-                            label="Screenshot"
-                            icon={CameraIcon}
-                            active={captureOpen}
-                            panel="capture-panel"
-                            buttonRef={captureTriggerRef}
-                            onClick={toggleCapture}
-                          />
-                          <ToolButton
-                            label={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
-                            icon={fullscreen ? CornersInIcon : CornersOutIcon}
-                            onClick={() => {
-                              void toggleFullscreen()
-                            }}
-                          />
-                        </ButtonGroup>
-                      </div>
-                    </div>
-                  </CollapsibleContent>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <CollapsibleTrigger asChild>
-                        <Button
-                          ref={toolbarToggleRef}
-                          type="button"
-                          variant="outline"
-                          size="icon-sm"
-                          className="toolbar-toggle"
-                          aria-label={
-                            toolbarMinimized ? 'Show globe tools' : 'Minimize globe tools'
-                          }
-                        >
-                          {toolbarMinimized ? (
-                            <CaretRightIcon size={16} />
-                          ) : (
-                            <CaretLeftIcon size={16} />
-                          )}
-                        </Button>
-                      </CollapsibleTrigger>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      {toolbarMinimized ? 'Show globe tools' : 'Minimize globe tools'}
-                    </TooltipContent>
-                  </Tooltip>
-                </Collapsible>
               </main>
             </div>
           </SidebarProvider>
