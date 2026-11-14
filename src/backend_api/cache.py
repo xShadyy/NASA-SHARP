@@ -27,8 +27,26 @@ class BatchCache:
                     body BLOB NOT NULL
                 )
             """)
+            old_summary_table = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'dashboard_summaries'"
+            ).fetchone()
+            new_summary_table = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'area_analytics_summaries'"
+            ).fetchone()
+            if old_summary_table and new_summary_table:
+                db.execute("""
+                    INSERT OR IGNORE INTO area_analytics_summaries
+                    SELECT * FROM dashboard_summaries
+                """)
+                db.execute("DROP TABLE dashboard_summaries")
+            elif old_summary_table:
+                db.execute(
+                    "ALTER TABLE dashboard_summaries RENAME TO area_analytics_summaries"
+                )
+            db.execute("DROP INDEX IF EXISTS dashboard_summaries_batch")
+            db.execute("DROP INDEX IF EXISTS dashboard_summaries_accessed")
             db.execute("""
-                CREATE TABLE IF NOT EXISTS dashboard_summaries (
+                CREATE TABLE IF NOT EXISTS area_analytics_summaries (
                     key TEXT PRIMARY KEY,
                     batch_key TEXT NOT NULL REFERENCES batches(key) ON DELETE CASCADE,
                     fetched REAL NOT NULL,
@@ -39,12 +57,12 @@ class BatchCache:
             db.execute("CREATE INDEX IF NOT EXISTS batches_expires ON batches(expires)")
             db.execute("CREATE INDEX IF NOT EXISTS batches_accessed ON batches(accessed)")
             db.execute(
-                "CREATE INDEX IF NOT EXISTS dashboard_summaries_batch "
-                "ON dashboard_summaries(batch_key, fetched)"
+                "CREATE INDEX IF NOT EXISTS area_analytics_summaries_batch "
+                "ON area_analytics_summaries(batch_key, fetched)"
             )
             db.execute(
-                "CREATE INDEX IF NOT EXISTS dashboard_summaries_accessed "
-                "ON dashboard_summaries(accessed)"
+                "CREATE INDEX IF NOT EXISTS area_analytics_summaries_accessed "
+                "ON area_analytics_summaries(accessed)"
             )
 
     def connect(self):
@@ -99,13 +117,13 @@ class BatchCache:
             )
             db.execute(
                 """
-                DELETE FROM dashboard_summaries
+                DELETE FROM area_analytics_summaries
                 WHERE batch_key = ? AND fetched != ?
                 """,
                 (key, fetched),
             )
             db.execute("""
-                DELETE FROM dashboard_summaries AS s
+                DELETE FROM area_analytics_summaries AS s
                 WHERE NOT EXISTS (
                     SELECT 1 FROM batches AS b
                     WHERE b.key = s.batch_key AND b.fetched = s.fetched
@@ -119,7 +137,7 @@ class BatchCache:
             row = db.execute(
                 """
                 SELECT s.body, s.fetched
-                FROM dashboard_summaries AS s
+                FROM area_analytics_summaries AS s
                 JOIN batches AS b ON b.key = s.batch_key AND b.fetched = s.fetched
                 WHERE s.key = ? AND s.batch_key = ? AND b.expires > ?
                 """,
@@ -128,7 +146,7 @@ class BatchCache:
             if row is None:
                 return None
             db.execute(
-                "UPDATE dashboard_summaries SET accessed = MAX(accessed, ?) WHERE key = ?",
+                "UPDATE area_analytics_summaries SET accessed = MAX(accessed, ?) WHERE key = ?",
                 (now, key),
             )
             db.execute(
@@ -140,7 +158,7 @@ class BatchCache:
             return zlib.decompress(body).decode("utf-8"), fetched
         except (UnicodeError, zlib.error):
             with closing(self.connect()) as db, db:
-                db.execute("DELETE FROM dashboard_summaries WHERE key = ?", (key,))
+                db.execute("DELETE FROM area_analytics_summaries WHERE key = ?", (key,))
             return None
 
     def put_summary(self, key: str, batch_key: str, payload: str, fetched: float) -> None:
@@ -150,7 +168,7 @@ class BatchCache:
         with closing(self.connect()) as db, db:
             db.execute(
                 """
-                INSERT INTO dashboard_summaries (key, batch_key, fetched, accessed, body)
+                INSERT INTO area_analytics_summaries (key, batch_key, fetched, accessed, body)
                 SELECT ?, ?, ?, ?, ?
                 WHERE EXISTS (
                     SELECT 1 FROM batches WHERE key = ? AND fetched = ?
@@ -158,7 +176,7 @@ class BatchCache:
                 ON CONFLICT(key) DO UPDATE SET
                     batch_key = excluded.batch_key, fetched = excluded.fetched,
                     accessed = excluded.accessed, body = excluded.body
-                WHERE excluded.fetched >= dashboard_summaries.fetched
+                WHERE excluded.fetched >= area_analytics_summaries.fetched
                 """,
                 (key, batch_key, fetched, fetched, body, batch_key, fetched),
             )
@@ -168,12 +186,12 @@ class BatchCache:
     def _prune_summaries(db: sqlite3.Connection) -> None:
         db.execute(
             """
-            DELETE FROM dashboard_summaries WHERE key IN (
+            DELETE FROM area_analytics_summaries WHERE key IN (
                 SELECT key FROM (
                     SELECT key, SUM(length(body)) OVER (
                         ORDER BY accessed DESC, key
                         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-                    ) AS running_bytes FROM dashboard_summaries
+                    ) AS running_bytes FROM area_analytics_summaries
                 ) WHERE running_bytes > ?
             )
             """,

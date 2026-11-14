@@ -38,7 +38,7 @@ import {
   type MeasurementUnit,
 } from '@/lib/measurement-units'
 import { MeasurementPanel } from '@/components/MeasurementPanel'
-import { WildfireDashboard } from '@/components/WildfireDashboard'
+import { AreaAnalytics } from '@/components/AreaAnalytics'
 import { AnalysisPanel } from '@/components/AnalysisPanel'
 import { analysisReducer, initialAnalysisState } from '@/lib/analysis-state'
 import { useAnalysisCountrySelection } from '@/hooks/use-analysis-country-selection'
@@ -477,7 +477,7 @@ function App() {
   const toolbarToggleRef = useRef<HTMLButtonElement>(null)
   const measurementUnit = mode === 'area' ? areaUnit : distanceUnit
   const themeAction = theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme'
-  const dashboardOpen = activeNav === 'Area Analytics'
+  const areaAnalyticsOpen = activeNav === 'Area Analytics'
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -907,10 +907,12 @@ function App() {
               <main
                 ref={stageRef}
                 className="explorer-stage"
-                aria-label={dashboardOpen ? 'Area Analytics workspace' : 'Global Earth explorer'}
+                aria-label={
+                  areaAnalyticsOpen ? 'Area Analytics workspace' : 'Global Earth explorer'
+                }
                 data-capture-selecting={selectingCapture || undefined}
               >
-                <div className="map-workspace" inert={dashboardOpen}>
+                <div className="map-workspace" inert={areaAnalyticsOpen}>
                   <Suspense
                     fallback={
                       <div className="map-loading" role="status">
@@ -1118,8 +1120,8 @@ function App() {
                     </Tooltip>
                   </Collapsible>
                 </div>
-                {dashboardOpen && (
-                  <WildfireDashboard
+                {areaAnalyticsOpen && (
+                  <AreaAnalytics
                     analysisArea={analysis.confirmed}
                     onClose={() => setActiveNav('Saved locations')}
                   />

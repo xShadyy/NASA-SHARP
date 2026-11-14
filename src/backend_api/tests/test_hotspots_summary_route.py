@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import sys
 import tempfile
@@ -314,6 +315,48 @@ class HotspotsSummaryRouteTest(unittest.TestCase):
             {tuple(item["geometry"]["coordinates"]) for item in response.json()["features"]},
             {(179.5, 0.0), (-179.5, 0.0)},
         )
+
+    def test_area_analytics_stream_reports_completed_days_before_the_result(self):
+        first_day = date(2026, 11, 12)
+        geometry = {
+            "type": "Polygon",
+            "coordinates": [[
+                [4.8, 51.8],
+                [5.3, 51.8],
+                [5.3, 52.3],
+                [4.8, 52.3],
+                [4.8, 51.8],
+            ]],
+        }
+
+        async def fake_load_batch(_app, _product, _bounds, day, _today):
+            return [feature(day, 10.0, 5.0, 52.0)], time.time(), True
+
+        with tempfile.TemporaryDirectory() as directory:
+            environment = {
+                "FIRMS_MAP_KEY": "test-key",
+                "FIRMS_CACHE_PATH": str(Path(directory) / "cache.sqlite3"),
+            }
+            with patch.dict(os.environ, environment):
+                with TestClient(app) as client:
+                    with patch("app.load_batch", new=AsyncMock(side_effect=fake_load_batch)):
+                        response = client.post(
+                            "/hotspots/stream",
+                            json={
+                                "geometry": geometry,
+                                "start_date": first_day.isoformat(),
+                                "days": 2,
+                                "source": [Source.MODIS_NRT.value],
+                            },
+                        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        events = [json.loads(line) for line in response.text.splitlines()]
+        progress = [event for event in events if event["type"] == "progress"]
+        self.assertEqual([event["processed_days"] for event in progress], [1, 2])
+        self.assertTrue(all(event["total_days"] == 2 for event in progress))
+        self.assertEqual(events[-1]["type"], "result")
+        self.assertEqual(events[-1]["data"]["count"], 2)
 
 
 if __name__ == "__main__":

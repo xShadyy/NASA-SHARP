@@ -63,9 +63,9 @@ export function shiftUtcDate(date: string, days: number) {
   return utcDateString(new Date(Date.UTC(year, month - 1, day + days)))
 }
 
-export function getDashboardWindows(days: number, today = utcDateString(new Date())) {
+export function getAreaAnalyticsWindows(days: number, today = utcDateString(new Date())) {
   if (!Number.isInteger(days) || days < 1 || days > 30)
-    throw new RangeError('Dashboard interval must be between 1 and 30 days.')
+    throw new RangeError('Area Analytics interval must be between 1 and 30 days.')
   const currentStart = shiftUtcDate(today, 1 - days)
   const previousStart = shiftUtcDate(currentStart, -days)
   return { currentStart, previousStart, endDate: today }
