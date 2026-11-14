@@ -690,12 +690,20 @@ function App() {
       <TooltipProvider>
         <div className="app-shell">
           <header className="app-header">
-            <div className="header-brand" aria-label="Ethereal wildfire explorer">
+            <div
+              className="header-brand"
+              aria-label="Ethereal SHARP: Satellite Harmonization and Activity Records Platform"
+            >
               <span className="brand-symbol">
                 <GlobeHemisphereWestIcon size={19} weight="regular" />
               </span>
-              <span>
-                ETHEREAL <span className="brand-suffix">/ OUR TOOL NAME</span>
+              <span className="brand-copy">
+                <span className="brand-title">
+                  ETHEREAL <span className="brand-suffix">/ SHARP</span>
+                </span>
+                <span className="brand-subtitle">
+                  Satellite Harmonization and Activity Records Platform
+                </span>
               </span>
             </div>
 

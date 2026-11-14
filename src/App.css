@@ -139,6 +139,22 @@ input:focus-visible {
   font-weight: 900;
   letter-spacing: 0.125em;
 }
+.brand-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+.brand-title {
+  line-height: 1;
+}
+.brand-subtitle {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 400;
+  letter-spacing: 0.035em;
+  line-height: 1.2;
+}
 .brand-symbol {
   width: 32px;
   height: 32px;
@@ -929,6 +945,9 @@ input:focus-visible {
     grid-template-columns: auto minmax(230px, 1fr) auto;
   }
   .brand-suffix {
+    display: inline;
+  }
+  .brand-subtitle {
     display: none;
   }
   .date-divider,
@@ -946,7 +965,7 @@ input:focus-visible {
     padding: 0 12px;
     gap: 8px;
   }
-  .header-brand > span:last-child {
+  .brand-copy {
     display: none;
   }
   .header-brand {
