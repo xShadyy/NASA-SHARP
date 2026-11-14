@@ -25,6 +25,9 @@ import { createGraticuleController } from '@/map/graticule'
 import { createScaleBar } from '@/map/scale-bar'
 import { createReferenceTileCache } from '@/map/reference-tile-cache'
 import { createAnalysisController, type AnalysisController } from '@/map/analysis-controller'
+import { createFireDotController } from '@/map/fire-dots'
+import { FIRE_LEVELS, type FireFeature } from '@/lib/fire-severity'
+import type { AnalysisFireStatus } from '@/hooks/use-analysis-fires'
 import type { AnalysisState } from '@/lib/analysis-state'
 import type { AnalysisArea } from '@/lib/analysis-area'
 import {
@@ -115,6 +118,10 @@ type EarthMapProps = {
   background: MapBackground
   onBackgroundChange: (background: MapBackground) => void
   dataDate: string | null
+  fires: FireFeature[]
+  fireStatus: AnalysisFireStatus
+  fireMessage: string
+  onRetryFires: () => void
   measurementMode: 'orbit' | MeasurementMode
   measurementUnit: MeasurementUnit
   measurementColors: MeasurementColors
@@ -177,6 +184,10 @@ export function EarthMap({
   sharedNavigation,
   onSharedNavigationApplied,
   dataDate,
+  fires,
+  fireStatus,
+  fireMessage,
+  onRetryFires,
   referenceLayers,
   showSpace,
   onSpaceChange,
@@ -203,6 +214,7 @@ export function EarthMap({
   const projectionRef = useRef<ProjectionController | null>(null)
   const measurementsRef = useRef<MeasurementController | null>(null)
   const analysisRef = useRef<AnalysisController | null>(null)
+  const firesRef = useRef<ReturnType<typeof createFireDotController> | null>(null)
   const analysisFitRef = useRef(-1)
   const analysisUnitsRef = useRef({ distance: analysisDistanceUnit, area: analysisAreaUnit })
   const reportAnalysisChange = useEffectEvent(onAnalysisChange)
@@ -275,6 +287,23 @@ export function EarthMap({
       analysisRef.current = null
     }
   }, [mapInstance])
+
+  useEffect(() => {
+    if (!mapInstance) return
+    const controller = createFireDotController(mapInstance)
+    firesRef.current = controller
+    return () => {
+      controller.destroy()
+      firesRef.current = null
+    }
+  }, [mapInstance])
+
+  useEffect(() => {
+    const controller = firesRef.current
+    if (!controller) return
+    controller.setInteractive(analysis.phase !== 'drawing' && analysis.phase !== 'editing')
+    controller.setData(fires)
+  }, [fires, analysis.phase, mapInstance])
 
   useEffect(() => {
     analysisUnitsRef.current = { distance: analysisDistanceUnit, area: analysisAreaUnit }
@@ -922,6 +951,34 @@ export function EarthMap({
           onSpaceChange={onSpaceChange}
         />
       </div>
+      {fireStatus !== 'idle' && (
+        <div className="fire-map-legend" role="status">
+          <p>
+            {fireStatus === 'loading'
+              ? 'Loading fires'
+              : fireStatus === 'error'
+                ? fireMessage
+                : fires.length === 1
+                  ? '1 fire'
+                  : `${fires.length} fires`}
+          </p>
+          {fireStatus === 'error' && !fireMessage.includes('180°') && (
+            <Button type="button" variant="outline" size="sm" onClick={onRetryFires}>
+              Retry
+            </Button>
+          )}
+          {fireStatus !== 'error' && (
+            <ul>
+              {FIRE_LEVELS.map((level) => (
+                <li key={level.id}>
+                  <span className="fire-swatch" style={{ background: level.color }} />
+                  {level.label}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
       <output
         ref={scaleOutputRef}
         className="map-scale-bar"

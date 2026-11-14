@@ -3,9 +3,18 @@ import { defineConfig } from 'vite'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'node:path'
 
+const firmsProxy = {
+  '/firms-api': {
+    target: 'http://127.0.0.1:8000',
+    rewrite: (requestPath: string) => requestPath.replace(/^\/firms-api/, ''),
+  },
+}
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: { '@': path.resolve(import.meta.dirname, './src') },
   },
+  server: { proxy: firmsProxy },
+  preview: { proxy: firmsProxy },
 })

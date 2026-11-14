@@ -12,10 +12,9 @@ import { MantineProvider } from '@mantine/core'
 import {
   ArrowsClockwiseIcon,
   BookmarkSimpleIcon,
-  CalendarDotsIcon,
+  CameraIcon,
   CaretLeftIcon,
   CaretRightIcon,
-  CameraIcon,
   CornersInIcon,
   CornersOutIcon,
   CrosshairIcon,
@@ -39,13 +38,14 @@ import {
 import { MeasurementPanel } from '@/components/MeasurementPanel'
 import { AnalysisPanel } from '@/components/AnalysisPanel'
 import { analysisReducer, initialAnalysisState } from '@/lib/analysis-state'
+import { utcToday, type AnalysisRange } from '@/lib/analysis-activity'
 import { useAnalysisCountrySelection } from '@/hooks/use-analysis-country-selection'
+import { useAnalysisFires } from '@/hooks/use-analysis-fires'
 import { CapturePanel } from '@/components/CapturePanel'
 import { CaptureSelection } from '@/components/CaptureSelection'
 import { LocationNameDialog } from '@/components/LocationNameDialog'
 import { MapCredits } from '@/components/MapCredits'
 import { resolveLocationCountry } from '@/lib/country-lookup'
-import { selectedDataDate } from '@/lib/data-date'
 import { readShareHash, writeShareHash, type SharedCoordinates } from '@/lib/share-hash'
 import {
   DEFAULT_MAP_BACKGROUND,
@@ -74,9 +74,7 @@ import {
 import type { EarthMapHandle, MapCameraState } from '@/components/EarthMap'
 import { Button } from '@/components/ui/button'
 import { ButtonGroup } from '@/components/ui/button-group'
-import { Calendar } from '@/components/ui/calendar'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Separator } from '@/components/ui/separator'
 import {
   Sidebar,
@@ -90,7 +88,6 @@ import {
   SidebarTrigger,
   useSidebar,
 } from '@/components/ui/sidebar'
-import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import './App.css'
 import './components/sidebar.css'
@@ -100,7 +97,6 @@ const EarthMap = lazy(() =>
 )
 
 const LAYER_STORAGE_KEY = 'ethereal-map-layers-v1'
-type DatePeriod = '24 hours' | '7 days' | '30 days'
 function layerPreference(name: string) {
   try {
     return JSON.parse(localStorage.getItem(LAYER_STORAGE_KEY) ?? '{}')?.[name] !== false
@@ -387,15 +383,6 @@ function ToolButton({
   )
 }
 
-function formatDate(value: Date | undefined) {
-  if (!value) return 'Choose date'
-  return new Intl.DateTimeFormat('en-GB', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-  }).format(value)
-}
-
 function App() {
   const [initialCoordinates] = useState(() => readShareHash(window.location.hash))
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
@@ -405,12 +392,15 @@ function App() {
       return 'light'
     }
   })
-  const [date, setDate] = useState<Date | undefined>(() => new Date())
-  const [calendarMonth, setCalendarMonth] = useState(() => new Date())
-  const [period, setPeriod] = useState<DatePeriod>('24 hours')
   const [activeNav, setActiveNav] = useState('Saved locations')
   const [analysis, dispatchAnalysis] = useReducer(analysisReducer, initialAnalysisState)
+  const [analysisRange, setAnalysisRange] = useState<AnalysisRange>(() => {
+    const today = utcToday()
+    return { start: today, end: today }
+  })
+  const [activityGeneration, setActivityGeneration] = useState(0)
   const analysisOpen = activeNav === 'Analysis'
+  const fires = useAnalysisFires(analysisOpen ? analysis.confirmed : null, analysisRange)
   const countrySelection = useAnalysisCountrySelection(analysisOpen, analysis, dispatchAnalysis)
   const [camera, setCamera] = useState<MapCameraState>({
     ready: false,
@@ -736,77 +726,6 @@ function App() {
             <DestinationSearch onSelect={selectDestination} />
 
             <div className="header-actions">
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="date-control"
-                    aria-label="Choose reference date and time range"
-                  >
-                    <CalendarDotsIcon size={16} weight="regular" />
-                    <span className="date-label">{formatDate(date)}</span>
-                    <span className="date-divider">·</span>
-                    <span className="period-label">{period}</span>
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent
-                  align="center"
-                  side="bottom"
-                  collisionPadding={8}
-                  className="date-popover"
-                >
-                  <Calendar
-                    mode="single"
-                    fixedWeeks
-                    selected={date}
-                    month={calendarMonth}
-                    onMonthChange={setCalendarMonth}
-                    onSelect={(selected) => {
-                      setDate(selected)
-                      if (selected) setCalendarMonth(selected)
-                    }}
-                    timeZone={Intl.DateTimeFormat().resolvedOptions().timeZone}
-                    className="calendar-picker"
-                  />
-                  <Separator className="date-range-divider" />
-                  <div className="date-range-actions">
-                    <ToggleGroup
-                      type="single"
-                      className="date-range-options"
-                      value={period}
-                      onValueChange={(value) => {
-                        if (value === '24 hours' || value === '7 days' || value === '30 days')
-                          setPeriod(value)
-                      }}
-                      aria-label="Time range"
-                    >
-                      {[
-                        ['24 hours', '24h'],
-                        ['7 days', '7d'],
-                        ['30 days', '30d'],
-                      ].map(([value, label]) => (
-                        <ToggleGroupItem key={value} value={value} aria-label={value}>
-                          {label}
-                        </ToggleGroupItem>
-                      ))}
-                    </ToggleGroup>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="date-reset"
-                      onClick={() => {
-                        const today = new Date()
-                        setDate(today)
-                        setCalendarMonth(today)
-                      }}
-                    >
-                      Today
-                    </Button>
-                  </div>
-                </PopoverContent>
-              </Popover>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
@@ -888,6 +807,7 @@ function App() {
                     dispatchAnalysis({ type: 'edit' })
                   }}
                   onConfirm={() => {
+                    setActivityGeneration((current) => current + 1)
                     countrySelection.setPicking(false)
                     dispatchAnalysis({ type: 'confirm' })
                   }}
@@ -898,6 +818,13 @@ function App() {
                     countrySelection.cancel()
                     setActiveNav('Saved locations')
                   }}
+                  range={analysisRange}
+                  generation={activityGeneration}
+                  onRangeChange={setAnalysisRange}
+                  fireStatus={fires.status}
+                  fireCount={fires.count}
+                  fireMessage={fires.message}
+                  onRetryFires={fires.retry}
                 />
               )}
               <main
@@ -938,7 +865,11 @@ function App() {
                         setShareRevision((current) => current + 1)
                       }, 0)
                     }}
-                    dataDate={selectedDataDate(date)}
+                    dataDate={analysisRange.end}
+                    fires={fires.features}
+                    fireStatus={fires.status}
+                    fireMessage={fires.message}
+                    onRetryFires={fires.retry}
                     referenceLayers={referenceLayers}
                     onReferenceChange={changeReferenceLayer}
                     showSpace={showSpace}
