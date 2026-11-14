@@ -12,12 +12,22 @@ import { CurrentLocationButton, DestinationSearch } from '@/components/Destinati
 import { ButtonGroup } from '@/components/ui/button-group'
 import type { EarthMapHandle, MapCameraState } from '@/components/EarthMap'
 import type { LocationTarget } from '@/lib/locations' 
+import { MapCredits } from '@/components/MapCredits'
+import { selectedDataDate } from '@/lib/data-date'
+import { DEFAULT_MAP_BACKGROUND, DEFAULT_REFERENCE_LAYERS, isMapBackground, type MapBackground, type MapReferenceLayers } from '@/map/basemaps' 
 import './App.css'
 import './components/sidebar.css'
 
 type DatePeriod = '24 hours' | '7 days' | '30 days'
 const mantineTheme = { fontFamily: '"Fira Sans", sans-serif', fontFamilyMonospace: '"Fira Sans", sans-serif' }
 const EarthMap = lazy(() => import('@/components/EarthMap').then((module) => ({ default: module.EarthMap })))
+const LAYER_STORAGE_KEY = 'ethereal-map-layers-v1'
+function loadReferenceLayers(): MapReferenceLayers {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LAYER_STORAGE_KEY) ?? '{}')
+    return { ...DEFAULT_REFERENCE_LAYERS, ...Object.fromEntries(Object.keys(DEFAULT_REFERENCE_LAYERS).filter((key) => typeof saved[key] === 'boolean').map((key) => [key, saved[key]])) }
+  } catch { return { ...DEFAULT_REFERENCE_LAYERS } }
+}
 
 function ExplorerSidebar() {
   const { open, setOpen, isMobile, openMobile, setOpenMobile } = useSidebar()
@@ -31,7 +41,7 @@ function ExplorerSidebar() {
     <SidebarContent>{expanded && <section className="sidebar-help" aria-label="Instructions" tabIndex={0}>
       <span className="sidebar-help-kicker">EXPLORER GUIDE</span><h2>Explore Earth</h2>
       <p>Choose a reference date and time range using the calendar. Today returns the reference date to the current day. Switch between light and dark themes using the top-right control.</p>
-      <p>Left-drag to explore Earth and scroll or pinch to zoom. Switch between Globe and Map using the upper-left control. Search for a country, city or coordinates, use your current location, or reset the map using the bottom toolbar.</p>
+      <p>Left-drag to explore Earth and scroll or pinch to zoom. Switch between Globe and Map using the upper-left control. Search for a country, city or coordinates, use your current location, or reset the map using the bottom toolbar.</p><p>Open Map &amp; layers at the upper-right to choose a base map, geographic reference layers, context overlays or the star-map background. Hover over Earth to inspect coordinates. The scale bars display both kilometers and miles.</p><MapCredits />
     </section>}</SidebarContent>
     <SidebarFooter><SidebarMenu><SidebarMenuItem><SidebarMenuButton className="rail-button" aria-label="Instructions" onClick={openGuide}><InfoIcon size={20} /><span className="sidebar-item-label">Instructions</span></SidebarMenuButton></SidebarMenuItem></SidebarMenu></SidebarFooter>
   </Sidebar>
@@ -58,12 +68,28 @@ function App() {
     setDestination(location)
     setNavigationRequest((current) => current + 1)
   }
+  const [referenceLayers, setReferenceLayers] = useState<MapReferenceLayers>(loadReferenceLayers)
+  const [background, setBackground] = useState<MapBackground>(() => {
+    try { const saved = localStorage.getItem('ethereal-map-background-v1'); return isMapBackground(saved) ? saved : DEFAULT_MAP_BACKGROUND }
+    catch { return DEFAULT_MAP_BACKGROUND }
+  })
+  const [showSpace, setShowSpace] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(LAYER_STORAGE_KEY) ?? '{}').space !== false }
+    catch { return true }
+  })
   useEffect(() => {
     document.documentElement.dataset.theme = theme
     try { localStorage.setItem('wildfire-theme', theme) }
     catch { /* The selected theme still works without browser storage. */ }
   }, [theme])
-  
+  useEffect(() => {
+    try { localStorage.setItem(LAYER_STORAGE_KEY, JSON.stringify({ ...referenceLayers, space: showSpace })) }
+    catch { /* Layer choices still work for this session. */ }
+  }, [referenceLayers, showSpace])
+  useEffect(() => {
+    try { localStorage.setItem('ethereal-map-background-v1', background) }
+    catch { /* Background choices still work for this session. */ }
+  }, [background])
 
   return <MantineProvider theme={mantineTheme} forceColorScheme={theme}><TooltipProvider>
     <div className="app-shell">
@@ -89,7 +115,7 @@ function App() {
       </header>
       <SidebarProvider defaultOpen={false} className="app-body"><ExplorerSidebar />
         <main className="explorer-stage" aria-label="Global Earth explorer">
-          <Suspense fallback={<div className="map-loading" role="status">Loading map…</div>}><EarthMap ref={mapRef} destination={destination} navigationRequest={navigationRequest} onCameraChange={setCamera}  /></Suspense>
+          <Suspense fallback={<div className="map-loading" role="status">Loading map…</div>}><EarthMap ref={mapRef} destination={destination} navigationRequest={navigationRequest} onCameraChange={setCamera} dataDate={selectedDataDate(date)} referenceLayers={referenceLayers} onReferenceChange={(key, value) => setReferenceLayers((current) => ({ ...current, [key]: value }))} background={background} onBackgroundChange={setBackground} showSpace={showSpace} onSpaceChange={setShowSpace} /></Suspense>
           <div className="globe-tools"><div className="bottom-toolbar" aria-label="Globe tools"><ButtonGroup>
             <Button variant="ghost" size="icon" className="toolbar-button" aria-label="Zoom in" disabled={!camera.ready || camera.zoom >= camera.maxZoom} onClick={() => mapRef.current?.zoomBy(1)}><PlusIcon size={19} /></Button>
             <Button variant="ghost" size="icon" className="toolbar-button" aria-label="Zoom out" disabled={!camera.ready || camera.zoom <= camera.minZoom + 0.001} onClick={() => mapRef.current?.zoomBy(-1)}><MinusIcon size={19} /></Button>

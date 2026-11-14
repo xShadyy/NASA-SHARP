@@ -1,0 +1,55 @@
+.background-selector.ui-toggle-group {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: stretch;
+  min-width: 0;
+  gap: 3px;
+}
+
+.background-selector .background-selector-option.ui-toggle-group-item {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex: none;
+  gap: 9px;
+  width: 100%;
+  min-width: 0;
+  height: 44px;
+  min-height: 44px;
+  padding: 3px 7px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font: 400 12px 'Fira Sans', sans-serif;
+  cursor: pointer;
+}
+
+.background-selector .background-selector-option.ui-toggle-group-item[data-state='on'] {
+  border-color: var(--contrast);
+  background: var(--contrast);
+  color: var(--contrast-foreground);
+  font-weight: 400;
+}
+
+.background-selector .background-selector-option.ui-toggle-group-item[data-state='on']:is(:hover, :focus-visible) {
+  background: var(--contrast);
+  color: var(--contrast-foreground);
+  box-shadow: none;
+}
+
+.background-selector .background-selector-option.ui-toggle-group-item:not([data-state='on'], :disabled):is(:hover, :focus-visible) {
+  border-color: var(--contrast);
+  background: transparent;
+  color: var(--text);
+  box-shadow: none;
+}
+
+.background-selector-option:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.background-selector-option:disabled { cursor: default; opacity: .5; }
+.background-selector-name { flex: 1; min-width: 0; }
+.background-selector-indicator { display: grid; flex: none; place-items: center; width: 15px; height: 15px; border: 1px solid currentColor; border-radius: 50%; }
+.background-selector-indicator > svg { flex: none; }
+.background-selector-preview { display: block; flex: none; width: 36px; height: 36px; border: 1px solid var(--border-strong); border-radius: 50%; object-fit: cover; pointer-events: none; user-select: none; }

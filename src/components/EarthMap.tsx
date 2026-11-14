@@ -4,10 +4,14 @@ import mapWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
 import { GlobeHemisphereWestIcon, MapTrifoldIcon } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { applyLayerVisibility, createEarthStyle, DEFAULT_MAP_BACKGROUND, DEFAULT_REFERENCE_LAYERS, registerGeographicImages } from '@/map/basemaps'
+import { applyLayerVisibility, createEarthStyle, registerGeographicImages, getReferenceLayerAvailability, type MapBackground, type MapReferenceLayers, type ReferenceLayerAvailability } from '@/map/basemaps'
 import { createProjectionController, HOME_CENTER, MIN_ZOOM, maximumZoomForView, minimumZoomForView, overviewZoom, setMapView, type MapView, type ProjectionController } from '@/map/projection'
 import type { LocationTarget } from '@/lib/locations'
-
+import { MapLayersControl } from '@/components/LayerSettings'
+import { createNonFireOverlayController, type OverlayStatus } from '@/map/non-fire-overlays'
+import { createGraticuleController } from '@/map/graticule'
+import { createScaleBar } from '@/map/scale-bar'
+import { createSkyBackgroundLayer, SKY_BACKGROUND_LAYER_ID } from '@/map/sky-background' 
 import 'maplibre-gl/dist/maplibre-gl.css'
 import './EarthMap.css'
 
@@ -18,12 +22,18 @@ type EarthMapProps = {
   destination: LocationTarget | null
   navigationRequest: number
   onCameraChange: (camera: MapCameraState) => void
-  
+  dataDate: string | null
+  referenceLayers: MapReferenceLayers
+  onReferenceChange: (key: keyof MapReferenceLayers, value: boolean) => void
+  background: MapBackground
+  onBackgroundChange: (background: MapBackground) => void
+  showSpace: boolean
+  onSpaceChange: (visible: boolean) => void
 }
 
 setWorkerUrl(mapWorkerUrl)
 
-export function EarthMap({ ref, destination, navigationRequest, onCameraChange }: EarthMapProps) {
+export function EarthMap({ ref, destination, navigationRequest, onCameraChange, dataDate, referenceLayers, onReferenceChange, background, onBackgroundChange, showSpace, onSpaceChange }: EarthMapProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<MapLibreMap | null>(null)
   const projectionRef = useRef<ProjectionController | null>(null)
@@ -33,7 +43,14 @@ export function EarthMap({ ref, destination, navigationRequest, onCameraChange }
   const [view, setView] = useState<MapView>('globe')
   const [ready, setReady] = useState(false)
   const [notice, setNotice] = useState('')
-  
+  const settingsRef = useRef({ referenceLayers, background, showSpace, dataDate })
+  const graticuleRef = useRef<ReturnType<typeof createGraticuleController> | null>(null)
+  const overlaysRef = useRef<ReturnType<typeof createNonFireOverlayController> | null>(null)
+  const skyRef = useRef<ReturnType<typeof createSkyBackgroundLayer> | null>(null)
+  const scaleRef = useRef<ReturnType<typeof createScaleBar> | null>(null)
+  const scaleOutputRef = useRef<HTMLOutputElement>(null)
+  const [overlayStatus, setOverlayStatus] = useState<OverlayStatus>({})
+  const [availability, setAvailability] = useState<ReferenceLayerAvailability | null>(null)
   const reportCamera = useEffectEvent(() => {
     const map = mapRef.current
     if (!map) return
@@ -43,10 +60,18 @@ export function EarthMap({ ref, destination, navigationRequest, onCameraChange }
   const syncLayers = useEffectEvent(() => {
     const map = mapRef.current
     if (!map) return
-    applyLayerVisibility(map, { ...DEFAULT_REFERENCE_LAYERS, background: DEFAULT_MAP_BACKGROUND, view: viewRef.current })
-    
+    applyLayerVisibility(map, { ...settingsRef.current.referenceLayers, background: settingsRef.current.background, view: viewRef.current })
+    const settings = settingsRef.current
+    graticuleRef.current?.setEnabled(settings.referenceLayers.showGraticule)
+    skyRef.current?.setVisible(settings.showSpace)
+    overlaysRef.current?.set(settings.referenceLayers, settings.dataDate)
+    const next = getReferenceLayerAvailability(map)
+    setAvailability((current) => JSON.stringify(current) === JSON.stringify(next) ? current : next)
   })
-  
+  useEffect(() => {
+    settingsRef.current = { referenceLayers, background, showSpace, dataDate }
+    if (ready) syncLayers()
+  }, [referenceLayers, background, showSpace, dataDate, ready])
   useImperativeHandle(ref, () => ({
     zoomBy(delta) {
       const map = mapRef.current
@@ -89,7 +114,13 @@ export function EarthMap({ ref, destination, navigationRequest, onCameraChange }
           if (!active) return
           registerGeographicImages(current)
           setMapView(current, viewRef.current)
-          
+          const settings = settingsRef.current
+          const sky = createSkyBackgroundLayer({ visible: settings.showSpace, onError: () => { if (active) setNotice('The star map could not load.') }, onReady: () => { if (active) setNotice((current) => current === 'The star map could not load.' ? '' : current) } })
+          skyRef.current = sky
+          if (!current.getLayer(SKY_BACKGROUND_LAYER_ID)) current.addLayer(sky, current.getStyle().layers?.[0]?.id)
+          graticuleRef.current = createGraticuleController(current, () => viewRef.current, settings.referenceLayers.showGraticule)
+          overlaysRef.current = createNonFireOverlayController(current, (status) => { if (active) setOverlayStatus(status) })
+          if (scaleOutputRef.current) scaleRef.current = createScaleBar(current, scaleOutputRef.current, () => viewRef.current)
           syncLayers()
           setReady(true)
           reportCamera()
@@ -118,7 +149,13 @@ export function EarthMap({ ref, destination, navigationRequest, onCameraChange }
       observer?.disconnect()
       markerRef.current?.remove()
       markerRef.current = null
-      
+      graticuleRef.current?.destroy()
+      overlaysRef.current?.destroy()
+      scaleRef.current?.destroy()
+      graticuleRef.current = null
+      overlaysRef.current = null
+      scaleRef.current = null
+      skyRef.current = null
       map?.remove()
       mapRef.current = null
       projectionRef.current = null
@@ -151,8 +188,8 @@ export function EarthMap({ ref, destination, navigationRequest, onCameraChange }
     viewRef.current = next
     setView(next)
     projectionRef.current?.setView(next)
-    
-    applyLayerVisibility(map, { ...DEFAULT_REFERENCE_LAYERS, background: DEFAULT_MAP_BACKGROUND, view: next })
+    graticuleRef.current?.refresh(); scaleRef.current?.refresh()
+    applyLayerVisibility(map, { ...settingsRef.current.referenceLayers, background: settingsRef.current.background, view: next })
     const center = map.getCenter().wrap()
     onCameraChange({ ready: true, zoom: map.getZoom(), minZoom: minimumZoomForView(map, next), maxZoom: map.getMaxZoom(), longitude: center.lng, latitude: center.lat, view: next })
   }
@@ -163,7 +200,8 @@ export function EarthMap({ ref, destination, navigationRequest, onCameraChange }
       <ToggleGroupItem value="globe" aria-label="Globe"><GlobeHemisphereWestIcon size={16} />Globe</ToggleGroupItem>
       <ToggleGroupItem value="map" aria-label="Map"><MapTrifoldIcon size={16} />Map</ToggleGroupItem>
     </ToggleGroup></div>
-    
+    <div className="map-background-control"><MapLayersControl overlayStatus={overlayStatus} onOverlayRetry={() => overlaysRef.current?.retry()} background={background} onBackgroundChange={onBackgroundChange} referenceLayers={referenceLayers} onReferenceChange={onReferenceChange} availability={availability} showSpace={showSpace} onSpaceChange={onSpaceChange} /></div>
+    <output ref={scaleOutputRef} className="map-scale-bar" aria-live="off" aria-label="Local map scales in kilometers and miles" hidden />
     <output ref={coordinatesRef} className="map-coordinates" aria-label="Hovered coordinates" hidden />
     {notice && <div className="map-status" role="status"><p>{notice}</p><Button variant="outline" size="sm" onClick={() => window.location.reload()}>Reload</Button></div>}
   </section>
