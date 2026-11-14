@@ -23,6 +23,9 @@ import {
 import { createNonFireOverlayController, type OverlayStatus } from '@/map/non-fire-overlays'
 import { createGraticuleController } from '@/map/graticule'
 import { createScaleBar } from '@/map/scale-bar'
+import { createAnalysisController, type AnalysisController } from '@/map/analysis-controller'
+import type { AnalysisState } from '@/lib/analysis-state'
+import type { AnalysisArea } from '@/lib/analysis-area'
 import {
   createMeasurementController,
   type MeasurementController,
@@ -72,6 +75,7 @@ export type MapCameraState = {
   view: MapView
 }
 export type EarthMapHandle = {
+  finishAnalysisDrawing: () => void
   zoomBy: (delta: number) => void
   resetView: () => void
   undoMeasurement: () => void
@@ -84,6 +88,11 @@ export type EarthMapHandle = {
 }
 
 type EarthMapProps = {
+  analysis: AnalysisState
+  analysisOpen: boolean
+  onAnalysisChange: (area: AnalysisArea | null, error: string | null, vertices: number) => void
+  onAnalysisFinish: (area: AnalysisArea, error: string | null) => void
+  onAnalysisCancel: () => void
   ref: Ref<EarthMapHandle>
   initialView: MapView
   initialCoordinates: SharedCoordinates | null
@@ -145,6 +154,11 @@ setWorkerUrl(mapWorkerUrl)
 
 export function EarthMap({
   ref,
+  analysis,
+  analysisOpen,
+  onAnalysisChange,
+  onAnalysisFinish,
+  onAnalysisCancel,
   initialView,
   initialCoordinates,
   sharedNavigation,
@@ -175,6 +189,11 @@ export function EarthMap({
   const mapRef = useRef<MapLibreMap | null>(null)
   const projectionRef = useRef<ProjectionController | null>(null)
   const measurementsRef = useRef<MeasurementController | null>(null)
+  const analysisRef = useRef<AnalysisController | null>(null)
+  const analysisFitRef = useRef(-1)
+  const reportAnalysisChange = useEffectEvent(onAnalysisChange)
+  const reportAnalysisFinish = useEffectEvent(onAnalysisFinish)
+  const reportAnalysisCancel = useEffectEvent(onAnalysisCancel)
   const skyRef = useRef<ReturnType<typeof createSkyBackgroundLayer> | null>(null)
   const graticuleRef = useRef<ReturnType<typeof createGraticuleController> | null>(null)
   const coordinatesRef = useRef<HTMLOutputElement>(null)
@@ -221,6 +240,38 @@ export function EarthMap({
   const [fatal, setFatal] = useState(false)
 
   useEffect(() => {
+    if (!mapInstance) return
+    const controller = createAnalysisController(mapInstance, {
+      onChange: (area, error, vertices) => reportAnalysisChange(area, error, vertices),
+      onFinish: (area, error) => reportAnalysisFinish(area, error),
+      onCancel: () => reportAnalysisCancel(),
+      getView: () => viewRef.current,
+      markNavigated: () => {
+        interactedRef.current = true
+        projectionRef.current?.markNavigated()
+      },
+    })
+    analysisRef.current = controller
+    analysisFitRef.current = -1
+    return () => {
+      controller.destroy()
+      analysisRef.current = null
+    }
+  }, [mapInstance])
+
+  useEffect(() => {
+    const controller = analysisRef.current
+    if (!controller) return
+    const area = analysis.draft && !analysis.error ? analysis.draft : analysis.confirmed
+    controller.setArea(area)
+    controller.configure(analysis, analysisOpen)
+    if (area && analysis.fitRequest !== analysisFitRef.current) {
+      analysisFitRef.current = analysis.fitRequest
+      controller.fit(area)
+    }
+  }, [analysis, analysisOpen, mapInstance])
+
+  useEffect(() => {
     dataDateRef.current = dataDate
     overlaysRef.current?.set(referenceLayers, dataDate)
   }, [referenceLayers, dataDate, ready])
@@ -255,6 +306,9 @@ export function EarthMap({
   ])
 
   useImperativeHandle(ref, () => ({
+    finishAnalysisDrawing() {
+      analysisRef.current?.finish()
+    },
     zoomBy(delta) {
       interactedRef.current = true
       projectionRef.current?.markNavigated()
@@ -418,6 +472,10 @@ export function EarthMap({
         })
         currentMap.on('contextmenu', (event: MapMouseEvent) => {
           event.preventDefault()
+          if (analysisRef.current?.isDrawing()) {
+            analysisRef.current.finish()
+            return
+          }
           if (measurementsRef.current?.cancelDrawing()) return
           const original = event.originalEvent
           const rect = currentMap.getCanvas().getBoundingClientRect()
@@ -595,6 +653,8 @@ export function EarthMap({
       mapRef.current = null
       projectionRef.current = null
       measurementsRef.current?.destroy()
+      analysisRef.current?.destroy()
+      analysisRef.current = null
       measurementsRef.current = null
       graticuleRef.current?.destroy()
       graticuleRef.current = null
