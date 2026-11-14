@@ -11,6 +11,11 @@ export type CaptureSettings = {
   scalebar: boolean
 }
 
+export type CaptureResult = {
+  preview: Blob
+  image: Blob
+}
+
 /** CSS pixels measured from the map container's top-left corner. */
 export type CaptureRegion = { x: number, y: number, width: number, height: number }
 
@@ -203,7 +208,16 @@ function drawGeographicOverlays(context: CanvasRenderingContext2D, map: MapLibre
   }
 }
 
-function prepareAnnotations(map: MapLibreMap, context: CanvasRenderingContext2D, region: CaptureRegion, settings: CaptureSettings, scale: ReturnType<typeof localScale>, capturedAt: Date, includeSkyCredit: boolean) {
+function annotate(
+  map: MapLibreMap,
+  context: CanvasRenderingContext2D,
+  region: CaptureRegion,
+  settings: CaptureSettings,
+  scale: ReturnType<typeof localScale>,
+  capturedAt: Date,
+  includeSkyCredit: boolean,
+  measureOnly = false,
+) {
   const width = region.width
   const compact = width < 420
   const fontSize = compact ? 9 : 11
@@ -216,65 +230,129 @@ function prepareAnnotations(map: MapLibreMap, context: CanvasRenderingContext2D,
   const credits = [BASE_CREDITS,
     ...(nasaVisible ? ['NASA GIBS · Blue Marble / NASA Earth Observatory'] : []),
     ...overlayCredits,
-    ...(map.getZoom() >= 4 && map.getLayer('context-protected-areas') && map.getLayoutProperty('context-protected-areas', 'visibility') !== 'none' && map.getSource(WDPA_SOURCE) ? [WDPA_CAPTURE_CREDIT] : []),
-    ...(map.getLayer('context-volcanoes') && map.getLayoutProperty('context-volcanoes', 'visibility') !== 'none' && map.getSource(VOLCANO_SOURCE) ? ['Smithsonian / GVP · Volcanoes of the World v5.4.0 (Venzke, 2026)'] : []),
-    ...(includeSkyCredit ? [SKY_BACKGROUND_CAPTURE_CREDIT] : [])]
-    .flatMap((credit) => wrappedLines(context, credit, Math.max(12, width - padding * 2)))
-  const footerLines = [...(settings.timestamp ? [capturedAt.toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' UTC')] : []), ...credits]
-  const tailPadding = padding * 0.75
-  const scaleHeight = settings.scalebar && scale ? lineHeight + 20 : 0
-  const footerHeight = footerLines.length * lineHeight + tailPadding * 2 + scaleHeight
-  const titleHeight = settings.header ? compact ? 29 : 36 : 0
-
-  return { titleHeight, footerHeight, draw(context: CanvasRenderingContext2D, footerY: number) {
-    context.fillStyle = '#05122d'
-    context.fillRect(0, footerY, width, footerHeight)
+    ...(map.getZoom() >= 4 &&
+    map.getLayer('context-protected-areas') &&
+    map.getLayoutProperty('context-protected-areas', 'visibility') !== 'none' &&
+    map.getSource(WDPA_SOURCE)
+      ? [WDPA_CAPTURE_CREDIT]
+      : []),
+    ...(map.getLayer('context-volcanoes') &&
+    map.getLayoutProperty('context-volcanoes', 'visibility') !== 'none' &&
+    map.getSource(VOLCANO_SOURCE)
+      ? ['Smithsonian / GVP · Volcanoes of the World v5.4.0 (Venzke, 2026)']
+      : []),
+    ...(includeSkyCredit ? [SKY_BACKGROUND_CAPTURE_CREDIT] : []),
+  ].flatMap((credit) => wrappedLines(context, credit, Math.max(12, width - padding * 2)))
+  context.font = `700 ${compact ? 13 : 17}px "Fira Sans", sans-serif`
+  const titleLines = settings.header
+    ? wrappedLines(
+        context,
+        'SHARP - Satellite Harmonization and Activity Records Platform',
+        Math.max(12, width - padding * 2),
+      )
+    : []
+  context.font = `400 ${fontSize}px "Fira Sans", sans-serif`
+  const footerLines = [
+    ...(settings.timestamp
+      ? [
+          capturedAt
+            .toISOString()
+            .replace('T', ' ')
+            .replace(/\.\d+Z$/, ' UTC'),
+        ]
+      : []),
+    ...credits,
+  ]
+  const titleLineHeight = compact ? 17 : 21
+  const headerHeight = titleLines.length ? titleLines.length * titleLineHeight + padding * 2 : 0
+  const footerHeight = footerLines.length * lineHeight + padding * 2
+  if (measureOnly) return { headerHeight, footerHeight }
+  const style = getComputedStyle(container)
+  const background = style.getPropertyValue('--surface').trim() || '#05122d'
+  const foreground = style.getPropertyValue('--text').trim() || '#fff'
+  context.save()
+  context.translate(0, -headerHeight)
+  context.fillStyle = background
+  context.fillRect(0, 0, width, headerHeight)
+  context.restore()
+  context.fillStyle = background
+  context.fillRect(0, height, width, footerHeight)
+  context.fillStyle = foreground
+  context.textBaseline = 'top'
+  context.font = `700 ${compact ? 13 : 17}px "Fira Sans", sans-serif`
+  titleLines.forEach((line, index) =>
+    context.fillText(
+      line,
+      padding,
+      -headerHeight + padding + index * titleLineHeight,
+      width - padding * 2,
+    ),
+  )
+  context.font = `400 ${fontSize}px "Fira Sans", sans-serif`
+  footerLines.forEach((line, index) =>
+    context.fillText(line, padding, height + padding + index * lineHeight, width - padding * 2),
+  )
+  if (settings.scalebar && scale && height > 55) {
+    const y = height - 13
+    context.save()
     context.fillStyle = '#fff'
-    context.textBaseline = 'top'
-    context.font = `400 ${fontSize}px "Fira Sans", sans-serif`
-    const textWidth = width - padding * 2
-    footerLines.forEach((line, index) => {
-      context.fillText(line, padding, footerY + tailPadding + index * lineHeight, textWidth)
-    })
-    if (settings.header) {
-      context.fillStyle = '#05122d'
-      context.fillRect(0, 0, width, titleHeight)
-      context.fillStyle = '#fff'
-      const titleFontSize = compact ? 13 : 17
-      context.font = `700 ${titleFontSize}px "Fira Sans", sans-serif`
-      context.fillText('Ethereal · Earth explorer', padding, (titleHeight - titleFontSize) / 2, textWidth)
-    }
-    if (scaleHeight && scale) {
-      const labelY = footerY + tailPadding + footerLines.length * lineHeight
-      const barY = labelY + lineHeight + 11
-      context.font = `400 ${fontSize}px "Fira Sans", sans-serif`
-      context.fillText(`${scale.label} · local scale`, padding, labelY, textWidth)
-      context.strokeStyle = '#fff'
-      context.lineWidth = 2
-      context.beginPath()
-      context.moveTo(padding, barY - 6)
-      context.lineTo(padding, barY)
-      context.lineTo(padding + scale.width, barY)
-      context.lineTo(padding + scale.width, barY - 6)
-      context.stroke()
-    }
-  } }
+    context.font = '400 10px "Fira Sans", sans-serif'
+    context.textAlign = 'center'
+    context.shadowColor = '#000'
+    context.shadowBlur = 2 * map.getPixelRatio()
+    context.shadowOffsetY = map.getPixelRatio()
+    context.fillText(scale.label, padding + 3 + scale.width / 2, y - 20)
+    context.strokeStyle = '#fff'
+    context.lineWidth = 2
+    context.beginPath()
+    context.moveTo(padding + 3, y - 8)
+    context.lineTo(padding + 3, y - 1)
+    context.lineTo(padding + 3 + scale.width, y - 1)
+    context.lineTo(padding + 3 + scale.width, y - 8)
+    context.stroke()
+    context.restore()
+  }
+  return { headerHeight, footerHeight }
 }
 
 /** Capture during MapLibre's next render, while the WebGL buffer is valid.
  * Geographic measurement layers, visible polar label fallbacks and the selected
  * pin symbol are included. Pin cards and interface panels are excluded.
  * No permanently preserved WebGL drawing buffer or extra renderer is needed. */
-export async function captureMapImage(map: MapLibreMap, settings: CaptureSettings, requested?: CaptureRegion | null): Promise<Blob> {
-  // Validate immediately and recheck against the dimensions at render time.
-  clampRegion(map, requested)
+export async function captureMapImage(
+  map: MapLibreMap,
+  settings: CaptureSettings,
+  requested?: CaptureRegion | null,
+): Promise<CaptureResult> {
+  const region = clampRegion(map, requested)
   const pins = await preparePins(map)
   await document.fonts.load('400 12px "Fira Sans"').catch(() => undefined)
   await document.fonts.load('700 17px "Fira Sans"').catch(() => undefined)
   const source = map.getCanvas()
   const output = document.createElement('canvas')
+  output.width = Math.max(1, Math.round(region.width * ratioX))
+  output.height = Math.max(1, Math.round(region.height * ratioY))
+  const preview = document.createElement('canvas')
+  preview.width = output.width
+  preview.height = output.height
+  const previewContext = preview.getContext('2d')
   const context = output.getContext('2d')
-  if (!context) throw new Error('Your browser could not create an image. Please try again.')
+  if (!context || !previewContext)
+    throw new Error('Your browser could not create an image. Please try again.')
+  const scale = settings.scalebar ? localScale(map, region) : null
+  const capturedAt = new Date()
+  const includeSkyCredit = skyBackgroundVisible(map)
+  const { headerHeight, footerHeight } = annotate(
+    map,
+    context,
+    region,
+    settings,
+    scale,
+    capturedAt,
+    includeSkyCredit,
+    true,
+  )
+  output.height = Math.max(1, Math.ceil((headerHeight + region.height + footerHeight) * ratioY))
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => {
       map.off('render', snapshot)
@@ -284,129 +362,57 @@ export async function captureMapImage(map: MapLibreMap, settings: CaptureSetting
       clearTimeout(timer)
       map.off('render', snapshot)
       try {
-        const region = clampRegion(map, requested)
-        const ratioX = source.width / source.clientWidth
-        const ratioY = source.height / source.clientHeight
-        if (![ratioX, ratioY].every((ratio) => Number.isFinite(ratio) && ratio > 0)) {
-          throw new Error('The map is not visible. Open the map and try again.')
-        }
-        const imageWidth = Math.max(1, Math.round(region.width * ratioX))
-        const imageHeight = Math.max(1, Math.round(region.height * ratioY))
-        const outputRatioX = imageWidth / region.width
-        const outputRatioY = imageHeight / region.height
-        const scale = settings.scalebar ? localScale(map, region) : null
-        const annotations = prepareAnnotations(map, context!, region, settings, scale, new Date(), skyBackgroundVisible(map))
-        const headerPixels = Math.ceil(annotations.titleHeight * outputRatioY)
-        const footerPixels = Math.ceil(annotations.footerHeight * outputRatioY)
-        output.width = imageWidth
-        output.height = headerPixels + imageHeight + footerPixels
-        context!.fillStyle = '#05122d'
-        context!.fillRect(0, 0, output.width, output.height)
-
-        context!.save()
-        context!.translate(0, headerPixels)
-        context!.scale(outputRatioX, outputRatioY)
-        context!.beginPath()
-        context!.rect(0, 0, region.width, region.height)
-        context!.clip()
-        context!.fillStyle = '#000'
-        context!.fillRect(0, 0, region.width, region.height)
-        context!.drawImage(source, region.x * ratioX, region.y * ratioY, region.width * ratioX, region.height * ratioY, 0, 0, region.width, region.height)
-        drawGeographicOverlays(context!, map, region, pins, outputRatioX, outputRatioY)
-        context!.restore()
-
-        context!.scale(outputRatioX, outputRatioY)
-        annotations.draw(context!, (headerPixels + imageHeight) / outputRatioY)
+        previewContext!.scale(ratioX, ratioY)
+        previewContext!.fillStyle = '#000'
+        previewContext!.fillRect(0, 0, region.width, region.height)
+        previewContext!.drawImage(
+          source,
+          region.x * ratioX,
+          region.y * ratioY,
+          region.width * ratioX,
+          region.height * ratioY,
+          0,
+          0,
+          region.width,
+          region.height,
+        )
+        drawGeographicOverlays(previewContext!, map, region, pins, ratioX, ratioY)
+        context!.scale(ratioX, ratioY)
+        context!.translate(0, headerHeight)
+        context!.drawImage(preview, 0, 0, region.width, region.height)
+        annotate(map, context!, region, settings, scale, capturedAt, includeSkyCredit)
         resolve()
       } catch (error) { reject(error) }
     }
     map.on('render', snapshot)
     map.triggerRepaint()
   })
+  const [previewBlob, image] = await Promise.all([
+    encodeCaptureImage(preview, settings.format),
+    encodeCaptureImage(output, settings.format),
+  ])
+  return { preview: previewBlob, image }
+}
+
+function encodeCaptureImage(canvas: HTMLCanvasElement, format: CaptureSettings['format']) {
   return new Promise<Blob>((resolve, reject) => {
     try {
-      output.toBlob((blob) => blob ? resolve(blob) : reject(new Error('The browser could not encode this image. Please try PNG.')), settings.format === 'png' ? 'image/png' : 'image/jpeg', 0.94)
+      canvas.toBlob(
+        (blob) =>
+          blob
+            ? resolve(blob)
+            : reject(new Error('The browser could not encode this image. Please try PNG.')),
+        format === 'png' ? 'image/png' : 'image/jpeg',
+        0.94,
+      )
     } catch (error) {
-      reject(error instanceof DOMException && error.name === 'SecurityError'
-        ? new Error('This imagery provider does not allow image export. Choose another background and try again.')
-        : error)
+      reject(
+        error instanceof DOMException && error.name === 'SecurityError'
+          ? new Error(
+              'This imagery provider does not allow image export. Choose another background and try again.',
+            )
+          : error,
+      )
     }
   })
-}
-
-function previewMapCapture(blob: Blob, filename: string): Promise<void> {
-  const dialog = document.createElement('dialog')
-  const heading = document.createElement('h2')
-  heading.textContent = 'Screenshot preview'
-  heading.style.cssText = 'margin:0;font-size:1.15rem'
-  dialog.setAttribute('aria-label', heading.textContent)
-  dialog.style.cssText = 'width:min(60rem, calc(100% - 2rem));max-height:90dvh;box-sizing:border-box;padding:1rem;border:1px solid #60708b;border-radius:.75rem;background:#101c31;color:#fff;font:inherit'
-
-  const frame = document.createElement('div')
-  frame.style.cssText = 'display:grid;place-items:center;margin:1rem 0;background:#071020;border-radius:.375rem;overflow:auto'
-  const image = document.createElement('img')
-  image.alt = 'Map screenshot with export information'
-  image.style.cssText = 'display:block;max-width:100%;max-height:65dvh;width:auto;height:auto;object-fit:contain'
-  frame.append(image)
-
-  const actions = document.createElement('div')
-  actions.style.cssText = 'display:flex;justify-content:flex-end;align-items:center;flex-wrap:wrap;gap:.75rem'
-  const cancel = document.createElement('button')
-  cancel.type = 'button'
-  cancel.autofocus = true
-  cancel.textContent = 'Cancel'
-  cancel.style.cssText = 'font:inherit;color:inherit;background:transparent;border:1px solid #8191ad;border-radius:.375rem;padding:.5rem .875rem;cursor:pointer'
-  const download = document.createElement('a')
-  download.textContent = 'Download'
-  download.download = filename
-  download.style.cssText = 'color:#fff;background:#2455a6;border-radius:.375rem;padding:.55rem .875rem;text-decoration:none'
-  actions.append(cancel, download)
-  dialog.append(heading, frame, actions)
-
-  const url = URL.createObjectURL(blob)
-  image.src = url
-  download.href = url
-  const previouslyFocused = document.activeElement
-  return new Promise<void>((resolve, reject) => {
-    const cleanup = (downloaded: boolean) => {
-      dialog.remove()
-      if (downloaded) {
-        // Give the browser time to start saving before revoking the URL.
-        setTimeout(() => URL.revokeObjectURL(url), 60_000)
-      } else {
-        URL.revokeObjectURL(url)
-      }
-      if (previouslyFocused instanceof HTMLElement && previouslyFocused.isConnected) {
-        previouslyFocused.focus({ preventScroll: true })
-      }
-    }
-
-    cancel.addEventListener('click', () => dialog.close('cancel'))
-    download.addEventListener('click', (event) => {
-      if (!event.defaultPrevented) dialog.close('download')
-    })
-    image.addEventListener('error', () => {
-      if (dialog.open) dialog.close('error')
-    })
-    dialog.addEventListener('close', () => {
-      cleanup(dialog.returnValue === 'download')
-      if (dialog.returnValue === 'error') reject(new Error('The screenshot could not be previewed. Please try again.'))
-      else resolve()
-    }, { once: true })
-
-    document.body.append(dialog)
-    try {
-      dialog.showModal()
-    } catch (error) {
-      cleanup(false)
-      reject(error)
-    }
-  })
-}
-
-export async function downloadMapCapture(map: MapLibreMap, settings: CaptureSettings, region?: CaptureRegion | null): Promise<void> {
-  const blob = await captureMapImage(map, settings, region)
-  const extension = blob.type === 'image/png' ? 'png' : settings.format
-  const filename = `ethereal-${new Date().toISOString().replace(/[:.]/g, '-')}.${extension}`
-  await previewMapCapture(blob, filename)
 }

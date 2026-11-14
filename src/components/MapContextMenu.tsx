@@ -76,7 +76,7 @@ export function MapContextMenu({
             </ContextMenuLabel>
             <ContextMenuItem onSelect={onRenameMeasurement}>
               <PencilSimpleIcon size={16} />
-              Rename measurement…
+              Rename measurement.
             </ContextMenuItem>
             <ContextMenuSub>
               <ContextMenuSubTrigger>
@@ -113,12 +113,12 @@ export function MapContextMenu({
         )}
         <ContextMenuItem disabled={!coordinates} onSelect={onSave}>
           <BookmarkSimpleIcon size={16} />
-          Save this location…
+          Save this location.
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={onCapture}>
           <CameraIcon size={16} />
-          Screenshot selection…
+          Screenshot selection.
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>

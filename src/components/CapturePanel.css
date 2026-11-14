@@ -1,5 +1,5 @@
 .draggable-panel.capture-panel {
-  width: min(360px, calc(100% - 24px));
+  width: min(400px, calc(100% - 24px));
   border-color: var(--border);
   border-radius: var(--radius-lg);
   background: var(--surface);
@@ -28,13 +28,6 @@
 
 .capture-panel .draggable-panel__content {
   padding: 0 14px 15px;
-}
-
-.capture-description {
-  margin: 0 0 15px;
-  color: var(--muted);
-  font-size: 14px;
-  line-height: 1.4;
 }
 
 .capture-form {
@@ -141,10 +134,11 @@
   font-size: 13px;
   opacity: 1;
   cursor: pointer;
+  transition: none;
 }
 
 .capture-panel .capture-download-button.ui-button:disabled {
-  opacity: 0.55;
+  opacity: 1;
   cursor: wait;
 }
 .capture-panel .capture-download-button.ui-button:not(:disabled):hover {
@@ -158,17 +152,17 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 7px;
-  margin: -3px 0 13px;
+  margin: 0 0 14px;
 }
 .capture-region-controls .ui-button {
-  height: 26px;
+  height: 30px;
   gap: 5px;
   padding: 0 7px;
-  font-size: 11px;
+  font-size: 13px;
 }
 .capture-region-controls > span {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
 }
 .capture-error {
   margin: 11px 0 0;
@@ -234,4 +228,24 @@
     align-items: center;
     gap: 8px;
   }
+}
+
+.capture-preview {
+  margin: 14px 0 0;
+}
+.capture-preview img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 220px;
+  margin-inline: auto;
+  object-fit: contain;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.capture-preview figcaption {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 13px;
 }
