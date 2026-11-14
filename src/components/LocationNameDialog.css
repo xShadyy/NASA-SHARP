@@ -1,0 +1,9 @@
+.location-name-dialog { width: min(280px, calc(100vw - 24px)); padding: 14px; gap: 10px; border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); font-family: 'Fira Sans', sans-serif; }
+.location-name-header { gap: 4px; padding-right: 21px; padding-bottom: 8px; border-bottom: 1px solid var(--brand-accent); }
+.location-name-header h2 { margin: 0; font-size: 14px; font-weight: 700; }
+.location-name-header p { margin: 0; font-size: 10px; line-height: 1.4; color: var(--muted); }
+.location-name-dialog form { display: flex; min-width: 0; flex-direction: column; gap: 6px; }
+.location-name-dialog label { font-size: 11px; font-weight: 700; }
+.location-name-dialog .ui-input { height: 32px; }
+.location-name-dialog [data-slot='dialog-footer'] { margin-top: 4px; gap: 6px; }
+.location-name-dialog .ui-dialog-close.ui-button, .location-name-dialog .ui-dialog-close.ui-button:is(:hover, :focus-visible, :active) { border: 0; color: var(--text); background: transparent; box-shadow: none; }

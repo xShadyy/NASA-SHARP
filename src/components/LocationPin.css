@@ -1,0 +1,15 @@
+.destination-marker { width: 36px; height: 36px; z-index: 4; color: var(--surface); }
+.destination-pin-symbol { display: block; color: var(--brand-accent); filter: drop-shadow(0 1px 1px #07173f) drop-shadow(0 0 2px #fff); }
+.destination-pin-card { position: absolute; top: calc(100% + 7px); left: calc(50% + var(--pin-card-offset-x, 0px)); transform: translateX(-50%); display: flex; flex-direction: column; gap: 5px; width: 304px; max-width: calc(100cqw - 24px); padding: 10px 12px 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-lg); color: var(--text); background: var(--surface); box-shadow: var(--shadow); font: 400 12px/1.35 'Fira Sans', sans-serif; cursor: auto; }
+.destination-pin-card[data-side='above'] { top: auto; bottom: calc(100% + 7px); }
+.destination-pin-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 6px; }
+.destination-pin-title strong { font-size: 13px; font-weight: 700; overflow-wrap: anywhere; }
+.destination-pin-close.ui-button { flex: none; width: 19px; height: 19px; min-height: 19px; padding: 0; border: 0; background: transparent; color: var(--text); }
+.destination-pin-close.ui-button:is(:hover, :focus-visible) { background: transparent; color: var(--text); box-shadow: none; border: 0; }
+.destination-pin-coordinate-label { color: var(--muted); font-size: 9px; }
+.destination-pin-coordinates { font-variant-numeric: tabular-nums; white-space: nowrap; font-size: 12px; }
+.destination-pin-coordinate-line { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 5px; row-gap: 2px; }
+.destination-pin-country { font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+.destination-pin-detail { color: var(--muted); font-size: 10px; }
+.destination-pin-save.ui-button { width: 100%; margin-top: 4px; height: 29px; font-size: 12px; }
+.destination-pin-save.ui-button:disabled { background: var(--contrast); color: var(--contrast-foreground); border-style: solid; }

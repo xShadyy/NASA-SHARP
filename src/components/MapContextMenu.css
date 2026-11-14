@@ -1,0 +1,17 @@
+.map-context-trigger { position: absolute; width: 0; height: 0; overflow: hidden; pointer-events: none; }
+.ui-context-menu { z-index: 120; min-width: 228px; max-width: calc(100vw - 16px); padding: 5px; border: 1px solid var(--border-strong); border-radius: var(--radius-lg); background: var(--surface); color: var(--text); font: 400 12px 'Fira Sans', sans-serif; box-shadow: var(--shadow); outline: none; }
+.ui-context-menu { max-height: min(calc(100dvh - 16px), var(--radix-context-menu-content-available-height, 100dvh)); overflow-y: auto; overscroll-behavior: contain; }
+.ui-context-menu-label { padding: 6px 8px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.ui-context-menu-item { display: flex; align-items: center; gap: 9px; min-height: 32px; padding: 6px 8px; border: 1px solid transparent; border-radius: var(--radius-md); outline: none; cursor: pointer; user-select: none; }
+.ui-context-menu-item[data-highlighted] { border-color: var(--contrast); background: transparent; }
+.ui-context-menu-item[data-disabled] { opacity: .4; pointer-events: none; }
+.ui-context-menu-item > svg { flex: none; }
+.ui-context-menu-separator { height: 1px; margin: 5px 3px; background: var(--border); }
+.ui-context-menu-sub-arrow { margin-left: auto; }
+.ui-context-menu-sub-content { min-width: 180px; }
+.ui-context-menu-radio-item { position: relative; padding-right: 30px; }
+.ui-context-menu-radio-indicator { position: absolute; right: 8px; display: flex; align-items: center; justify-content: center; width: 16px; height: 16px; }
+.ui-context-menu-radio-item[data-state='checked'], .ui-context-menu-radio-item[data-state='checked'][data-highlighted] { border-color: transparent; background: var(--contrast); color: var(--contrast-foreground); }
+.map-context-color-swatch { width: 13px; height: 13px; flex: none; border: 1px solid currentColor; border-radius: var(--radius-xs); }
+.map-context-measurement-label { display: flex; max-width: 260px; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
+.map-context-measurement-label strong { color: var(--text); font-size: 12px; font-weight: 700; }

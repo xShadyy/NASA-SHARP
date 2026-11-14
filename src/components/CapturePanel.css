@@ -1,0 +1,204 @@
+.draggable-panel.capture-panel {
+  width: min(360px, calc(100% - 24px));
+  border-color: var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.capture-panel .draggable-panel__header {
+  min-height: 37px;
+  padding-right: 6px;
+  border-bottom: 0;
+  background: var(--surface);
+}
+
+.capture-panel .draggable-panel__drag-handle.ui-button {
+  height: 31px;
+  padding: 0 10px;
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.capture-panel .draggable-panel__close.ui-button {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-md);
+}
+
+.capture-panel .draggable-panel__content {
+  padding: 0 14px 15px;
+}
+
+.capture-description {
+  margin: 0 0 15px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.capture-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
+  align-items: start;
+  gap: 12px;
+}
+
+.capture-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.capture-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 22px;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.3;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.capture-panel .ui-checkbox {
+  display: grid;
+  flex: none;
+  place-content: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--contrast);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.capture-panel .ui-checkbox[data-state="checked"] {
+  background: var(--contrast);
+  color: var(--contrast-foreground);
+}
+
+.capture-panel .ui-checkbox:not(:disabled, [aria-disabled="true"]):is(:hover, :focus-visible) {
+  border-color: var(--text);
+  box-shadow: 0 0 0 1px var(--contrast);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.capture-panel .ui-checkbox[data-state="checked"]:not(:disabled, [aria-disabled="true"]):is(:hover, :focus-visible) {
+  background: var(--contrast);
+  color: var(--contrast-foreground);
+}
+
+.capture-actions {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.capture-panel .capture-format-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0 9px;
+  border: 1px solid var(--contrast);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.capture-panel .capture-format-trigger:not(:disabled, [aria-disabled="true"]):is(:hover, :focus-visible) {
+  border-color: var(--text);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 0 0 1px var(--contrast);
+}
+
+.capture-panel .capture-download-button.ui-button {
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 0 8px;
+  border: 1px solid var(--contrast);
+  border-radius: var(--radius-md);
+  background: var(--contrast);
+  color: var(--contrast-foreground);
+  font-size: 13px;
+  opacity: 1;
+  cursor: pointer;
+}
+
+.capture-panel .capture-download-button.ui-button:disabled { opacity: .55; cursor: wait; }
+.capture-panel .capture-download-button.ui-button:not(:disabled):hover { background: var(--contrast); color: var(--contrast-foreground); outline: 1px solid var(--contrast); outline-offset: 2px; }
+.capture-region-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin: -3px 0 13px; }
+.capture-region-controls .ui-button { height: 26px; gap: 5px; padding: 0 7px; font-size: 11px; }
+.capture-region-controls > span { color: var(--muted); font-size: 11px; }
+.capture-error { margin: 11px 0 0; color: var(--instructions-accent, var(--text)); font-size: 12px; line-height: 1.4; }
+
+.capture-format-options.ui-select-content {
+  z-index: 110;
+  min-width: var(--radix-select-trigger-width);
+  max-height: var(--radix-select-content-available-height);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+
+.capture-format-options .ui-select-item {
+  min-height: 32px;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.capture-format-options .ui-select-item[data-state="checked"] {
+  background: var(--contrast);
+  color: var(--contrast-foreground);
+}
+
+.capture-format-options .ui-select-item:not([data-state="checked"]):is([data-highlighted], :hover, :focus-visible) {
+  background: transparent;
+  color: var(--text);
+  outline: 1px solid var(--contrast);
+  outline-offset: -1px;
+}
+
+@container (max-width: 340px) {
+  .capture-panel .draggable-panel__content {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .capture-form {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .capture-options {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 7px 14px;
+  }
+
+  .capture-option {
+    font-size: 13px;
+  }
+
+  .capture-actions {
+    grid-template-columns: minmax(64px, .8fr) minmax(0, 1.6fr);
+    align-items: center;
+    gap: 8px;
+  }
+}

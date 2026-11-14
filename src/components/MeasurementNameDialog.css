@@ -1,0 +1,2 @@
+.measurement-name-dialog { max-height: calc(100dvh - 24px); overflow-y: auto; }
+.measurement-name-dialog .measurement-name-hint { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.4; }
