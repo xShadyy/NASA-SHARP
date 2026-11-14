@@ -660,9 +660,9 @@ function App() {
     setSelectingCapture(true)
   }
 
-  async function captureImage(settings: CaptureSettings) {
+  async function createCapturePreview(settings: CaptureSettings) {
     if (!mapRef.current) throw new Error('The map is not ready yet.')
-    await mapRef.current.capture(settings, captureRegion ?? undefined)
+    return mapRef.current.createCapturePreview(settings, captureRegion ?? undefined)
   }
 
   function selectMeasurementUnit(unit: MeasurementUnit) {
@@ -822,7 +822,7 @@ function App() {
               <Suspense
                 fallback={
                   <div className="map-loading" role="status">
-                    Loading map…
+                    Loading map.
                   </div>
                 }
               >
@@ -892,11 +892,11 @@ function App() {
                   <CapturePanel
                     containerRef={stageRef}
                     onClose={closeCapture}
-                    onCapture={captureImage}
+                    onPreview={createCapturePreview}
                     region={captureRegion}
                     onSelectRegion={beginCaptureSelection}
                     onClearRegion={() => setCaptureRegion(null)}
-                    captureReady={camera.ready}
+                    captureReady={camera.ready && !selectingCapture}
                   />
                 </div>
               )}

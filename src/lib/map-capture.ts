@@ -11,6 +11,11 @@ export type CaptureSettings = {
   scalebar: boolean
 }
 
+export type CaptureResult = {
+  preview: Blob
+  image: Blob
+}
+
 /** CSS pixels measured from the map container's top-left corner. */
 export type CaptureRegion = { x: number; y: number; width: number; height: number }
 
@@ -262,6 +267,7 @@ function annotate(
   scale: ReturnType<typeof localScale>,
   capturedAt: Date,
   includeSkyCredit: boolean,
+  measureOnly = false,
 ) {
   const width = region.width
   const height = region.height
@@ -291,6 +297,15 @@ function annotate(
       : []),
     ...(includeSkyCredit ? [SKY_BACKGROUND_CAPTURE_CREDIT] : []),
   ].flatMap((credit) => wrappedLines(context, credit, Math.max(12, width - padding * 2)))
+  context.font = `700 ${compact ? 13 : 17}px "Fira Sans", sans-serif`
+  const titleLines = settings.header
+    ? wrappedLines(
+        context,
+        'SHARP - Satellite Harmonization and Activity Records Platform',
+        Math.max(12, width - padding * 2),
+      )
+    : []
+  context.font = `400 ${fontSize}px "Fira Sans", sans-serif`
   const footerLines = [
     ...(settings.timestamp
       ? [
@@ -302,43 +317,45 @@ function annotate(
       : []),
     ...credits,
   ]
-  const footerHeight = footerLines.length * lineHeight + padding * 1.5
-  const titleHeight = settings.header ? (compact ? 29 : 36) : 0
-  if (height < footerHeight + titleHeight + 16)
-    throw new Error('Choose a larger screenshot area so the map and source credits fit.')
-  context.fillStyle = 'rgba(5, 18, 45, .84)'
-  context.fillRect(0, Math.max(0, height - footerHeight), width, footerHeight)
-  context.fillStyle = '#fff'
+  const titleLineHeight = compact ? 17 : 21
+  const headerHeight = titleLines.length ? titleLines.length * titleLineHeight + padding * 2 : 0
+  const footerHeight = footerLines.length * lineHeight + padding * 2
+  if (measureOnly) return { headerHeight, footerHeight }
+  const style = getComputedStyle(container)
+  const background = style.getPropertyValue('--surface').trim() || '#05122d'
+  const foreground = style.getPropertyValue('--text').trim() || '#fff'
+  context.save()
+  context.translate(0, -headerHeight)
+  context.fillStyle = background
+  context.fillRect(0, 0, width, headerHeight)
+  context.restore()
+  context.fillStyle = background
+  context.fillRect(0, height, width, footerHeight)
+  context.fillStyle = foreground
   context.textBaseline = 'top'
-  footerLines.forEach((line, index) =>
+  context.font = `700 ${compact ? 13 : 17}px "Fira Sans", sans-serif`
+  titleLines.forEach((line, index) =>
     context.fillText(
       line,
       padding,
-      height - footerHeight + padding * 0.75 + index * lineHeight,
+      -headerHeight + padding + index * titleLineHeight,
       width - padding * 2,
     ),
   )
-  if (settings.header) {
-    context.fillStyle = 'rgba(5, 18, 45, .84)'
-    context.fillRect(0, 0, width, titleHeight)
+  context.font = `400 ${fontSize}px "Fira Sans", sans-serif`
+  footerLines.forEach((line, index) =>
+    context.fillText(line, padding, height + padding + index * lineHeight, width - padding * 2),
+  )
+  if (settings.scalebar && scale && height > 55) {
+    const y = height - 13
+    context.save()
     context.fillStyle = '#fff'
-    context.font = `700 ${compact ? 13 : 17}px "Fira Sans", sans-serif`
-    context.fillText(
-      'Ethereal · Earth explorer',
-      padding,
-      (titleHeight - (compact ? 13 : 17)) / 2,
-      width - padding * 2,
-    )
-  }
-  if (settings.scalebar && scale && height - footerHeight > 95) {
-    const y = height - footerHeight - 13
-    const label = `${scale.label} · local scale`
-    context.font = `400 ${fontSize}px "Fira Sans", sans-serif`
-    const boxWidth = Math.max(scale.width + 16, context.measureText(label).width + 16)
-    context.fillStyle = 'rgba(5, 18, 45, .84)'
-    context.fillRect(padding - 5, y - 31, boxWidth, 39)
-    context.fillStyle = '#fff'
-    context.fillText(label, padding + 3, y - 26)
+    context.font = '400 10px "Fira Sans", sans-serif'
+    context.textAlign = 'center'
+    context.shadowColor = '#000'
+    context.shadowBlur = 2 * map.getPixelRatio()
+    context.shadowOffsetY = map.getPixelRatio()
+    context.fillText(scale.label, padding + 3 + scale.width / 2, y - 20)
     context.strokeStyle = '#fff'
     context.lineWidth = 2
     context.beginPath()
@@ -347,7 +364,9 @@ function annotate(
     context.lineTo(padding + 3 + scale.width, y - 1)
     context.lineTo(padding + 3 + scale.width, y - 8)
     context.stroke()
+    context.restore()
   }
+  return { headerHeight, footerHeight }
 }
 
 /** Capture during MapLibre's next render, while the WebGL buffer is valid.
@@ -358,7 +377,7 @@ export async function captureMapImage(
   map: MapLibreMap,
   settings: CaptureSettings,
   requested?: CaptureRegion | null,
-): Promise<Blob> {
+): Promise<CaptureResult> {
   const region = clampRegion(map, requested)
   const pins = await preparePins(map)
   await document.fonts.load('400 12px "Fira Sans"').catch(() => undefined)
@@ -369,10 +388,27 @@ export async function captureMapImage(
   const output = document.createElement('canvas')
   output.width = Math.max(1, Math.round(region.width * ratioX))
   output.height = Math.max(1, Math.round(region.height * ratioY))
+  const preview = document.createElement('canvas')
+  preview.width = output.width
+  preview.height = output.height
+  const previewContext = preview.getContext('2d')
   const context = output.getContext('2d')
-  if (!context) throw new Error('Your browser could not create an image. Please try again.')
+  if (!context || !previewContext)
+    throw new Error('Your browser could not create an image. Please try again.')
   const scale = settings.scalebar ? localScale(map, region) : null
   const capturedAt = new Date()
+  const includeSkyCredit = skyBackgroundVisible(map)
+  const { headerHeight, footerHeight } = annotate(
+    map,
+    context,
+    region,
+    settings,
+    scale,
+    capturedAt,
+    includeSkyCredit,
+    true,
+  )
+  output.height = Math.max(1, Math.ceil((headerHeight + region.height + footerHeight) * ratioY))
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => {
       map.off('render', snapshot)
@@ -382,10 +418,10 @@ export async function captureMapImage(
       clearTimeout(timer)
       map.off('render', snapshot)
       try {
-        context!.scale(ratioX, ratioY)
-        context!.fillStyle = '#000'
-        context!.fillRect(0, 0, region.width, region.height)
-        context!.drawImage(
+        previewContext!.scale(ratioX, ratioY)
+        previewContext!.fillStyle = '#000'
+        previewContext!.fillRect(0, 0, region.width, region.height)
+        previewContext!.drawImage(
           source,
           region.x * ratioX,
           region.y * ratioY,
@@ -396,8 +432,11 @@ export async function captureMapImage(
           region.width,
           region.height,
         )
-        drawGeographicOverlays(context!, map, region, pins, ratioX, ratioY)
-        annotate(map, context!, region, settings, scale, capturedAt, skyBackgroundVisible(map))
+        drawGeographicOverlays(previewContext!, map, region, pins, ratioX, ratioY)
+        context!.scale(ratioX, ratioY)
+        context!.translate(0, headerHeight)
+        context!.drawImage(preview, 0, 0, region.width, region.height)
+        annotate(map, context!, region, settings, scale, capturedAt, includeSkyCredit)
         resolve()
       } catch (error) {
         reject(error)
@@ -406,14 +445,22 @@ export async function captureMapImage(
     map.on('render', snapshot)
     map.triggerRepaint()
   })
+  const [previewBlob, image] = await Promise.all([
+    encodeCaptureImage(preview, settings.format),
+    encodeCaptureImage(output, settings.format),
+  ])
+  return { preview: previewBlob, image }
+}
+
+function encodeCaptureImage(canvas: HTMLCanvasElement, format: CaptureSettings['format']) {
   return new Promise<Blob>((resolve, reject) => {
     try {
-      output.toBlob(
+      canvas.toBlob(
         (blob) =>
           blob
             ? resolve(blob)
             : reject(new Error('The browser could not encode this image. Please try PNG.')),
-        settings.format === 'png' ? 'image/png' : 'image/jpeg',
+        format === 'png' ? 'image/png' : 'image/jpeg',
         0.94,
       )
     } catch (error) {
@@ -426,21 +473,4 @@ export async function captureMapImage(
       )
     }
   })
-}
-
-export async function downloadMapCapture(
-  map: MapLibreMap,
-  settings: CaptureSettings,
-  region?: CaptureRegion | null,
-): Promise<void> {
-  const blob = await captureMapImage(map, settings, region)
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = `ethereal-${new Date().toISOString().replace(/[:.]/g, '-')}.${settings.format}`
-  document.body.append(link)
-  link.click()
-  link.remove()
-  // Give browsers time to start the download before releasing the object URL.
-  setTimeout(() => URL.revokeObjectURL(url), 60_000)
 }

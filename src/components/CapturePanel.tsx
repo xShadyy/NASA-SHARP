@@ -1,4 +1,4 @@
-import { useId, useState, type RefObject } from 'react'
+import { useEffect, useEffectEvent, useId, useState, type RefObject } from 'react'
 import { CropIcon, DownloadSimpleIcon } from '@phosphor-icons/react'
 import { DraggablePanel } from '@/components/DraggablePanel'
 import { Button } from '@/components/ui/button'
@@ -10,13 +10,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import type { CaptureRegion, CaptureSettings } from '@/lib/map-capture'
+import type { CaptureRegion, CaptureResult, CaptureSettings } from '@/lib/map-capture'
 import './CapturePanel.css'
 
 type CapturePanelProps = {
   containerRef: RefObject<HTMLElement | null>
   onClose: () => void
-  onCapture: (settings: CaptureSettings) => Promise<void>
+  onPreview: (settings: CaptureSettings) => Promise<CaptureResult>
   region?: CaptureRegion | null
   onSelectRegion?: () => void
   onClearRegion?: () => void
@@ -32,7 +32,7 @@ const captureOptions = [
 export function CapturePanel({
   containerRef,
   onClose,
-  onCapture,
+  onPreview,
   region,
   onSelectRegion,
   onClearRegion,
@@ -43,22 +43,61 @@ export function CapturePanel({
   const [format, setFormat] = useState<CaptureSettings['format']>('jpg')
   const [capturing, setCapturing] = useState(false)
   const [error, setError] = useState('')
+  const [images, setImages] = useState<{ preview: string; image: string } | null>(null)
 
-  const download = async () => {
-    if (capturing || !captureReady) return
-    setCapturing(true)
-    setError('')
-    try {
-      await onCapture({ format, ...options })
-    } catch (failure) {
-      setError(
-        failure instanceof Error
-          ? failure.message
-          : 'The image could not be downloaded. Please try again.',
-      )
-    } finally {
-      setCapturing(false)
+  useEffect(() => {
+    return () => {
+      if (images) {
+        URL.revokeObjectURL(images.preview)
+        URL.revokeObjectURL(images.image)
+      }
     }
+  }, [images])
+
+  const createPreview = useEffectEvent(onPreview)
+
+  useEffect(() => {
+    if (!captureReady) return
+    let active = true
+    const timer = setTimeout(() => {
+      setCapturing(true)
+      setError('')
+      void createPreview({ format, ...options }).then(
+        (result) => {
+          if (active) {
+            setImages({
+              preview: URL.createObjectURL(result.preview),
+              image: URL.createObjectURL(result.image),
+            })
+            setCapturing(false)
+          }
+        },
+        (failure: unknown) => {
+          if (active) {
+            setError(
+              failure instanceof Error
+                ? failure.message
+                : 'The image could not be captured. Please try again.',
+            )
+            setCapturing(false)
+          }
+        },
+      )
+    }, 0)
+    return () => {
+      active = false
+      clearTimeout(timer)
+    }
+  }, [captureReady, format, options, region])
+
+  const download = () => {
+    if (!images || capturing) return
+    const link = document.createElement('a')
+    link.href = images.image
+    link.download = `sharp-${new Date().toISOString().replace(/[:.]/g, '-')}.${format}`
+    document.body.append(link)
+    link.click()
+    link.remove()
   }
 
   return (
@@ -72,17 +111,10 @@ export function CapturePanel({
       dragLabel="Move capture window"
       initialPlacement="top-right"
     >
-      <p className="capture-description">Download the map as an image.</p>
       {onSelectRegion && (
         <div className="capture-region-controls">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={capturing}
-            onClick={onSelectRegion}
-          >
-            <CropIcon size={15} />
+          <Button type="button" variant="outline" size="sm" onClick={onSelectRegion}>
+            <CropIcon size={16} />
             {region ? 'Change area' : 'Select area'}
           </Button>
           {region ? (
@@ -90,13 +122,7 @@ export function CapturePanel({
               <span>
                 {Math.round(region.width)} × {Math.round(region.height)} px
               </span>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                disabled={capturing}
-                onClick={onClearRegion}
-              >
+              <Button type="button" variant="ghost" size="sm" onClick={onClearRegion}>
                 Full map
               </Button>
             </>
@@ -112,7 +138,6 @@ export function CapturePanel({
               <Checkbox
                 id={`${id}-${key}`}
                 checked={options[key]}
-                disabled={capturing}
                 onCheckedChange={(checked) =>
                   setOptions((current) => ({ ...current, [key]: checked === true }))
                 }
@@ -127,7 +152,6 @@ export function CapturePanel({
             onValueChange={(value) => {
               if (value === 'jpg' || value === 'png') setFormat(value)
             }}
-            disabled={capturing}
           >
             <SelectTrigger className="capture-format-trigger" aria-label="Image format">
               <SelectValue />
@@ -145,16 +169,23 @@ export function CapturePanel({
           <Button
             type="button"
             className="capture-download-button"
-            disabled={capturing || !captureReady}
+            disabled={capturing || !captureReady || !images || Boolean(error)}
+            aria-busy={capturing}
             onClick={() => {
               void download()
             }}
           >
             <DownloadSimpleIcon size={18} aria-hidden="true" />
-            {capturing ? 'Preparing…' : 'Download image'}
+            Download image
           </Button>
         </div>
       </div>
+      {images && (
+        <figure className="capture-preview">
+          <img src={images.preview} alt="Captured map area" draggable={false} />
+          <figcaption>Preview</figcaption>
+        </figure>
+      )}
       {error && (
         <p className="capture-error" role="alert">
           {error}

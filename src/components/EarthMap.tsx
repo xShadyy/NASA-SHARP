@@ -42,7 +42,12 @@ import { LocationPin } from '@/components/LocationPin'
 import { MapLayersControl } from '@/components/LayerSettings'
 import { MapContextMenu } from '@/components/MapContextMenu'
 import { MeasurementNameDialog } from '@/components/MeasurementNameDialog'
-import { downloadMapCapture, type CaptureRegion, type CaptureSettings } from '@/lib/map-capture'
+import {
+  captureMapImage,
+  type CaptureRegion,
+  type CaptureResult,
+  type CaptureSettings,
+} from '@/lib/map-capture'
 import {
   createProjectionController,
   HOME_CENTER,
@@ -72,7 +77,10 @@ export type EarthMapHandle = {
   undoMeasurement: () => void
   clearMeasurement: () => void
   finishMeasurement: () => void
-  capture: (settings: CaptureSettings, region?: CaptureRegion) => Promise<void>
+  createCapturePreview: (
+    settings: CaptureSettings,
+    region?: CaptureRegion,
+  ) => Promise<CaptureResult>
 }
 
 type EarthMapProps = {
@@ -246,52 +254,48 @@ export function EarthMap({
     ready,
   ])
 
-  useImperativeHandle(
-    ref,
-    () => ({
-      zoomBy(delta) {
-        interactedRef.current = true
-        projectionRef.current?.markNavigated()
-        const map = mapRef.current
-        if (map)
-          map.zoomTo(
-            Math.max(
-              minimumZoomForView(map, viewRef.current),
-              Math.min(map.getMaxZoom(), map.getZoom() + delta),
-            ),
-            { duration: 300 },
-          )
-      },
-      resetView() {
-        const map = mapRef.current
-        if (!map) return
-        projectionRef.current?.markNavigated()
-        interactedRef.current = false
-        map.easeTo({
-          center: HOME_CENTER,
-          zoom: overviewZoom(map.getContainer().clientWidth, map.getContainer().clientHeight),
-          bearing: 0,
-          pitch: 0,
-          duration: 500,
-        })
-      },
-      undoMeasurement() {
-        measurementsRef.current?.undo()
-      },
-      clearMeasurement() {
-        measurementsRef.current?.clear()
-      },
-      finishMeasurement() {
-        measurementsRef.current?.finish()
-      },
-      async capture(settings, region) {
-        const map = mapRef.current
-        if (!map) throw new Error('The map is not ready yet.')
-        await downloadMapCapture(map, settings, region)
-      },
-    }),
-    [],
-  )
+  useImperativeHandle(ref, () => ({
+    zoomBy(delta) {
+      interactedRef.current = true
+      projectionRef.current?.markNavigated()
+      const map = mapRef.current
+      if (map)
+        map.zoomTo(
+          Math.max(
+            minimumZoomForView(map, viewRef.current),
+            Math.min(map.getMaxZoom(), map.getZoom() + delta),
+          ),
+          { duration: 300 },
+        )
+    },
+    resetView() {
+      const map = mapRef.current
+      if (!map) return
+      projectionRef.current?.markNavigated()
+      interactedRef.current = false
+      map.easeTo({
+        center: HOME_CENTER,
+        zoom: overviewZoom(map.getContainer().clientWidth, map.getContainer().clientHeight),
+        bearing: 0,
+        pitch: 0,
+        duration: 500,
+      })
+    },
+    undoMeasurement() {
+      measurementsRef.current?.undo()
+    },
+    clearMeasurement() {
+      measurementsRef.current?.clear()
+    },
+    finishMeasurement() {
+      measurementsRef.current?.finish()
+    },
+    async createCapturePreview(settings, region) {
+      const map = mapRef.current
+      if (!map) throw new Error('The map is not ready yet.')
+      return captureMapImage(map, settings, region)
+    },
+  }))
 
   useEffect(() => {
     const container = containerRef.current
@@ -786,7 +790,12 @@ export function EarthMap({
 
   return (
     <section className="earth-map" data-view={view} aria-label="Earth map">
-      <div ref={containerRef} className="earth-map-canvas" />
+      <div
+        ref={containerRef}
+        className="earth-map-canvas"
+        onDragStart={(event) => event.preventDefault()}
+        onPointerDown={() => window.getSelection()?.removeAllRanges()}
+      />
       <MapContextMenu
         triggerRef={contextTriggerRef}
         coordinates={contextCoordinates}
@@ -861,7 +870,7 @@ export function EarthMap({
       )}
       {(loading || notice) && (
         <div className="map-status" role="status" data-fatal={fatal || undefined}>
-          <p>{notice || 'Loading Earth imagery…'}</p>
+          <p>{notice || 'Loading Earth imagery.'}</p>
           {notice && !fatal && (
             <Button type="button" variant="outline" size="sm" onClick={retryMapResources}>
               Retry
