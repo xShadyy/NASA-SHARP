@@ -28,10 +28,9 @@ sources.
 - Map location search, map layers, saved locations, and capture tools.
 - Area geometry and analysis-related types/helpers in
   `src/lib/analysis-area.ts`, `src/lib/analysis-state.ts`, and
-  `src/lib/analysis-countries.ts`, as well as an Analysis UI component.
-  Treat the end-to-end Analysis workflow as **not yet implemented/available**
-  for dashboard integration. Do not assume that a confirmed region is
-  persisted, exposed as a stable app-wide selection, or usable by data queries.
+  `src/lib/analysis-countries.ts`, as well as the Analysis UI and its
+  app-wide confirmed-area state. Area Analytics uses the confirmed Analysis
+  geometry when one exists; otherwise it uses the default Netherlands scope.
 - A Python FastAPI FIRMS service under `src/backend_api/` that proxies NASA
   FIRMS hotspot CSV data as GeoJSON. Its `/hotspots` endpoint supports `world`,
   a bounding box, or the generalized European Netherlands country boundary;
@@ -43,10 +42,6 @@ sources.
 
 ### Explicitly unfinished dependencies
 
-- **Area-of-interest workflow:** Analysis currently is not an implemented,
-  end-to-end feature. The dashboard must remain usable with its fixed
-  Netherlands default before that contract exists; do not imply that Analysis
-  region selection is already integrated.
 - **MODIS/VIIRS harmonization:** The harmonization script, harmonized data
   product, quality assurance, and historical-query interface are not
   implemented. Long-term calendars, year-over-year summaries, and
@@ -64,7 +59,7 @@ other data.
 
 ### Sidebar and entry point
 
-- Add a **Wildfire dashboard** navigation item to the existing sidebar.
+- Add an **Area Analytics** navigation item to the existing sidebar.
 - Use the existing sidebar components, active-navigation behavior, tooltips,
   focus states, and mobile-collapse behavior; do not create a second navigation
   system.
@@ -81,9 +76,10 @@ Display:
 
 - Page title and short explanation that values are satellite hotspot
   detections, not confirmed incident counts.
-- Current area scope: **Netherlands (European part)** by default. Use the
-  repository's generalized national boundary for exact point-in-polygon
-  filtering; explicitly note that Caribbean Netherlands is not included.
+- Current area scope: use the **confirmed area from Analysis** when available.
+  Otherwise default to **Netherlands (European part)** and use the repository's
+  generalized national boundary for exact point-in-polygon filtering; explicitly
+  note that Caribbean Netherlands is not included in this fallback.
 - The selected time interval, inclusive start/end dates, timezone basis, and
   data freshness/coverage status.
 - A time-interval slider with an initial value of **1 day** and an adjustable
@@ -197,22 +193,20 @@ same filtered detection set, not just a headline count:
    unavailable or partial.
 2. **Detections by product:** counts and shares by FIRMS product/source, so
    users can see which sensor/satellite is contributing to the total.
-3. **Day/night distribution:** counts and shares by the FIRMS day/night flag,
-   retaining an Unknown category rather than silently dropping it.
-4. **Confidence distribution:** separate VIIRS low/nominal/high classes and
+3. **Confidence distribution:** separate VIIRS low/nominal/high classes and
    MODIS numeric ranges. Make clear these are sensor-specific categories, not
    an interchangeable cross-sensor confidence score.
-5. **FRP distribution and summary:** detection counts by FRP range, a median,
+4. **FRP distribution and summary:** detection counts by FRP range, a median,
    the highest reported observation, and the number of records without FRP.
    Use MW and explain that FRP is not a direct measure of fire size or impact.
-6. **Observation time-of-day histogram:** hourly count by acquisition time in
+5. **Observation time-of-day histogram:** hourly count by acquisition time in
    UTC. Explain that this is satellite observation time—not ignition time or
    local fire-start time.
-7. **Detection-density grid:** rank coarse geographic grid cells by detection
+6. **Detection-density grid:** rank coarse geographic grid cells by detection
    count to help users scan concentration areas. Show cell size and coordinates;
    never describe cells as fire perimeters, incident clusters, or affected-area
    boundaries.
-8. **Recent detection table:** sortable by acquisition time and FRP; show
+7. **Recent detection table:** sortable by acquisition time and FRP; show
    timestamp, sensor/satellite/product, confidence and scale, FRP, day/night,
    and coordinates. Paginate or cap visible rows while stating the number
    shown and the total matching records. For multi-week intervals,
@@ -220,6 +214,9 @@ same filtered detection set, not just a headline count:
    to the browser; clearly distinguish the sample size from the interval total.
    Cache compact per-day summaries against the exact cached source batch and
    active filters so repeated periods do not decode and rescan every point.
+
+The day/night filter remains available, but Area Analytics does not render a
+day/night distribution statistic.
 
 All counts, percentages, overlays, breakdowns, and exports must derive from
 the same filters and selected period. Show denominators for percentages, report
@@ -434,10 +431,13 @@ because MODIS and VIIRS rows have been placed in one table.
   or exclusive, and use one convention throughout requests, charts, and CSVs.
 - The current backend windows are UTC-based by default and capped at 31 UTC
   calendar days. Show this limitation and avoid off-by-one comparisons.
-- The default must query `area=netherlands`; the backend must use its bounding
-  box only to fetch candidate records, then clip both exact summaries and
-  returned features to the generalized European Netherlands polygon. Report
-  the area name and its geometry limitation. Keep `world` available as an API
+- Without a confirmed Analysis area, query `area=netherlands`; the backend must
+  use its bounding box only to fetch candidate records, then clip both exact
+  summaries and returned features to the generalized European Netherlands
+  polygon. With a confirmed area, send its Polygon/MultiPolygon geometry to the
+  backend, use bounded FIRMS candidate queries (split at the antimeridian when
+  needed), and clip summaries and returned features to the exact confirmed
+  geometry. Report the active area's name. Keep `world` available as an API
   area, but do not use it as the dashboard's initial scope.
 - Treat incomplete source/day results as partial, including per-source status
   where possible. A partial total is not an authoritative complete total.
@@ -446,10 +446,13 @@ because MODIS and VIIRS rows have been placed in one table.
 
 Build the MVP in this order:
 
-1. Add the Wildfire dashboard sidebar entry and responsive dashboard surface.
-2. Make the dashboard default to **Netherlands (European part)** and a
-   **1-day interval**, with the slider adjustable up to 30 days.
-3. Connect to the existing backend `/hotspots` service, with clear loading,
+1. Add the Area Analytics sidebar entry and responsive dashboard surface.
+2. Use a confirmed Analysis area when available; otherwise default to
+   **Netherlands (European part)**. Keep the **1-day interval** default and
+   allow the slider to adjust up to 30 days.
+3. Connect to the existing backend `/hotspots` service for the Netherlands
+   fallback and the geometry-aware `/hotspots/area` service for confirmed
+   Analysis areas, with clear loading,
    error, empty, and partial-result handling.
 4. Put **Fire Activity at a Glance** first: summarize the selected interval and
    preceding equal-length UTC-day interval, apply current filters consistently, and
@@ -458,21 +461,22 @@ Build the MVP in this order:
 5. Show total hotspot detections, prior-period comparison, peak activity
    period, latest observation, highest/median FRP, data coverage/provenance,
    and daily activity chart.
-6. Show sensor/product, confidence, day/night, FRP-range, UTC observation-hour,
+6. Show sensor/product, confidence, FRP-range, UTC observation-hour,
    and top detection-density grid breakdowns, plus a sortable recent detections
    table with normalized FIRMS attributes.
 7. Add CSV download for the exact query and filters.
 8. Leave historical calendar, annual/monthly trend, and anomaly sections
    explicitly marked as dependent on harmonization; do not show mock values as
    real results.
-9. Keep Analysis-selected areas unavailable until it exposes a stable
-   confirmed-area contract. The fixed Netherlands scope must already use exact
-   generalized-boundary filtering in both summary and full-feature paths.
+9. Keep the confirmed Analysis geometry and the displayed area name in sync.
+   The Netherlands fallback must continue using exact generalized-boundary
+   filtering in both summary and full-feature paths.
 
 ### MVP acceptance criteria
 
-- The dashboard is reachable from the existing sidebar on desktop and mobile.
-- On first use, Netherlands (European part) and 1 day are selected, the displayed range matches
+- Area Analytics is reachable from the existing sidebar on desktop and mobile.
+- With no confirmed Analysis area, Netherlands (European part) and 1 day are selected; a confirmed
+  Analysis area replaces only the geographic scope. The displayed range matches
   the request, and the user can adjust the interval within the supported live
   limit.
 - A successful response yields consistent totals and chart bins. A partial
@@ -503,29 +507,31 @@ AI coding agent:
 >    `src/backend_api/README.md`, and the FIRMS backend's `/hotspots` endpoint.
 >    Verify the current application state instead of assuming this document's
 >    inventory is exhaustive.
-> 2. Treat the Analysis tool's end-to-end area-selection integration and the
->    MODIS/VIIRS harmonization pipeline as unfinished. Do not claim or fake
->    either capability. Ask for clarification only if implementation cannot
->    proceed without a product decision; Netherlands recent-data mode is the
->    required independent path.
+> 2. Treat the confirmed Analysis area as the dashboard scope when available;
+>    retain Netherlands as the fallback. The MODIS/VIIRS harmonization pipeline
+>    remains unfinished. Do not claim or fake that capability. Ask for
+>    clarification only if implementation cannot proceed without a product
+>    decision.
 > 3. Check the worktree and preserve unrelated user changes. Keep scope limited
 >    to the dashboard and directly required integration/tests/docs.
 >
 > **Implementation**
 >
-> 4. Add a Wildfire dashboard entry using the current sidebar navigation,
+> 4. Add an Area Analytics entry using the current sidebar navigation,
 >    active-state, tooltip, keyboard, and mobile-collapse patterns. Put the
 >    dashboard in the existing application workspace and preserve current map
 >    behavior.
-> 5. Implement a dashboard-owned area scope initially fixed to Netherlands
->    (European part), using exact generalized-boundary filtering, and a
+> 5. Use the confirmed Analysis polygon or multipolygon when available,
+>    otherwise use Netherlands (European part), with exact boundary filtering,
+>    and a
 >    dashboard-owned date interval initially set to 1 day. Add an accessible
 >    slider and visible selected duration/date range. Clamp the live query to
 >    what the backend supports (no more than 31 UTC calendar days); do not
 >    silently alter the existing global date control.
 > 6. Fetch data through the application's backend, not directly from NASA
->    FIRMS. Follow the existing service/API configuration conventions. Send
->    the correct `area=netherlands` and date/window parameters. Abort or ignore stale
+>    FIRMS. Follow the existing service/API configuration conventions. Use
+>    `/hotspots/area` for confirmed geometry and `area=netherlands` as fallback.
+>    Abort or ignore stale
 >    requests when controls change, and surface network, HTTP, malformed
 >    response, and partial-source errors explicitly.
 > 7. Implement typed response handling and pure aggregation helpers for
@@ -576,7 +582,7 @@ AI coding agent:
 >     and lint if changes warrant them. Fix regressions caused by the feature.
 > 15. Review the final diff and report the files changed, implemented behavior,
 >     validation run/results, and any remaining blockers from missing
->     harmonization or Analysis integration.
+>     harmonization.
 >
 > **Do not** change the harmonization algorithm speculatively, invent a
 > historical baseline, expose the FIRMS key to the browser, interpret
@@ -585,15 +591,15 @@ AI coding agent:
 
 ## Later roadmap
 
-### Stage 2: confirmed region support
+### Stage 2: confirmed region support (implemented)
 
-- Complete the Analysis workflow and expose a stable confirmed-area state to
-  the dashboard.
-- Define geometry serialization and query limits.
-- Implement exact point-in-area filtering or a tested geometry-aware backend
-  query. Test polygons, holes/multipolygons as applicable, and antimeridian
-  behavior.
-- Show area name, boundary, and area-specific coverage in every relevant view.
+- The dashboard consumes the Analysis tool's confirmed-area state and uses
+  Netherlands (European part) when there is no confirmed area.
+- `/hotspots/area` accepts Polygon/MultiPolygon geometry and clips summary and
+  feature results to that geometry, splitting candidate requests at the
+  antimeridian.
+- The active area name is shown in Area Analytics; add future geometry edge
+  cases to the test suite as new Analysis shapes are supported.
 
 ### Stage 3: harmonized historical calendar
 

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
+import type { AnalysisArea } from '@/lib/analysis-area'
 import {
   aggregateDailyActivity,
   compareActivity,
@@ -72,6 +73,7 @@ async function fetchWindow(
   days: number,
   sensor: 'all' | 'MODIS' | 'VIIRS',
   daynight: 'all' | 'day' | 'night',
+  analysisArea: AnalysisArea | null,
   signal: AbortSignal,
 ) {
   const query = new URLSearchParams({
@@ -88,13 +90,31 @@ async function fetchWindow(
         : []
   for (const source of sources) query.append('source', source)
   query.set('summary', 'true')
-  return fetchHotspots(query, signal)
+  return fetchHotspots(query, signal, analysisArea)
 }
 
-async function fetchHotspots(query: URLSearchParams, signal: AbortSignal) {
+async function fetchHotspots(
+  query: URLSearchParams,
+  signal: AbortSignal,
+  analysisArea: AnalysisArea | null,
+) {
   let response: Response
   try {
-    response = await fetch(`${API_BASE}/hotspots?${query}`, { signal })
+    response = analysisArea
+      ? await fetch(`${API_BASE}/hotspots/area`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            geometry: analysisArea.geometry,
+            start_date: query.get('start_date'),
+            days: Number(query.get('days')),
+            daynight: query.get('daynight') ?? 'all',
+            source: query.getAll('source'),
+            summary: query.get('summary') === 'true',
+          }),
+          signal,
+        })
+      : await fetch(`${API_BASE}/hotspots?${query}`, { signal })
   } catch (error) {
     if (signal.aborted) throw error
     throw new Error(
@@ -431,7 +451,13 @@ function RecentDetections({
   )
 }
 
-export function WildfireDashboard({ onClose }: { onClose: () => void }) {
+export function WildfireDashboard({
+  analysisArea,
+  onClose,
+}: {
+  analysisArea: AnalysisArea | null
+  onClose: () => void
+}) {
   const [days, setDays] = useState(1)
   const [sensor, setSensor] = useState<'all' | 'MODIS' | 'VIIRS'>('all')
   const [daynight, setDaynight] = useState<'all' | 'day' | 'night'>('all')
@@ -442,6 +468,7 @@ export function WildfireDashboard({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState('')
   const [previousError, setPreviousError] = useState('')
   const [attempt, setAttempt] = useState(0)
+  const areaLabel = analysisArea?.name ?? DASHBOARD_AREA_LABEL
   const today = new Date().toISOString().slice(0, 10)
   const windows = getDashboardWindows(days, today)
   const filtered = useMemo(
@@ -458,7 +485,6 @@ export function WildfireDashboard({ onClose }: { onClose: () => void }) {
   )
   const peak = useMemo(() => peakActivity(daily), [daily])
   const sensorBuckets = data?.summary.products ?? []
-  const dayNightBuckets = data?.summary.daynight ?? []
   const confidenceDistribution = data?.summary.confidence ?? []
   const frpDistribution = data?.summary.frp ?? []
   const medianFrpValue = data?.summary.medianFrp ?? null
@@ -476,7 +502,14 @@ export function WildfireDashboard({ onClose }: { onClose: () => void }) {
       setData(null)
       setPreviousData(null)
       const comparison = getDashboardWindows(days, today)
-      void fetchWindow(comparison.currentStart, days, sensor, daynight, controller.signal).then(
+      void fetchWindow(
+        comparison.currentStart,
+        days,
+        sensor,
+        daynight,
+        analysisArea,
+        controller.signal,
+      ).then(
         (current) => {
           if (controller.signal.aborted) return
           setLoading(false)
@@ -488,7 +521,14 @@ export function WildfireDashboard({ onClose }: { onClose: () => void }) {
           setError(errorMessage(reason))
         },
       )
-      void fetchWindow(comparison.previousStart, days, sensor, daynight, controller.signal).then(
+      void fetchWindow(
+        comparison.previousStart,
+        days,
+        sensor,
+        daynight,
+        analysisArea,
+        controller.signal,
+      ).then(
         (previous) => {
           if (controller.signal.aborted) return
           setPreviousData(previous)
@@ -505,7 +545,7 @@ export function WildfireDashboard({ onClose }: { onClose: () => void }) {
       window.clearTimeout(timer)
       controller.abort()
     }
-  }, [attempt, daynight, days, sensor, today])
+  }, [analysisArea, attempt, daynight, days, sensor, today])
 
   const comparison =
     data &&
@@ -526,7 +566,12 @@ export function WildfireDashboard({ onClose }: { onClose: () => void }) {
     const url = URL.createObjectURL(blob)
     const anchor = document.createElement('a')
     anchor.href = url
-    anchor.download = `wildfire-hotspots-netherlands-${windows.currentStart}-to-${windows.endDate}-recent-sample.csv`
+    const areaFilename =
+      areaLabel
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '') || 'area'
+    anchor.download = `wildfire-hotspots-${areaFilename}-${windows.currentStart}-to-${windows.endDate}-recent-sample.csv`
     document.body.append(anchor)
     anchor.click()
     anchor.remove()
@@ -538,7 +583,7 @@ export function WildfireDashboard({ onClose }: { onClose: () => void }) {
       <header className="wildfire-dashboard-header">
         <div>
           <p className="wildfire-eyebrow">ETHEREAL SHARP · BURNING ACTIVITY</p>
-          <h1 id="wildfire-dashboard-title">Wildfire dashboard</h1>
+          <h1 id="wildfire-dashboard-title">Area Analytics</h1>
           <p className="wildfire-description">
             Satellite hotspot detections show observed thermal activity, not confirmed fire
             incidents.
@@ -550,12 +595,14 @@ export function WildfireDashboard({ onClose }: { onClose: () => void }) {
       </header>
 
       <div className="wildfire-dashboard-content">
-        <section className="wildfire-controls" aria-label="Dashboard query">
+        <section className="wildfire-controls" aria-label="Area Analytics query">
           <div className="wildfire-scope">
             <span className="wildfire-control-label">Area</span>
-            <strong>{DASHBOARD_AREA_LABEL}</strong>
+            <strong>{areaLabel}</strong>
             <span className="wildfire-control-note">
-              Generalized boundary · Caribbean Netherlands not included
+              {analysisArea
+                ? 'Confirmed area from Analysis · detections are clipped to its boundary'
+                : 'Generalized boundary · Caribbean Netherlands not included'}
             </span>
           </div>
           <div className="wildfire-range">
@@ -662,7 +709,8 @@ export function WildfireDashboard({ onClose }: { onClose: () => void }) {
         >
           <div className="wildfire-glance-main">
             <p className="wildfire-eyebrow">
-              NETHERLANDS · {days} DAYS · {formatDay(windows.currentStart, { year: 'numeric' })} –{' '}
+              {areaLabel.toUpperCase()} · {days} DAYS ·{' '}
+              {formatDay(windows.currentStart, { year: 'numeric' })} –{' '}
               {formatDay(windows.endDate, { year: 'numeric' })} UTC
             </p>
             <h2 id="wildfire-glance-title">Fire Activity at a Glance</h2>
@@ -909,11 +957,6 @@ export function WildfireDashboard({ onClose }: { onClose: () => void }) {
             title="Detections by product"
             description="Sensor/product provenance in the selected interval."
             buckets={sensorBuckets}
-          />
-          <BreakdownChart
-            title="Day vs night"
-            description="Based on the FIRMS observation flag; unknown values are retained."
-            buckets={dayNightBuckets}
           />
           <BreakdownChart
             title="Confidence distribution"

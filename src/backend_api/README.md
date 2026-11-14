@@ -98,6 +98,20 @@ box over California and surrounding areas.
 | `viirs_min_confidence` | `l` (low), `n` (nominal), or `h` (high), default `l`.                                                                                                                                                                                                                                         |
 | `summary`              | Optional boolean. `true` returns exact interval-wide dashboard metrics and only the 500 newest matching detection records; omitted/false returns every matching feature.                                                                                                                      |
 
+### Confirmed Analysis geometry
+
+Use `POST /hotspots/area` when querying a confirmed Polygon or MultiPolygon from
+the Analysis tool. Send a JSON body containing `geometry`, `start_date`,
+`days`, and any supported `daynight`, `source`, `modis_min_confidence`,
+`viirs_min_confidence`, or `summary` filters. The geometry is used to request
+candidate FIRMS bounding boxes, then both summary metrics and returned
+detections are clipped to the exact Polygon/MultiPolygon. Areas crossing the
+antimeridian are split into two candidate requests.
+
+Area Analytics uses this endpoint only when Analysis has a confirmed area.
+Otherwise it continues using `area=netherlands` and the generalized European
+Netherlands boundary.
+
 For historical data, use `/availability` to select a product with coverage
 for the dates you need. NASA announced the end of Suomi NPP observations
 on November 2, 2026, so it is an opt-in source for covered historical dates.
@@ -198,7 +212,8 @@ It reads canonical detections from `FIRE_DATA_CSV` (and optionally
 `FIRE_COVERAGE_CSV`) or from the database configured by `DATABASE_URL`.
 When no local rows are available, a configured `FIRMS_MAP_KEY` enables
 live-area analysis for requests up to 31 UTC days. Local-data analysis does
-not require a FIRMS key; `/availability` and `/hotspots` always do.
+not require a FIRMS key; `/availability`, `/hotspots`, and
+`/hotspots/area` always do.
 
 NASA documentation
 
