@@ -32,6 +32,14 @@ The activation and key prompt above use Bash. In Windows PowerShell, run
 `python` for the install and launch commands, and set the environment
 variable with `$env:FIRMS_MAP_KEY = Read-Host 'NASA FIRMS map key'`.
 
+The Vite development server proxies the dashboard's `/api` requests to
+`http://127.0.0.1:8000`. Start the frontend from the repository root with
+`npm run dev`. For a deployment, configure the web server to proxy `/api` to
+the backend on the same origin. A cross-origin API base can be configured at
+build time with `VITE_FIRMS_API_BASE_URL` only when the backend is also
+configured with an appropriately restrictive CORS policy. Keep the FIRMS map
+key on the backend; it must never be placed in a `VITE_` variable.
+
 SQLite caches requests automatically. Set `FIRMS_CACHE_PATH` before starting
 the server to choose a different file. By default it uses
 `firms-hotspots/cache.sqlite3` under the system temporary directory
@@ -147,6 +155,15 @@ Account for overpass coverage, cloud and scan geometry when interpreting
 differences or empty intervals. Keep raw point-level FRP by sensor until
 you have validated any pooled FRP statistic. The temporary cache is
 disposable. Use a durable versioned store for reproducible analyses.
+
+The analysis API exposes `GET /capabilities` and `POST` endpoints at
+`/analysis/calendar`, `/analysis/overview`, `/analysis/time-series`,
+`/analysis/observations`, `/analysis/observation`, and `/analysis/map-source`.
+It reads canonical detections from `FIRE_DATA_CSV` (and optionally
+`FIRE_COVERAGE_CSV`) or from the database configured by `DATABASE_URL`.
+When no local rows are available, a configured `FIRMS_MAP_KEY` enables
+live-area analysis for requests up to 31 UTC days. Local-data analysis does
+not require a FIRMS key; `/availability` and `/hotspots` always do.
 
 NASA documentation
 
