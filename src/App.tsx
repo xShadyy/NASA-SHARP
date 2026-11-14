@@ -146,7 +146,7 @@ function ExplorerSidebar({
   setActiveNav: (name: string) => void
   savedLocations: LocationTarget[]
   onLocationSelect: (location: LocationTarget) => void
-  onLocationRemove: (location: LocationTarget) => void
+  onLocationRemove: (locations: LocationTarget[]) => void
   onLocationEdit: (location: LocationTarget) => void
 }) {
   const { open, setOpen, isMobile, openMobile, setOpenMobile } = useSidebar()
@@ -622,10 +622,16 @@ function App() {
     setPendingSave(null)
   }
 
-  function removeLocation(location: LocationTarget) {
-    const next = savedLocations.filter((saved) => locationKey(saved) !== locationKey(location))
+  function removeLocations(locations: LocationTarget[]) {
+    const removedKeys = new Set(locations.map(locationKey))
+    if (!removedKeys.size) return
+    const next = savedLocations.filter((saved) => !removedKeys.has(locationKey(saved)))
     const persisted = persistSavedLocations(next)
     setSavedLocations(next)
+    setDestination((current) => (current && removedKeys.has(locationKey(current)) ? null : current))
+    setEditingLocation((current) =>
+      current && removedKeys.has(locationKey(current)) ? null : current,
+    )
     setStorageNotice(persisted ? '' : 'Updated for this session. Browser storage is unavailable.')
   }
 
@@ -816,7 +822,7 @@ function App() {
               setActiveNav={setActiveNav}
               savedLocations={savedLocations}
               onLocationSelect={(location) => selectDestination(location, true)}
-              onLocationRemove={removeLocation}
+              onLocationRemove={removeLocations}
               onLocationEdit={setEditingLocation}
             />
 

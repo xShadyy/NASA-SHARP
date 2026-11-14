@@ -74,7 +74,7 @@ function loadGroups(): Groups {
 type SavedLocationsProps = {
   locations: LocationTarget[]
   onSelect: (location: LocationTarget) => void
-  onRemove: (location: LocationTarget) => void
+  onRemove: (locations: LocationTarget[]) => void
   onEdit: (location: LocationTarget) => void
 }
 
@@ -113,7 +113,8 @@ export function SavedLocations({ locations, onSelect, onRemove, onEdit }: SavedL
     })
     setEditingGroup(null)
   }
-  const deleteGroup = (id: string) =>
+  const deleteGroup = (id: string) => {
+    onRemove(locations.filter((location) => collection.membership[locationKey(location)] === id))
     update({
       groups: collection.groups.filter((g) => g.id !== id),
       membership: Object.fromEntries(
@@ -121,6 +122,7 @@ export function SavedLocations({ locations, onSelect, onRemove, onEdit }: SavedL
       ),
       collapsed: collection.collapsed.filter((group) => group !== id),
     })
+  }
   const setGroupOpen = (id: string, open: boolean) =>
     update({
       ...collection,
@@ -206,7 +208,7 @@ export function SavedLocations({ locations, onSelect, onRemove, onEdit }: SavedL
                   variant="ghost"
                   className="saved-location-action saved-location-remove"
                   aria-label={`Remove ${location.name} from saved locations`}
-                  onClick={() => onRemove(location)}
+                  onClick={() => onRemove([location])}
                 >
                   <TrashIcon size={16} />
                 </Button>
@@ -352,7 +354,8 @@ export function SavedLocations({ locations, onSelect, onRemove, onEdit }: SavedL
                       type="button"
                       variant="ghost"
                       size="icon-sm"
-                      aria-label={`Delete group ${group.name}, keep its locations`}
+                      aria-label={`Delete group ${group.name} and its locations`}
+                      title="Delete group and its locations"
                       onClick={() => deleteGroup(group.id)}
                     >
                       <TrashIcon size={14} />
