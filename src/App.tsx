@@ -13,7 +13,7 @@ import {
   ArrowsClockwiseIcon,
   BookmarkSimpleIcon,
   ChartBarIcon,
-  CalendarDotsIcon,
+  CameraIcon,
   CaretLeftIcon,
   CaretRightIcon,
   CornersInIcon,
@@ -139,7 +139,7 @@ function loadMeasurementColors(): MeasurementColors {
 }
 const navigation = [
   { name: 'Saved locations', icon: BookmarkSimpleIcon },
-  { name: 'Analysis', icon: PolygonIcon },
+  { name: 'Burning Activity Calendar', icon: PolygonIcon },
   { name: 'Area Analytics', icon: ChartBarIcon },
 ]
 
@@ -167,7 +167,7 @@ function ExplorerSidebar({
   const expanded = isMobile ? openMobile : open
   const selectNav = (name: string) => {
     setActiveNav(name)
-    if (name === 'Area Analytics' || name === 'Analysis') {
+    if (name === 'Area Analytics' || name === 'Burning Activity Calendar') {
       if (isMobile) setOpenMobile(false)
       else setOpen(false)
     }
@@ -402,7 +402,7 @@ function App() {
     return { start: today, end: today }
   })
   const [activityGeneration, setActivityGeneration] = useState(0)
-  const analysisOpen = activeNav === 'Analysis'
+  const analysisOpen = activeNav === 'Burning Activity Calendar'
   const fires = useAnalysisFires(analysisOpen ? analysis.confirmed : null, analysisRange)
   const countrySelection = useAnalysisCountrySelection(analysisOpen, analysis, dispatchAnalysis)
   const [camera, setCamera] = useState<MapCameraState>({
@@ -766,8 +766,8 @@ function App() {
             <ExplorerSidebar
               activeNav={activeNav}
               setActiveNav={(name) => {
-                if (name !== 'Analysis') countrySelection.cancel()
-                if (name === 'Analysis') {
+                if (name !== 'Burning Activity Calendar') countrySelection.cancel()
+                if (name === 'Burning Activity Calendar') {
                   chooseMode('orbit')
                   setCaptureOpen(false)
                   setSelectingCapture(false)

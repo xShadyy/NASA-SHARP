@@ -40,12 +40,12 @@ from harmonize import (
     calendar_document,
     capabilities_payload,
     geometry_bbox,
-    geometry_contains,
     map_source_document,
     observation_document,
     observations_document,
     overview_document,
     parse_utc_interval,
+    prepared_area,
     store_from_environment,
     time_series_document,
 )
@@ -157,11 +157,26 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="FIRMS Hotspots", lifespan=lifespan)
 
 app = FastAPI(title="FIRMS Hotspots", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
 
 
-async def fetch_csv(app: FastAPI, path: str) -> str:
+def require_firms_key(request: Request) -> None:
+    if not request.app.state.key:
+        raise HTTPException(503, "Set FIRMS_MAP_KEY before using FIRMS routes.")
+
+
+async def fetch_csv(
+    app: FastAPI, path: str, started: asyncio.Event | None = None
+) -> str:
     try:
-        async with app.state.slots, asyncio.timeout(150):
+        async with asyncio.timeout(150), app.state.slots:
+            if started is not None:
+                started.set()
             async with app.state.firms.stream("GET", path) as response:
                 if response.status_code in (401, 403):
                     raise FIRMSFailure("FIRMS rejected the map key or access.")
@@ -454,15 +469,14 @@ def filter_features(
     batches, lower, upper, zone, daynight, modis_min, viirs_min, geometry=None
 ):
     features = []
+    area = prepared_area(geometry) if geometry else None
     for batch in batches:
         for feature in batch:
             props = feature["properties"]
             acquired = datetime.fromisoformat(props["acquired_at"])
             if not lower <= acquired < upper:
                 continue
-            if geometry and not geometry_contains(
-                *feature["geometry"]["coordinates"], geometry
-            ):
+            if area and not area.contains(*feature["geometry"]["coordinates"]):
                 continue
             if daynight != "all" and props["daynight"] != {"day": "D", "night": "N"}[daynight]:
                 continue

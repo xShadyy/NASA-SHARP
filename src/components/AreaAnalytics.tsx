@@ -774,7 +774,7 @@ export function AreaAnalytics({
             <strong>{areaLabel}</strong>
             <span className="area-analytics-control-note">
               {analysisArea
-                ? 'Confirmed area from Analysis · detections are clipped to its boundary'
+                ? 'Confirmed area from Burning Activity Calendar · detections are clipped to its boundary'
                 : 'Generalized boundary · Caribbean Netherlands not included'}
             </span>
           </div>

@@ -169,12 +169,12 @@ export function AnalysisPanel({
     >
       <header className="analysis-panel-header">
         <div className="analysis-heading">
-          <h1 id={`${id}-title`}>Analysis</h1>
+          <h1 id={`${id}-title`}>Burning Activity Calendar</h1>
           <ToggleGroup
             type="single"
             value={tab}
             className="analysis-tabs"
-            aria-label="Analysis sections"
+            aria-label="Burning Activity Calendar sections"
             onValueChange={(value) => {
               if (value === 'area' || value === 'activity') setTab(value)
             }}
@@ -187,7 +187,7 @@ export function AnalysisPanel({
           type="button"
           variant="ghost"
           size="icon-sm"
-          aria-label="Close Analysis"
+          aria-label="Close Burning Activity Calendar"
           onClick={onClose}
         >
           <XIcon size={19} />
