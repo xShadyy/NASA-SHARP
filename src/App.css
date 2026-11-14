@@ -135,37 +135,40 @@ input:focus-visible {
   min-width: 0;
   white-space: nowrap;
   font-family: 'Fira Sans', sans-serif;
-  font-size: 12px;
+  font-size: 18px;
   font-weight: 900;
   letter-spacing: 0.125em;
 }
 .brand-copy {
   display: flex;
   min-width: 0;
-  align-items: center;
-  gap: 9px;
+  align-items: baseline;
+  gap: 8px;
   overflow: hidden;
 }
 .brand-title {
   flex: none;
   color: var(--brand-accent);
-  line-height: 1;
+  letter-spacing: 0.06em;
+  line-height: 1.2;
 }
 .brand-subtitle {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--muted);
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 400;
-  letter-spacing: 0.035em;
+  letter-spacing: 0.01em;
   line-height: 1.2;
 }
 .brand-separator {
   flex: none;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1.2;
 }
 .brand-symbol {
   width: 32px;
