@@ -142,9 +142,9 @@ function loadMeasurementColors(): MeasurementColors {
   }
 }
 const navigation = [
-  { name: 'Area Analytics', icon: ChartBarIcon },
   { name: 'Saved locations', icon: BookmarkSimpleIcon },
   { name: 'Analysis', icon: PolygonIcon },
+  { name: 'Area Analytics', icon: ChartBarIcon },
 ]
 
 const mantineTheme = {
