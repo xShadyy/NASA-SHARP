@@ -2,7 +2,11 @@ import type { LocationTarget } from '@/lib/locations'
 
 type Coordinate = [number, number]
 type Ring = Coordinate[]
-type CountryPolygon = { name: string; rings: Ring[]; bounds: [number, number, number, number] }
+export type CountryPolygon = {
+  name: string
+  rings: Ring[]
+  bounds: [number, number, number, number]
+}
 
 let countryPromise: Promise<CountryPolygon[]> | undefined
 
@@ -19,7 +23,7 @@ function isRing(value: unknown): value is Ring {
   )
 }
 
-function loadCountryPolygons(): Promise<CountryPolygon[]> {
+export function loadCountryPolygons(): Promise<CountryPolygon[]> {
   countryPromise ??= fetch(`${import.meta.env.BASE_URL}map-data/country-lookup.json`)
     .then(async (response) => {
       if (!response.ok) throw new Error('Country lookup could not be loaded.')
