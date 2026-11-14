@@ -1,17 +1,12 @@
 import type { Map as MapLibreMap } from 'maplibre-gl'
 import { GRATICULE_LINE_LAYER_ID } from './graticule'
 
-// Phosphor MountainsIcon, fill weight (v2.1.10, MIT). Keep its path here so
-// MapLibre can rasterize one symbol without bundling React's server renderer.
 const PHOSPHOR_MOUNTAINS_PATH = 'M254.88,195.92l-54.56-92.08A15.87,15.87,0,0,0,186.55,96h0a15.85,15.85,0,0,0-13.76,7.84l-15.64,26.39a4,4,0,0,0,0,4.07l26.8,45.47a8.13,8.13,0,0,1-1.89,10.55,8,8,0,0,1-11.8-2.26L101.79,71.88a16,16,0,0,0-27.58,0L1.11,195.94a8,8,0,0,0,1,9.52A8.23,8.23,0,0,0,8.23,208H247.77a8.29,8.29,0,0,0,6.09-2.55A8,8,0,0,0,254.88,195.92ZM64.43,120,88,80l23.57,40ZM140,52a24,24,0,1,1,24,24A24,24,0,0,1,140,52Z'
 
 export const VOLCANO_SOURCE = 'smithsonian-holocene-volcanoes'
 export const VOLCANO_ATTRIBUTION = '<a href="https://doi.org/10.5479/si.GVP.VOTW5-2026.5.4" target="_blank" rel="noopener">Global Volcanism Program / Smithsonian Institution · Volcanoes of the World v5.4.0</a>'
 export const WDPA_SOURCE = 'unep-wcmc-wdpa-protected-areas'
 export const WDPA_SERVICE = 'https://data-gis.unep-wcmc.org/server/rest/services/ProtectedSites/The_World_Database_of_Protected_Areas/MapServer'
-// The official live service is updated monthly. Its metadata identified the
-// October 2026 release when verified on 22 October 2026; it is not a frozen
-// November 2025 snapshot. Check the service copyrightText before changing this.
 export const WDPA_RELEASE = 'October 2026'
 export const WDPA_ATTRIBUTION = `<a href="https://www.protectedplanet.net/" target="_blank" rel="noopener">UNEP-WCMC and IUCN (2026), Protected Planet: WDPCA · protected areas only (${WDPA_RELEASE})</a>`
 export const WDPA_CAPTURE_CREDIT = `UNEP-WCMC and IUCN (2026), Protected Planet: The World Database on Protected and Conserved Areas (WDPCA) [On-line], [${WDPA_RELEASE}], Cambridge, UK: UNEP-WCMC and IUCN · protectedplanet.net`
@@ -20,9 +15,6 @@ export const CONTEXT_LAYER_IDS = {
   showVolcanoes: ['context-volcanoes', 'context-volcano-labels'],
 } as const
 export type ContextSettings = { showProtectedAreas: boolean, showBuiltUp: boolean, showVolcanoes: boolean }
-
-/** MapLibre needs image pixels for symbol layers. Rasterize Phosphor's
- * MountainsIcon, keeping volcanoes as map features rather than HTML markers. */
 function volcanoIconPixels(): ImageData {
   const canvas = document.createElement('canvas')
   canvas.width = 48; canvas.height = 48
@@ -40,9 +32,6 @@ function volcanoIconPixels(): ImageData {
 
 export function applyContextVisibility(map: MapLibreMap, settings: ContextSettings) {
   if (settings.showProtectedAreas && !map.getSource(WDPA_SOURCE)) {
-    // Official protected-areas-only view (site_type = 'PA') of the live WDPCA.
-    // The transparent 256px EPSG:3857 PNG cache has native levels 0–14.
-    // Request visible tiles only; never load the global polygons into React.
     map.addSource(WDPA_SOURCE, {
       type: 'raster', tiles: [`${WDPA_SERVICE}/tile/{z}/{y}/{x}`],
       tileSize: 256, minzoom: 0, maxzoom: 14, attribution: WDPA_ATTRIBUTION,
@@ -53,17 +42,9 @@ export function applyContextVisibility(map: MapLibreMap, settings: ContextSettin
     }, map.getLayer(GRATICULE_LINE_LAYER_ID) ? GRATICULE_LINE_LAYER_ID : 'geography-coastlines')
   }
   if (settings.showVolcanoes && !map.getSource(VOLCANO_SOURCE)) {
-    // 1,214 factual point records (~199 kB) derived from the official WFS;
-    // loaded directly by MapLibre, never copied into React state.
     map.addSource(VOLCANO_SOURCE, { type: 'geojson', data: '/map-data/holocene-volcanoes.geojson', maxzoom: 10, attribution: VOLCANO_ATTRIBUTION })
     map.addImage('known-volcano', volcanoIconPixels(), { pixelRatio: 2 })
     map.addLayer({ id: 'context-volcanoes', type: 'symbol', source: VOLCANO_SOURCE, minzoom: 2,
-      // Place the factual marker even when its own name or a close-view map
-      // label occupies the same screen area. Map alignment gives the icon's
-      // vertices globe horizon clipping on every frame, including while the
-      // camera moves; viewport-aligned symbols rely on deferred placement.
-      // Use the current overlap property so new tiles wait for placement
-      // instead of the legacy allow-overlap's optimistic first draw.
       layout: { 'icon-image': 'known-volcano', 'icon-size': ['interpolate', ['linear'], ['zoom'], 2, 0.55, 6, 0.85], 'icon-pitch-alignment': 'map', 'icon-overlap': 'always', 'icon-ignore-placement': true, 'icon-padding': 3 } }, 'geography-sea-labels')
     map.addLayer({ id: 'context-volcano-labels', type: 'symbol', source: VOLCANO_SOURCE, minzoom: 6,
       layout: { 'text-field': ['get', 'name'], 'text-font': ['Fira Sans'], 'text-size': 11, 'text-offset': [0, 0.9], 'text-anchor': 'top', 'text-max-width': 10, 'text-pitch-alignment': 'map' },

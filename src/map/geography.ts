@@ -1,9 +1,6 @@
 import type { ExpressionSpecification, FilterSpecification, LayerSpecification, Map, SourceSpecification, SymbolLayerSpecification } from 'maplibre-gl'
 import type { MapView } from './projection'
 
-// Adapted from OpenFreeMap Dark's boundary/place/water_name hierarchy, using
-// the same OpenMapTiles vector source. The surrounding app's theme never enters
-// this style: only the imagery beneath a layer determines its contrast.
 export const OPENFREEMAP_GLYPHS = 'https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf'
 export const GEOGRAPHY_ATTRIBUTION = '<a href="https://www.naturalearthdata.com/about/terms-of-use/" target="_blank" rel="noopener">Natural Earth</a>'
 
@@ -17,8 +14,6 @@ export const CITY_LABEL_LAYER_IDS = [
   'geography-city-labels-overview', 'geography-city-labels-local',
   'geography-city-labels-regional', 'geography-city-labels-global',
 ] as const
-// Future detection layers can be inserted after boundaries, before every place
-// label, without changing this map instance or adding a second renderer.
 export const FIRE_LAYER_BEFORE_ID = GEOGRAPHIC_LABEL_IDS[0]
 const CITY_DOT = 'geography-city-dot'
 const NAME: ExpressionSpecification = [
@@ -35,9 +30,6 @@ export function geographySources(): Record<string, SourceSpecification> {
       type: 'geojson', data: '/map-data/coastline.geojson',
       maxzoom: 6, tolerance: 0.4, attribution: GEOGRAPHY_ATTRIBUTION,
     },
-    // The live vector tiles contain no city features at native z0/1. This
-    // tiny real-data supplement fills that overview gap, without increasing
-    // the tile detail requested for borders, countries or the imagery.
     'geography-global-cities': {
       type: 'geojson', data: '/map-data/global-cities.geojson',
       maxzoom: 2, attribution: GEOGRAPHY_ATTRIBUTION,
@@ -50,8 +42,6 @@ export function geographySources(): Record<string, SourceSpecification> {
 }
 
 function cityLayer(id: string, minzoom: number, filter: FilterSpecification): SymbolLayerSpecification {
-  // Icon and label share one symbol, so collision handling hides the dot with
-  // its label rather than leaving a world full of unlabeled city markers.
   return {
     id, type: 'symbol', source: 'openfreemap', 'source-layer': 'place', minzoom,
     filter,
@@ -160,8 +150,6 @@ export function geographyLayers(): LayerSpecification[] {
   return [...layers.filter((layer) => !context.has(layer.id)), ...layers.filter((layer) => context.has(layer.id))]
 }
 
-/** A small raster point symbol on the existing MapLibre renderer, not an HTML
- * marker. It intentionally has a pale center and dark edge on both basemaps. */
 export function registerGeographicImages(map: Map) {
   if (map.hasImage(CITY_DOT)) return
   const size = 16

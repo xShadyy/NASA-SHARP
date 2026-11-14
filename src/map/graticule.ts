@@ -13,11 +13,7 @@ type GridFeature = Feature<LineString | Point, GridProperties>
 
 const EMPTY_GRID: FeatureCollection<LineString | Point, GridProperties> = { type: 'FeatureCollection', features: [] }
 const MERCATOR_LIMIT = 85.0511287798066
-// MapLibre's GeoJSON source is tiled through Mercator even on the perspective
-// globe, so vector geometry cannot reliably extend closer to either pole.
 const GLOBE_LIMIT = MERCATOR_LIMIT
-// At the highest supported map zoom, 0.001° is still roughly 100 m at the
-// equator. Smaller lines would crowd the display without adding useful context.
 const INTERVALS = [30, 15, 10, 5, 2, 1, 0.5, 0.25, 0.1, 0.05, 0.02, 0.01, 0.005, 0.002, 0.001] as const
 const MAX_LINES = 60
 const MAX_VERTICES = 24_000
@@ -26,8 +22,6 @@ export function graticuleSource(): SourceSpecification {
   return { type: 'geojson', data: EMPTY_GRID, maxzoom: 18, tolerance: 0.2 }
 }
 
-/** Native geographic layers. Keep them above imagery and below the map's
- * important symbols. MapLibre clips the geometry to the globe horizon. */
 export function graticuleLayers(): LayerSpecification[] {
   return [
     {
@@ -73,8 +67,6 @@ function isSurfacePoint(map: MapLibreMap, longitude: number, latitude: number, i
   const { clientWidth: width, clientHeight: height } = map.getContainer()
   if (!Number.isFinite(screen.x) || !Number.isFinite(screen.y)
     || screen.x < inset || screen.y < inset || screen.x > width - inset || screen.y > height - inset) return null
-  // On a perspective globe MapLibre may project a coordinate from the far
-  // hemisphere onto the near side. The inverse projection rejects that case.
   const inverse = map.unproject(screen)
   if (Math.abs(wrapLongitude(inverse.lng - longitude)) > 0.0001 || Math.abs(inverse.lat - latitude) > 0.0001) return null
   return screen
@@ -94,8 +86,6 @@ function screenAngularSpan(map: MapLibreMap, view: MapView) {
   const longitude = xValid ? Math.abs(wrapLongitude(x.lng - center.lng)) : 0
   const latitude = yValid ? Math.abs(y.lat - center.lat) : 0
   const measured = Math.max(longitude, latitude)
-  // A high-latitude or edge-on globe sample can be invalid. The Mercator
-  // fallback still gives a stable spacing until a valid sample is available.
   return measured > 0 && measured < 180 ? measured : 110 * 360 / (512 * 2 ** map.getZoom())
 }
 
@@ -112,8 +102,6 @@ function visibleRegion(map: MapLibreMap, view: MapView, interval: number): Regio
     const bounds = map.getBounds()
     const center = map.getCenter().lng
     if (bounds.getEast() - bounds.getWest() >= 360) {
-      // A very wide viewport can contain multiple wrapped flat worlds. One
-      // canonical grid is enough; MapLibre renders the necessary copies.
       return { west: center - 180, east: center + 180, south: Math.max(-limit, bounds.getSouth()), north: Math.min(limit, bounds.getNorth()) }
     }
     const west = nearLongitude(bounds.getWest(), center)
@@ -126,9 +114,6 @@ function visibleRegion(map: MapLibreMap, view: MapView, interval: number): Regio
       north: Math.min(limit, bounds.getNorth() + interval * 1.5),
     }
   }
-  // A perspective globe's getBounds() can include points beyond its horizon.
-  // Sample visible screen positions instead, with one-and-a-half grid cells
-  // of padding so lines reach the edge between navigation updates.
   const { clientWidth: width, clientHeight: height } = map.getContainer()
   const center = map.getCenter().lng
   const longitudes: number[] = []
@@ -141,8 +126,6 @@ function visibleRegion(map: MapLibreMap, view: MapView, interval: number): Regio
     longitudes.push(nearLongitude(location.lng, center))
     latitudes.push(location.lat)
   }
-  // At overview zooms, include the entire globe. This also covers polar
-  // views where a visible cap contains every longitude around the pole.
   if (map.getZoom() <= 2.6 || !longitudes.length) {
     return { west: -180, east: 180, south: -limit, north: limit }
   }
@@ -217,8 +200,6 @@ function buildGrid(map: MapLibreMap, view: MapView): FeatureCollection<LineStrin
   const longitudeStart = Math.ceil(region.west / interval)
   const longitudeEnd = Math.floor(region.east / interval)
   const sampleStep = Math.min(1, Math.max(interval / 2, Math.max(region.east - region.west, region.north - region.south) / 256))
-  // Split every parallel at the antimeridian. No GeoJSON line jumps from +180
-  // to -180, even when a flat view is centered across that seam.
   for (let index = latitudeStart; index <= latitudeEnd; index++) {
     const latitude = Number((index * interval).toFixed(6))
     const axis = latitude === 0
@@ -233,8 +214,7 @@ function buildGrid(map: MapLibreMap, view: MapView): FeatureCollection<LineStrin
         .map((longitude) => [longitude - world * 360, latitude])
       vertices += points.length
       if (vertices <= MAX_VERTICES) lines.push(lineFeature(points, axis))
-      // At most 25 candidates per parallel, followed by a surface/horizon
-      // check. Only the best becomes a label, so the map has no repeats.
+
       const stride = Math.max(1, Math.ceil(points.length / 25))
       for (let point = 0; point < points.length; point += stride) {
         candidates.push([points[point][0], latitude])
@@ -263,8 +243,6 @@ function buildGrid(map: MapLibreMap, view: MapView): FeatureCollection<LineStrin
   return { type: 'FeatureCollection', features: [...lines, ...labels] }
 }
 
-/** Generate only when navigation settles. Existing GeoJSON features remain
- * attached to Earth and MapLibre reprojects them each frame while dragging. */
 export function createGraticuleController(map: MapLibreMap, getView: () => MapView, initiallyEnabled = false) {
   let enabled = initiallyEnabled
   let destroyed = false

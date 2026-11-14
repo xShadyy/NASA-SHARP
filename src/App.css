@@ -100,7 +100,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--focus); out
 .date-control svg { color: var(--muted); }
 .date-label { flex: 0 0 78px; inline-size: 78px; text-align: left; }
 .date-divider { color: var(--muted-soft); }
-/* Reserve room for every range label so the centered calendar stays anchored. */
+
 .period-label { flex: 0 0 8ch; inline-size: 8ch; text-align: left; }
 .header-separator { height: 24px !important; margin: 0 1px; }
 .help-button { color: var(--muted); }
@@ -124,7 +124,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--focus); out
 .ui-badge { display: inline-flex; align-items: center; border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); padding: 4px 7px; border-radius: var(--radius-sm); font-size: 9px; font-weight: 700; letter-spacing: .055em; }
 .globe-tools { position: absolute; z-index: 5; left: 50%; bottom: 15px; transform: translateX(-50%); display: flex; align-items: center; width: max-content; max-width: calc(100% - 24px); padding-inline-end: 40px; pointer-events: none; }
 .bottom-toolbar { width: max-content; min-width: 0; padding: 5px; border: 1px solid var(--surface); border-radius: var(--radius-lg); background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
-/* Keep the toolbar footprint mounted while folding it instantly. */
+
 .toolbar-reveal { flex: 0 1 auto; min-width: 0; pointer-events: auto; }
 .toolbar-motion { overflow: hidden; clip-path: inset(0 0 0 0); visibility: visible; transition: none; }
 .toolbar-reveal[data-state="closed"] { pointer-events: none; }
@@ -193,7 +193,6 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--focus); out
 .sidebar-help .sidebar-help-kicker { font-family: "Fira Sans", sans-serif; }
 .ui-sidebar [data-slot="sidebar-menu-button"][data-active="true"] { box-shadow: inset 0 0 0 1px var(--border-strong); }
 
-/* Keep Calendar selection and muted dates readable in both themes. */
 .calendar-picker .rdp-day_button { opacity: 1; }
 .calendar-picker .rdp-outside, .calendar-picker .rdp-disabled { color: var(--muted); opacity: 1; }
 .calendar-picker .rdp-day_button[data-selected-single="true"],

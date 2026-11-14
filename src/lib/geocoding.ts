@@ -42,7 +42,6 @@ function photonFeatureToLocation(feature: unknown): LocationTarget | null {
   return isLocationTarget(result) ? result : null
 }
 
-/** Explicit submitted searches only. No remote requests are made while typing. */
 export async function geocodeDestination(query: string, signal: AbortSignal): Promise<LocationTarget[]> {
   const key = normalizePlaceName(query)
   if (!key || query.length > 250) return []
@@ -56,7 +55,6 @@ export async function geocodeDestination(query: string, signal: AbortSignal): Pr
   signal.addEventListener('abort', cancel, { once: true })
   const timeout = window.setTimeout(() => controller.abort(new DOMException('Search timed out.', 'TimeoutError')), 12_000)
   try {
-    // Configurable for a hosted/self-managed Photon instance as traffic grows.
     const url = new URL(import.meta.env.VITE_GEOCODER_URL || DEFAULT_ENDPOINT)
     if (!['https:', 'http:'].includes(url.protocol)) throw new Error('Invalid geocoder URL.')
     url.searchParams.set('q', query.trim())
@@ -68,7 +66,6 @@ export async function geocodeDestination(query: string, signal: AbortSignal): Pr
     const features = data && typeof data === 'object' && 'features' in data ? data.features : []
     const seen = new Set<string>()
     const results = Array.isArray(features) ? features.map(photonFeatureToLocation).filter((place): place is LocationTarget => place !== null).filter((place) => {
-      // Administrative relations can duplicate the same town and extent.
       const identity = `${normalizePlaceName(place.name)}|${place.description ?? ''}|${JSON.stringify(place.bounds ?? place.coordinates.map((value) => Number(value.toFixed(5))))}`
       if (seen.has(identity)) return false
       seen.add(identity)

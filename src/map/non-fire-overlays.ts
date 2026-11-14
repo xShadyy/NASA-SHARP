@@ -7,8 +7,7 @@ const GIBS_ROOT = 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best'
 export const HBASE_PRODUCT = 'Landsat_Human_Built-up_And_Settlement_Extent'
 export const EUROPE_SERVICE = 'https://bio.discomap.eea.europa.eu/arcgis/rest/services/ProtectedSites/Natura2000Sites/MapServer'
 const EUROPE_BOUNDS: [number, number, number, number] = [-32.37, 24.59, 34.11, 70.9]
-// NASA SEDAC HBASE has no imagery south of about 58.35° S or north of 82.79° N.
-// Within these bounds a pixel can still be unclassified or unavailable.
+
 const HBASE_BOUNDS: [number, number, number, number] = [-180, -58.35, 180, 82.79]
 export type OverlayStatus = Partial<Record<'showBuiltUp' | 'showEuropeanProtectedAreas' | 'showLandsat8Swaths' | 'showLandsat9Swaths', string>>
 const HBASE_SOURCE = 'context-hbase'
@@ -36,9 +35,8 @@ export function createNonFireOverlayController(map: MapLibreMap, onStatus: (stat
     const response = await fetch(`${GIBS_ROOT}/${HBASE_PRODUCT}/default/GoogleMapsCompatible_Level12/${path}.png`, { signal: abort.signal })
     if (!response.ok) throw new Error(`HBASE tile returned ${response.status}`)
     const pixels = await decodePixels(await response.blob())
-    // Official categorical colormap: 201 = HBASE (217,95,2). Class 200,
-    // road class 202 and no-data stay transparent. No duplicate road switch.
-    for (let i = 0; i < pixels.data.length; i += 4) if (pixels.data[i] !== 217 || pixels.data[i + 1] !== 95 || pixels.data[i + 2] !== 2) pixels.data[i + 3] = 0
+
+for (let i = 0; i < pixels.data.length; i += 4) if (pixels.data[i] !== 217 || pixels.data[i + 1] !== 95 || pixels.data[i + 2] !== 2) pixels.data[i + 3] = 0
     if (abort.signal.aborted) throw new DOMException('Aborted', 'AbortError')
     return { data: pixelBitmap(pixels) }
   })
@@ -47,7 +45,7 @@ export function createNonFireOverlayController(map: MapLibreMap, onStatus: (stat
   function viewIntersects(bounds: [number, number, number, number]) {
     const view = map.getBounds()
     if (view.getNorth() < bounds[1] || view.getSouth() > bounds[3]) return false
-    // MapLibre can return wrapped longitudes after rotating the globe.
+
     for (let wrap = -2; wrap <= 2; wrap++) {
       if (view.getWest() <= bounds[2] + wrap * 360 && view.getEast() >= bounds[0] + wrap * 360) return true
     }
@@ -69,10 +67,8 @@ export function createNonFireOverlayController(map: MapLibreMap, onStatus: (stat
     }
     visibility(id, true)
     const latitude = Math.min(85, Math.abs(map.getCenter().lat)), surfaceZoom = map.getZoom() - Math.log2(Math.cos(latitude * Math.PI / 180))
-    // HLS granules are roughly MGRS-sized scene footprints, with many records
-    // per day. Query the visible region only once it is small enough to avoid
-    // thousands of records for a full-globe or continent-scale view.
-    if (surfaceZoom < 5 || !date) { clearFootprints(id); queryKeys.delete(id); status(key, 'Zoom in for dated HLS scene footprints. These are MGRS granules, not orbit swath outlines.'); return }
+
+if (surfaceZoom < 5 || !date) { clearFootprints(id); queryKeys.delete(id); status(key, 'Zoom in for dated HLS scene footprints. These are MGRS granules, not orbit swath outlines.'); return }
     const bounds = map.getBounds()
     const west = bounds.getWest(), east = bounds.getEast(), south = Math.max(-85, bounds.getSouth()), north = Math.min(85, bounds.getNorth())
     const width = Math.min(360, east - west), start = ((west + 180) % 360 + 360) % 360 - 180

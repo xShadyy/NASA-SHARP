@@ -1,12 +1,12 @@
 export type LocationTarget = {
   id: string
   name: string
-  /** WGS84 longitude, latitude, in decimal degrees. */
+
   coordinates: [number, number]
-  /** East may exceed 180 for a region that crosses the date line. */
+
   bounds?: [[number, number], [number, number]]
   kind: 'country' | 'continent' | 'coordinates' | 'place' | 'current'
-  /** Browser-reported horizontal accuracy radius, in metres. */
+
   accuracy?: number
   source?: string
   description?: string
@@ -43,7 +43,6 @@ export function locationKey(location: LocationTarget): string {
   return location.coordinates.map((value) => value.toFixed(6)).join(',')
 }
 
-/** Six decimal places are a display convention, not a promise of GPS accuracy. */
 export function formatCoordinates([longitude, latitude]: [number, number]): string {
   return `${latitude.toFixed(6)}°, ${longitude.toFixed(6)}°`
 }
@@ -84,7 +83,6 @@ export function loadSavedLocations(): LocationTarget[] {
   } catch { return [] }
 }
 
-/** Returns false when browser storage is unavailable or full. */
 export function persistSavedLocations(locations: LocationTarget[]): boolean {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(locations.filter(isLocationTarget).slice(0, MAX_SAVED).map(cleanLocation)))

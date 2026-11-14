@@ -1,4 +1,4 @@
-/* Place the official shadcn Sidebar inside the globe workspace below the top bar. */
+
 .app-body[data-slot="sidebar-wrapper"] { position: relative; min-height: 0; width: 100%; }
 
 .ui-sidebar[data-slot="sidebar"] {
@@ -99,7 +99,7 @@
 .ui-sidebar-mobile-rail button > svg { width: 16px; height: 16px; flex: none; }
 .ui-sidebar-mobile-rail button:not(:disabled, [aria-disabled="true"], [data-active="true"], [data-state="on"], [aria-pressed="true"]):is(:hover, :focus-visible) { color: var(--text); background: transparent;  border-color: var(--contrast); }
 [data-sidebar="sidebar"][data-mobile="true"] { top: 66px; bottom: 0; height: calc(100% - 66px); width: var(--sidebar-width); background: var(--sidebar); color: var(--text); padding: 0; gap: 0; animation: none; transition: none; }
-/* The mobile sidebar and its modal backdrop appear and disappear together. */
+
 body:has([data-sidebar="sidebar"][data-mobile="true"]) [data-slot="sheet-overlay"] { animation: none; transition: none; }
 [data-sidebar="sidebar"][data-mobile="true"] > div:last-child { min-height: 0; }
 [data-sidebar="sidebar"][data-mobile="true"] [data-slot="sidebar-header"] { display: grid; flex: none; grid-template-columns: minmax(0, 1fr) 40px; align-items: center; height: 77px; padding: 17px 15px 12px; gap: 14px; position: relative; }

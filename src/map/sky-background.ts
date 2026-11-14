@@ -93,10 +93,6 @@ function createResources(gl: WebGL2RenderingContext): Resources {
   }
 }
 
-/** NASA's Deep Star Maps 2020, with illustrative camera-linked orientation.
- * It is not an observer/time-calibrated Galactic or equatorial sky chart.
- * One full-screen triangle uses MapLibre's own context and normal render cycle:
- * no extra canvas, WebGL renderer, idle animation or React pointer updates. */
 export function createSkyBackgroundLayer(options: { onError: () => void, onReady: () => void, visible?: boolean }): CustomLayerInterface & { retry: () => void, setVisible: (visible: boolean) => void } {
   let map: MapLibreMap | null = null
   let context: WebGL2RenderingContext | null = null
@@ -154,9 +150,8 @@ export function createSkyBackgroundLayer(options: { onError: () => void, onReady
     render(gl) {
       if (!map || !visible || failed || gl.isContextLost() || map.getProjection().type !== GLOBE_PROJECTION || !image?.complete || !image.naturalWidth) return
       try {
-        // Context restoration invalidates GPU objects; the decoded local image
-        // can be uploaded again without a second download or renderer.
-        if (!resources || !gl.isProgram(resources.program)) {
+
+if (!resources || !gl.isProgram(resources.program)) {
           release()
           resources = createResources(gl)
           uploadPending = true
@@ -208,9 +203,8 @@ export function createSkyBackgroundLayer(options: { onError: () => void, onReady
         gl.uniform1i(resources.panorama, 0)
         gl.uniform1f(resources.aspect, gl.drawingBufferWidth / Math.max(1, gl.drawingBufferHeight))
         gl.uniformMatrix3fv(resources.camera, false, basis)
-        // The far-plane triangle fills only space, respecting the native globe
-        // depth buffer. MapLibre resets custom-layer GL state after this call.
-        gl.enable(gl.DEPTH_TEST)
+
+gl.enable(gl.DEPTH_TEST)
         gl.depthFunc(gl.LEQUAL)
         gl.depthMask(false)
         gl.depthRange(0, 1)
@@ -245,8 +239,6 @@ export function createSkyBackgroundLayer(options: { onError: () => void, onReady
   }
 }
 
-// WebGL2 permits a 2048px texture limit. Keep the supplied 4K resolution on
-// capable GPUs, with a one-time upload downscale on lower-limit devices.
 function imageWithinTextureLimit(gl: WebGL2RenderingContext, image: HTMLImageElement): TexImageSource {
   const maximum = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number
   if (image.naturalWidth <= maximum && image.naturalHeight <= maximum) return image

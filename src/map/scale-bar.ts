@@ -2,8 +2,6 @@ import type { Map as MapLibreMap } from 'maplibre-gl'
 import { geodesicDistanceKm } from '@/lib/geodesy'
 import type { MapView } from './projection'
 
-/** Two local WGS84 scales, sampled from the real map view. At full-Earth scale
- * there is no uniform screen scale; regional globe values refer to map center. */
 export function createScaleBar(map: MapLibreMap, output: HTMLOutputElement, getView: () => MapView) {
   const bars = ['km', 'mi'].map((unit) => {
     const bar = document.createElement('span')

@@ -1,4 +1,4 @@
-/** Decode a map tile for color-based categorical overlays. */
+
 export async function decodePixels(blob: Blob): Promise<ImageData> {
   const bitmap = await createImageBitmap(blob)
   const canvas = new OffscreenCanvas(bitmap.width, bitmap.height)

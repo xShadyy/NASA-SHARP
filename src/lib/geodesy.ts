@@ -1,11 +1,9 @@
 import geographicLib from 'geographiclib-geodesic'
 
-/** All input/output positions use GeoJSON order: longitude, latitude. */
 export type GeographicPosition = [longitude: number, latitude: number]
 const { Geodesic } = geographicLib
 const earth = Geodesic.WGS84
 
-/** Shortest ellipsoidal ground distance, independent of the map projection. */
 export function geodesicDistanceKm(from: GeographicPosition, to: GeographicPosition): number {
   return (earth.Inverse(from[1], from[0], to[1], to[0]).s12 ?? 0) / 1_000
 }
@@ -22,8 +20,6 @@ export type GeodesicSegment = {
   distanceKm: number
 }
 
-/** One inverse solution supplies the display curve, true midpoint and value.
- * The controller caches this object for every anchored edge. */
 export function geodesicSegment(from: GeographicPosition, to: GeographicPosition): GeodesicSegment {
   const line = earth.InverseLine(from[1], from[0], to[1], to[0])
   const steps = Math.max(1, Math.ceil(Math.max(line.s13 / 30_000, line.a13 / 0.4)))
@@ -36,8 +32,6 @@ export function geodesicSegment(from: GeographicPosition, to: GeographicPosition
   return { path, distanceKm: line.s13 / 1_000, midpoint: [halfway.lon2 ?? from[0], halfway.lat2 ?? from[1]] }
 }
 
-/** GeographicLib keeps a compensated sum of committed edges. TestPoint adds
- * only the two candidate edges, giving an exact O(1) live area calculation. */
 export function geodesicPolygonAccumulator(points: readonly GeographicPosition[]) {
   const polygon = earth.Polygon(false)
   for (const [longitude, latitude] of points) polygon.AddPoint(latitude, longitude)
@@ -49,8 +43,6 @@ export function geodesicPolygonAccumulator(points: readonly GeographicPosition[]
   }
 }
 
-/** GeographicLib handles the antimeridian and poles. The smaller enclosed
- * region is used; crossing edges have algebraic area, so callers reject them. */
 export function geodesicAreaKm2(points: readonly GeographicPosition[]): number {
   return Math.abs(signedAreaM2(points)) / 1_000_000
 }
@@ -62,8 +54,6 @@ function signedAreaM2(points: readonly GeographicPosition[]): number {
   return polygon.Compute(false, true).area ?? 0
 }
 
-/** Densify on the same WGS84 geodesic used for the measurement. Longitudes
- * stay unrolled so a path across 180° never draws a chord across the world. */
 export function geodesicPath(points: readonly GeographicPosition[], closed = false): GeographicPosition[] {
   if (points.length === 0) return []
   const path: GeographicPosition[] = [[...points[0]]]
@@ -79,15 +69,10 @@ export function geodesicPath(points: readonly GeographicPosition[], closed = fal
   return path
 }
 
-/** A closed, unrolled ring that geojson-vt can clip at world boundaries.
- * A ring winding around a pole needs the polar edge, rather than an erroneous
- * closing chord through its interior. MapLibre's Mercator source itself has
- * a polar display limit; the ellipsoidal area calculation has no such limit. */
 export function geodesicPolygonRing(points: readonly GeographicPosition[]): GeographicPosition[] {
   return closeGeodesicRing(geodesicPath(points, true), signedAreaM2(points) / 1_000_000)
 }
 
-/** Close an already densified boundary without solving its fixed edges again. */
 export function closeGeodesicRing(path: readonly GeographicPosition[], signedAreaKm2: number): GeographicPosition[] {
   const ring = [...path]
   if (ring.length === 0) return ring
@@ -102,9 +87,6 @@ export function closeGeodesicRing(path: readonly GeographicPosition[], signedAre
   return ring
 }
 
-/** Reject bow-tie shapes rather than presenting their algebraic area as a
- * physical footprint. Testing densified geodesic edges also handles curves
- * and longitude wrapping instead of comparing raw longitude/latitude chords. */
 export function hasCrossingEdges(points: readonly GeographicPosition[]): boolean {
   if (points.length < 4) return false
   const edges: GeographicPosition[][] = []
@@ -117,8 +99,6 @@ export function hasCrossingEdges(points: readonly GeographicPosition[]): boolean
   return hasCrossingPaths(edges)
 }
 
-/** Uses cached geodesic edges, rejects disjoint edge bounding boxes first,
- * and runs only when an anchored vertex changes, never on cursor movement. */
 export function hasCrossingPaths(edges: readonly (readonly GeographicPosition[])[]): boolean {
   const boxes = edges.map((edge) => {
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity

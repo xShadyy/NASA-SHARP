@@ -3,7 +3,6 @@ import * as CheckboxPrimitive from '@radix-ui/react-checkbox'
 import { CheckIcon } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 
-// Adapted from the official shadcn/ui Checkbox registry component.
 function Checkbox({ className, ...props }: React.ComponentProps<typeof CheckboxPrimitive.Root>) {
   return <CheckboxPrimitive.Root
     data-slot="checkbox"

@@ -32,7 +32,7 @@ export function DestinationSearch({ onSelect }: DestinationSearchProps) {
 
   useEffect(() => {
     let disposed = false
-    loadSearchPlaces().then((data) => { if (!disposed) setPlaces(data) }).catch(() => { /* Submitted online searches remain available. */ })
+    loadSearchPlaces().then((data) => { if (!disposed) setPlaces(data) }).catch(() => {})
     return () => { disposed = true }
   }, [])
 

@@ -80,15 +80,15 @@ function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme
     try { localStorage.setItem('wildfire-theme', theme) }
-    catch { /* The selected theme still works without browser storage. */ }
+    catch {}
   }, [theme])
   useEffect(() => {
     try { localStorage.setItem(LAYER_STORAGE_KEY, JSON.stringify({ ...referenceLayers, space: showSpace })) }
-    catch { /* Layer choices still work for this session. */ }
+    catch {}
   }, [referenceLayers, showSpace])
   useEffect(() => {
     try { localStorage.setItem('ethereal-map-background-v1', background) }
-    catch { /* Background choices still work for this session. */ }
+    catch {}
   }, [background])
 
   return <MantineProvider theme={mantineTheme} forceColorScheme={theme}><TooltipProvider>

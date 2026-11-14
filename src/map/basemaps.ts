@@ -25,8 +25,6 @@ export function isMapBackground(value: unknown): value is MapBackground {
   return MAP_BACKGROUND_OPTIONS.some((option) => option.value === value)
 }
 
-// Verified against NASA's EPSG:3857 WMTS capabilities. This is a static August
-// 2004 composite, not current observations. Native resolution is 500 m (z0–8).
 export const NASA_BLUE_MARBLE_URL =
   'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/BlueMarble_ShadedRelief_Bathymetry/default/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpeg'
 
@@ -57,13 +55,11 @@ const DETAIL_LABEL_LAYER_IDS = [
 
 export const LABEL_LAYER_IDS = [...GEOGRAPHIC_LABEL_IDS, ...DETAIL_LABEL_LAYER_IDS]
 
-/** Real OpenMapTiles transportation geometry and its road-name symbols. */
 export const ROAD_LAYER_IDS = [
   'detail-roads-minor', 'detail-roads-major-casing', 'detail-roads-major',
   'detail-motorways', 'detail-road-labels',
 ] as const
 
-/** Close-view settlements. Ranked major cities remain geographic place labels. */
 export const SETTLEMENT_LAYER_IDS = [
   'detail-town-labels', 'detail-buildings',
 ] as const
@@ -72,7 +68,6 @@ export const COUNTRY_BORDER_LAYER_IDS = [
   'geography-country-borders', 'geography-disputed-borders',
 ] as const
 
-/** Cartographic relief and land cover; this is not a 3D elevation mesh. */
 export const TERRAIN_LAYER_IDS = [
   'detail-relief', 'detail-wood', 'detail-grass', 'detail-peak-labels',
 ] as const
@@ -117,9 +112,9 @@ export type MapLayerSettings = MapReferenceLayers & {
 }
 
 export type ZoomDependentLayerAvailability = {
-  /** The current style contains at least one relevant, configured source layer. */
+
   available: boolean
-  /** First relevant layer's own minzoom, not a separate UI threshold. */
+
   minZoom: number | null
   visibleAtCurrentZoom: boolean
 }
@@ -129,11 +124,6 @@ export type ReferenceLayerAvailability = {
   settlements: ZoomDependentLayerAvailability
 }
 
-/** Read the installed style rather than duplicating its zoom limits in React.
- * The result describes whether a group can render at this zoom, not whether a
- * particular viewport contains a road/town or whether its tiles have arrived.
- * Palette changes use the same vector geometry, so their thresholds agree.
- */
 export function getReferenceLayerAvailability(map: MapLibreMap): ReferenceLayerAvailability {
   const layers = map.getStyle()?.layers ?? []
   const zoom = map.getZoom()
@@ -149,12 +139,9 @@ export function getReferenceLayerAvailability(map: MapLibreMap): ReferenceLayerA
   return { roads: group(ROAD_LAYER_IDS), settlements: group(SETTLEMENT_LAYER_IDS) }
 }
 
-/** Switch groups in the existing style. Layer minzooms control detail naturally. */
 export function applyLayerVisibility(map: MapLibreMap, settings: MapLayerSettings) {
   const { background = DEFAULT_MAP_BACKGROUND, showRoads, showSettlements, showBorders, showLabels, showTerrain } = settings
   const imagery = background === 'blue-marble' || background === 'firefly'
-  // Both projections show the selected background. NASA's native z8 imagery
-  // gently gives way to detailed vector cartography between zoom 8 and 9.
   const detailed = !imagery || map.getZoom() >= 8
   const appearance = background === 'dark-gray' || background === 'firefly'
     ? background === 'firefly' ? 'firefly' : 'dark'
@@ -172,21 +159,15 @@ export function applyLayerVisibility(map: MapLibreMap, settings: MapLayerSetting
   for (const id of DETAIL_LAYER_IDS) {
     if (!REFERENCE_DETAIL_LAYER_IDS.has(id)) visibility(id, detailed)
   }
-  // Coastlines are part of the base geographic context, separate from political
-  // boundaries. Keep them attached to the imagery when borders are disabled.
   for (const id of GRATICULE_LAYER_IDS) visibility(id, settings.showGraticule)
   visibility('geography-coastlines', settings.showCoastlines)
   for (const id of COUNTRY_BORDER_LAYER_IDS) visibility(id, showBorders)
   for (const id of GEOGRAPHIC_LABEL_IDS) visibility(id, (CITY_LABEL_LAYER_IDS as readonly string[]).includes(id) ? settings.showCities : showLabels)
-  // Roads can already overlay NASA at regional zooms. Their own thresholds
-  // show motorways from z5, major roads from z6 and local roads from z11.
   for (const id of ROAD_LAYER_IDS) visibility(id, showRoads)
   for (const id of SETTLEMENT_LAYER_IDS) visibility(id, showSettlements)
   for (const id of TERRAIN_LAYER_IDS) visibility(id, detailed && showTerrain)
   applyContextVisibility(map, settings)
 }
-
-// This terrain palette is geographic content, independent of the UI theme.
 const terrainColors = {
     land: '#f0eee5',
     water: '#bad8e8',
@@ -258,8 +239,6 @@ function applyBackgroundAppearance(map: MapLibreMap, background: MapBackground) 
   paint('detail-relief', 'raster-opacity', ['interpolate', ['linear'], ['zoom'], 5, colors.reliefOpacity, 7, 0])
   paint('detail-relief', 'raster-brightness-max', colors.reliefBrightness)
   paint('detail-relief', 'raster-saturation', background === 'topographic' || background === 'blue-marble' ? 0 : -1)
-  // A uniform cartographic treatment of public NASA imagery. It is not the
-  // licensed Esri Firefly service, astronomical night imagery or a day/night shader.
   paint(NASA_LAYER_ID, 'raster-saturation', background === 'firefly' ? -0.9 : 0)
   paint(NASA_LAYER_ID, 'raster-brightness-max', background === 'firefly' ? 0.52 : 1)
   paint(NASA_LAYER_ID, 'raster-contrast', background === 'firefly' ? 0.12 : 0)
@@ -271,8 +250,6 @@ const name: ExpressionSpecification = [
 
 function detailedLayers(): LayerSpecification[] {
   const colors = terrainColors
-  // This small, locally owned style uses the documented OpenMapTiles schema.
-  // No remote style, sprite atlas, demo tiles, or additional icon/font library.
   const layers: LayerSpecification[] = [
     {
       id: 'detail-land', type: 'background',
@@ -381,8 +358,6 @@ function detailedLayers(): LayerSpecification[] {
   return layers.map((layer) => ({ ...layer, layout: { ...layer.layout, visibility: 'none' } }))
 }
 
-/** One style, with both basemaps present from initialization. Projection and
- * visibility can change without replacing the style, camera, or future layers. */
 export function createEarthStyle(view: MapView = 'globe'): StyleSpecification {
   const details = detailedLayers()
   const grid = graticuleLayers()
@@ -411,11 +386,9 @@ export function createEarthStyle(view: MapView = 'globe'): StyleSpecification {
       },
     },
     layers: [
-      // Keep Earth opaque while its imagery loads. A sky layer behind Earth
-      // must never shine through missing tiles or the uncovered polar caps.
+
       { id: 'earth-loading-surface', type: 'background', paint: { 'background-color': '#000000' } },
-      // The existing Natural Earth source fills only NASA tiles that fail to
-      // load. Healthy Blue Marble tiles remain above it; Terrain can be off.
+
       { id: NASA_FALLBACK_LAYER_ID, type: 'raster', source: 'natural-earth-relief',
         paint: { 'raster-fade-duration': 0 }, layout: { visibility: 'none' } },
       { id: NASA_FALLBACK_WATER_LAYER_ID, type: 'fill', source: DETAIL_SOURCE_ID, 'source-layer': 'water',

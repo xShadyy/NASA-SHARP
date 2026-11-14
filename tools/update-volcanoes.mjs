@@ -1,5 +1,3 @@
-// Manually refresh the small factual catalogue from the authoritative GVP WFS.
-// Review its current version/citation and update CONTEXT-SOURCES.md as needed.
 import { writeFile } from 'node:fs/promises'
 const url = 'https://webservices.volcano.si.edu/geoserver/GVP-VOTW/ows?service=WFS&version=1.0.0&request=GetFeature&typeName=GVP-VOTW:Smithsonian_VOTW_Holocene_Volcanoes&outputFormat=application/json'
 const response = await fetch(url, { signal: AbortSignal.timeout(45_000) })

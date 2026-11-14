@@ -11,8 +11,7 @@ export function useIsMobile() {
       setIsMobile(window.innerWidth < MOBILE_BREAKPOINT)
     }
     mql.addEventListener("change", onChange)
-    // The official shadcn hook reads viewport state immediately after subscribing.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+
     setIsMobile(window.innerWidth < MOBILE_BREAKPOINT)
     return () => mql.removeEventListener("change", onChange)
   }, [])
