@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { MantineProvider } from '@mantine/core'
-import { CalendarDotsIcon, GlobeHemisphereWestIcon, InfoIcon, MoonIcon, SunIcon } from '@phosphor-icons/react'
+import { CalendarDotsIcon, GlobeHemisphereWestIcon, InfoIcon, MoonIcon, SunIcon, CrosshairIcon, MinusIcon, PlusIcon } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Calendar } from '@/components/ui/calendar'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -8,13 +8,16 @@ import { Separator } from '@/components/ui/separator'
 import { Sidebar, SidebarContent, SidebarFooter, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider, SidebarTrigger, useSidebar } from '@/components/ui/sidebar'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { TooltipProvider } from '@/components/ui/tooltip'
-
+import { CurrentLocationButton, DestinationSearch } from '@/components/DestinationSearch'
+import { ButtonGroup } from '@/components/ui/button-group'
+import type { EarthMapHandle, MapCameraState } from '@/components/EarthMap'
+import type { LocationTarget } from '@/lib/locations' 
 import './App.css'
 import './components/sidebar.css'
 
 type DatePeriod = '24 hours' | '7 days' | '30 days'
 const mantineTheme = { fontFamily: '"Fira Sans", sans-serif', fontFamilyMonospace: '"Fira Sans", sans-serif' }
-
+const EarthMap = lazy(() => import('@/components/EarthMap').then((module) => ({ default: module.EarthMap })))
 
 function ExplorerSidebar() {
   const { open, setOpen, isMobile, openMobile, setOpenMobile } = useSidebar()
@@ -28,7 +31,7 @@ function ExplorerSidebar() {
     <SidebarContent>{expanded && <section className="sidebar-help" aria-label="Instructions" tabIndex={0}>
       <span className="sidebar-help-kicker">EXPLORER GUIDE</span><h2>Explore Earth</h2>
       <p>Choose a reference date and time range using the calendar. Today returns the reference date to the current day. Switch between light and dark themes using the top-right control.</p>
-      
+      <p>Left-drag to explore Earth and scroll or pinch to zoom. Switch between Globe and Map using the upper-left control. Search for a country, city or coordinates, use your current location, or reset the map using the bottom toolbar.</p>
     </section>}</SidebarContent>
     <SidebarFooter><SidebarMenu><SidebarMenuItem><SidebarMenuButton className="rail-button" aria-label="Instructions" onClick={openGuide}><InfoIcon size={20} /><span className="sidebar-item-label">Instructions</span></SidebarMenuButton></SidebarMenuItem></SidebarMenu></SidebarFooter>
   </Sidebar>
@@ -47,7 +50,14 @@ function App() {
   const [calendarMonth, setCalendarMonth] = useState(() => new Date())
   const [period, setPeriod] = useState<DatePeriod>('24 hours')
   const themeAction = theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme'
-  
+  const mapRef = useRef<EarthMapHandle>(null)
+  const [camera, setCamera] = useState<MapCameraState>({ ready: false, zoom: 1, minZoom: -1, maxZoom: 18, longitude: 18, latitude: 12, view: 'globe' })
+  const [destination, setDestination] = useState<LocationTarget | null>(null)
+  const [navigationRequest, setNavigationRequest] = useState(0)
+  function selectDestination(location: LocationTarget) {
+    setDestination(location)
+    setNavigationRequest((current) => current + 1)
+  }
   useEffect(() => {
     document.documentElement.dataset.theme = theme
     try { localStorage.setItem('wildfire-theme', theme) }
@@ -59,6 +69,7 @@ function App() {
     <div className="app-shell">
       <header className="app-header">
         <div className="header-brand" aria-label="Ethereal wildfire explorer"><span className="brand-symbol"><GlobeHemisphereWestIcon size={19} /></span><span>ETHEREAL <span className="brand-suffix">/ OUR TOOL NAME</span></span></div>
+        <DestinationSearch onSelect={selectDestination} />
         <div className="header-actions">
           <Popover>
             <PopoverTrigger asChild><Button type="button" variant="outline" className="date-control" aria-label="Choose reference date and time range"><CalendarDotsIcon size={16} /><span className="date-label">{formatDate(date)}</span><span className="date-divider">·</span><span className="period-label">{period}</span></Button></PopoverTrigger>
@@ -78,8 +89,14 @@ function App() {
       </header>
       <SidebarProvider defaultOpen={false} className="app-body"><ExplorerSidebar />
         <main className="explorer-stage" aria-label="Global Earth explorer">
-          <section className="workspace-empty" aria-label="Explorer workspace"><output>{formatDate(date)} · {period}</output></section>
-          
+          <Suspense fallback={<div className="map-loading" role="status">Loading map…</div>}><EarthMap ref={mapRef} destination={destination} navigationRequest={navigationRequest} onCameraChange={setCamera}  /></Suspense>
+          <div className="globe-tools"><div className="bottom-toolbar" aria-label="Globe tools"><ButtonGroup>
+            <Button variant="ghost" size="icon" className="toolbar-button" aria-label="Zoom in" disabled={!camera.ready || camera.zoom >= camera.maxZoom} onClick={() => mapRef.current?.zoomBy(1)}><PlusIcon size={19} /></Button>
+            <Button variant="ghost" size="icon" className="toolbar-button" aria-label="Zoom out" disabled={!camera.ready || camera.zoom <= camera.minZoom + 0.001} onClick={() => mapRef.current?.zoomBy(-1)}><MinusIcon size={19} /></Button>
+            <Separator orientation="vertical" className="toolbar-separator" />
+            <CurrentLocationButton onSelect={selectDestination} className="toolbar-button" />
+            <Button variant="ghost" size="icon" className="toolbar-button" aria-label="Reset view" disabled={!camera.ready} onClick={() => { mapRef.current?.resetView(); setDestination(null) }}><CrosshairIcon size={19} /></Button>
+          </ButtonGroup></div></div>
         </main>
       </SidebarProvider>
     </div>
