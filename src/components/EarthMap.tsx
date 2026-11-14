@@ -935,15 +935,18 @@ export function EarthMap({
         aria-label="Hovered coordinates"
         hidden
       />
-      {ready && destination && mapInstance && (
-        <LocationPin
-          map={mapInstance}
-          location={destination}
-          saved={destinationSaved}
-          onSave={onSaveLocation}
-          onDismiss={onDismissLocation}
-        />
-      )}
+      {ready &&
+        destination &&
+        mapInstance &&
+        (destination.kind !== 'country' || savedNavigation) && (
+          <LocationPin
+            map={mapInstance}
+            location={destination}
+            saved={destinationSaved}
+            onSave={onSaveLocation}
+            onDismiss={onDismissLocation}
+          />
+        )}
       {(loading || notice) && (
         <div className="map-status" role="status" data-fatal={fatal || undefined}>
           <p>{notice || 'Loading Earth imagery.'}</p>
