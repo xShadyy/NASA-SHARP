@@ -33,7 +33,7 @@ function configuredMinimumZoom(map: MapLibreMap, view: MapView) {
   const width = Math.max(1, map.getContainer().clientWidth - left - right)
   const height = Math.max(1, map.getContainer().clientHeight - top - bottom)
   return view === 'globe'
-    ? globeMinimumZoom(width, height)
+    ? Math.min(globeMinimumZoom(width, height), analysisZoomFloors.get(map) ?? Infinity)
     : Math.min(
         Math.max(MIN_FLAT_ZOOM, Math.log2(height / 512)),
         analysisZoomFloors.get(map) ?? Infinity,
