@@ -114,6 +114,19 @@ def _ring_closed(ring: list) -> list:
     return ring
 
 
+def _unwrap_ring_near(ring: list, longitude: float) -> list:
+    points = _ring_closed(ring)
+    if not points:
+        return []
+    previous = points[0][0] + round((longitude - points[0][0]) / 360) * 360
+    unwrapped = [[previous, *points[0][1:]]]
+    for point in points[1:]:
+        current = point[0] + round((previous - point[0]) / 360) * 360
+        unwrapped.append([current, *point[1:]])
+        previous = current
+    return unwrapped
+
+
 def _on_segment(longitude: float, latitude: float, start: list, end: list) -> bool:
     cross = (longitude - start[0]) * (end[1] - start[1]) - (latitude - start[1]) * (end[0] - start[0])
     if abs(cross) > 1e-9:
@@ -140,20 +153,20 @@ def _crossings(longitude: float, latitude: float, ring: list) -> int:
 def _polygon_contains(longitude: float, latitude: float, rings: list) -> bool:
     if len(rings[0]) < 4:
         return False
-    shell = _ring_closed(rings[0])
+    shell = _unwrap_ring_near(rings[0], longitude)
     for index, start in enumerate(shell):
         if _on_segment(longitude, latitude, start, shell[(index + 1) % len(shell)]):
             return True
-    if _crossings(longitude, latitude, rings[0]) % 2 == 0:
+    if _crossings(longitude, latitude, shell) % 2 == 0:
         return False
     for hole in rings[1:]:
         if len(hole) < 4:
             continue
-        opened = _ring_closed(hole)
+        opened = _unwrap_ring_near(hole, longitude)
         for index, start in enumerate(opened):
             if _on_segment(longitude, latitude, start, opened[(index + 1) % len(opened)]):
                 return False
-        if _crossings(longitude, latitude, hole) % 2 == 1:
+        if _crossings(longitude, latitude, opened) % 2 == 1:
             return False
     return True
 

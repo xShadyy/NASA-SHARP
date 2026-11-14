@@ -142,7 +142,7 @@ function loadMeasurementColors(): MeasurementColors {
   }
 }
 const navigation = [
-  { name: 'Wildfire dashboard', icon: ChartBarIcon },
+  { name: 'Area Analytics', icon: ChartBarIcon },
   { name: 'Saved locations', icon: BookmarkSimpleIcon },
   { name: 'Analysis', icon: PolygonIcon },
 ]
@@ -171,7 +171,7 @@ function ExplorerSidebar({
   const expanded = isMobile ? openMobile : open
   const selectNav = (name: string) => {
     setActiveNav(name)
-    if (name === 'Wildfire dashboard' || name === 'Analysis') {
+    if (name === 'Area Analytics' || name === 'Analysis') {
       if (isMobile) setOpenMobile(false)
       else setOpen(false)
     }
@@ -477,7 +477,7 @@ function App() {
   const toolbarToggleRef = useRef<HTMLButtonElement>(null)
   const measurementUnit = mode === 'area' ? areaUnit : distanceUnit
   const themeAction = theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme'
-  const dashboardOpen = activeNav === 'Wildfire dashboard'
+  const dashboardOpen = activeNav === 'Area Analytics'
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -907,9 +907,7 @@ function App() {
               <main
                 ref={stageRef}
                 className="explorer-stage"
-                aria-label={
-                  dashboardOpen ? 'Wildfire dashboard workspace' : 'Global Earth explorer'
-                }
+                aria-label={dashboardOpen ? 'Area Analytics workspace' : 'Global Earth explorer'}
                 data-capture-selecting={selectingCapture || undefined}
               >
                 <div className="map-workspace" inert={dashboardOpen}>
@@ -1121,7 +1119,10 @@ function App() {
                   </Collapsible>
                 </div>
                 {dashboardOpen && (
-                  <WildfireDashboard onClose={() => setActiveNav('Saved locations')} />
+                  <WildfireDashboard
+                    analysisArea={analysis.confirmed}
+                    onClose={() => setActiveNav('Saved locations')}
+                  />
                 )}
               </main>
             </div>

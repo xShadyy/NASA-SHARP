@@ -2,6 +2,7 @@
 
 import asyncio
 import csv
+import hashlib
 import io
 import json
 import logging
@@ -23,6 +24,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
 
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 from fastapi.responses import JSONResponse
 from starlette.requests import ClientDisconnect
 
@@ -85,6 +87,17 @@ class Source(str, Enum):
     VIIRS_NOAA21_SP = "VIIRS_NOAA21_SP"
     VIIRS_SNPP_NRT = "VIIRS_SNPP_NRT"
     VIIRS_SNPP_SP = "VIIRS_SNPP_SP"
+
+
+class AreaHotspotsQuery(BaseModel):
+    geometry: dict
+    start_date: date
+    days: int = Field(ge=1, le=31)
+    daynight: Literal["all", "day", "night"] = "all"
+    source: list[Source] | None = Field(default=None, max_length=8)
+    modis_min_confidence: int = Field(default=0, ge=0, le=100)
+    viirs_min_confidence: Literal["l", "n", "h"] = "l"
+    summary: bool = True
 
 
 LIVE_SOURCES = [Source.MODIS_NRT, Source.VIIRS_NOAA20_NRT, Source.VIIRS_NOAA21_NRT]
@@ -186,6 +199,74 @@ def parse_area(area: str) -> str:
         "Use world, netherlands, or west,south,east,north with increasing bounds. "
         "Split areas crossing 180° into two queries.",
     )
+
+
+def area_boxes_for_geometry(geometry: dict) -> list[str]:
+    geometry_type = geometry.get("type")
+    coordinates = geometry.get("coordinates")
+    if geometry_type == "Polygon":
+        polygons = [coordinates]
+    elif geometry_type == "MultiPolygon":
+        polygons = coordinates
+    else:
+        raise HTTPException(422, "Analysis area must be a Polygon or MultiPolygon.")
+    if not isinstance(polygons, list) or not polygons:
+        raise HTTPException(422, "Analysis area has no polygon coordinates.")
+
+    longitudes = []
+    south = Decimal(90)
+    north = Decimal(-90)
+    for polygon in polygons:
+        if not isinstance(polygon, list) or not polygon:
+            raise HTTPException(422, "Analysis area contains an invalid polygon.")
+        for ring in polygon:
+            if not isinstance(ring, list) or len(ring) < 4:
+                raise HTTPException(422, "Analysis area contains an invalid polygon ring.")
+            for position in ring:
+                if not isinstance(position, list) or len(position) < 2:
+                    raise HTTPException(422, "Analysis area contains an invalid coordinate.")
+                try:
+                    longitude, latitude = map(number, position[:2])
+                except (TypeError, ValueError):
+                    raise HTTPException(422, "Analysis area contains an invalid coordinate.")
+                if not (-180 <= longitude <= 180 and -90 <= latitude <= 90):
+                    raise HTTPException(422, "Analysis area coordinates are out of range.")
+                longitudes.append(Decimal(str(longitude)) % Decimal(360))
+                south = min(south, Decimal(str(latitude)))
+                north = max(north, Decimal(str(latitude)))
+            if ring[0][:2] != ring[-1][:2]:
+                raise HTTPException(422, "Analysis area polygon rings must be closed.")
+
+    longitudes = sorted(set(longitudes))
+    if not longitudes:
+        raise HTTPException(422, "Analysis area has no polygon coordinates.")
+    gaps = [
+        (
+            longitudes[(index + 1) % len(longitudes)]
+            + (Decimal(360) if index == len(longitudes) - 1 else Decimal(0))
+            - longitude,
+            (index + 1) % len(longitudes),
+        )
+        for index, longitude in enumerate(longitudes)
+    ]
+    largest_gap, start_index = max(gaps)
+    span = Decimal(360) - largest_gap
+    if span <= 0 or south >= north:
+        raise HTTPException(422, "Analysis area must enclose a non-zero area.")
+    west = longitudes[start_index]
+    if west >= 180:
+        west -= Decimal(360)
+    east = west + span
+
+    def format_box(box_west: Decimal, box_east: Decimal) -> str:
+        return ",".join(
+            format(value, "f")
+            for value in (box_west, south, box_east, north)
+        )
+
+    if east <= 180:
+        return [format_box(west, east)]
+    return [format_box(west, Decimal(180)), format_box(Decimal(-180), east - Decimal(360))]
 
 
 def parse_features(text: str, source: Source) -> list[dict]:
@@ -353,12 +434,31 @@ async def hotspots(
     modis_min_confidence: Annotated[int, Query(ge=0, le=100)] = 0,
     viirs_min_confidence: Annotated[str, Query(pattern="^[lnh]$")] = "l",
     summary: bool = False,
+    geometry_json: Annotated[
+        str | None, Query(max_length=2_000_000, include_in_schema=False)
+    ] = None,
 ):
     require_firms_key(request)
     country_geometry = (
         NETHERLANDS_EUROPE_GEOMETRY if area.strip().lower() == "netherlands" else None
     )
-    bounds = parse_area(area)
+    if geometry_json is not None:
+        try:
+            selected_geometry = json.loads(geometry_json)
+        except json.JSONDecodeError:
+            raise HTTPException(422, "Analysis area is not valid JSON.")
+        if not isinstance(selected_geometry, dict):
+            raise HTTPException(422, "Analysis area must be a GeoJSON geometry.")
+        area_bounds = area_boxes_for_geometry(selected_geometry)
+        geometry_cache_key = "custom-v1:" + hashlib.sha256(
+            json.dumps(selected_geometry, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    else:
+        selected_geometry = country_geometry
+        area_bounds = [parse_area(area)]
+        geometry_cache_key = (
+            "netherlands-europe-v1" if country_geometry is not None else None
+        )
     zone = timezone(tz)
     today = datetime.now(UTC).date()
     lower, upper, dates = query_window(start, end, start_date, days, zone, tz is not None, today)
@@ -374,9 +474,10 @@ async def hotspots(
         product_summary = DashboardSummary() if summary else None
 
         async def load_summary_day(day: date):
-            batch_key = request.app.state.cache.key(
-                product.value, bounds, day.isoformat()
-            )
+            batch_keys = [
+                request.app.state.cache.key(product.value, bounds, day.isoformat())
+                for bounds in area_bounds
+            ]
             day_start = datetime.combine(day, time.min, tzinfo=UTC)
             day_end = day_start + timedelta(days=1)
             window_key: str | list[str] = (
@@ -387,10 +488,8 @@ async def hotspots(
             summary_key = json.dumps(
                 [
                     1,
-                    batch_key,
-                    "netherlands-europe-v1"
-                    if country_geometry is not None
-                    else None,
+                    batch_keys,
+                    geometry_cache_key,
                     window_key,
                     daynight,
                     modis_min_confidence,
@@ -398,26 +497,34 @@ async def hotspots(
                 ],
                 separators=(",", ":"),
             )
-            try:
-                cached_summary = await asyncio.to_thread(
-                    request.app.state.cache.get_summary, summary_key, batch_key
-                )
-                if cached_summary is not None:
-                    summary_json, fetched = cached_summary
-                    try:
-                        daily_summary = DashboardSummary.from_cache(summary_json)
-                        return day, daily_summary, fetched, True, None
-                    except (KeyError, TypeError, ValueError):
-                        logging.warning("Could not read dashboard summary cache; recalculating.")
-            except sqlite3.Error:
-                logging.warning("Could not read dashboard summary cache; recalculating.")
+            if len(batch_keys) == 1:
+                try:
+                    cached_summary = await asyncio.to_thread(
+                        request.app.state.cache.get_summary, summary_key, batch_keys[0]
+                    )
+                    if cached_summary is not None:
+                        summary_json, fetched = cached_summary
+                        try:
+                            daily_summary = DashboardSummary.from_cache(summary_json)
+                            return day, daily_summary, [fetched], 1, None
+                        except (KeyError, TypeError, ValueError):
+                            logging.warning("Could not read dashboard summary cache; recalculating.")
+                except sqlite3.Error:
+                    logging.warning("Could not read dashboard summary cache; recalculating.")
 
-            try:
-                features, fetched, batch_cached = await load_batch(
-                    request.app, product, bounds, day, today
-                )
-            except FIRMSFailure as exc:
-                return day, None, None, False, str(exc)
+            features = []
+            fetched_values = []
+            cache_hits_for_day = 0
+            for bounds in area_bounds:
+                try:
+                    batch, fetched, batch_cached = await load_batch(
+                        request.app, product, bounds, day, today
+                    )
+                except FIRMSFailure as exc:
+                    return day, None, None, 0, str(exc)
+                features.extend(batch)
+                fetched_values.append(fetched)
+                cache_hits_for_day += batch_cached
             daily_summary = DashboardSummary()
             lower_key = lower.astimezone(UTC).isoformat(timespec="microseconds").replace(
                 "+00:00", "Z"
@@ -433,45 +540,57 @@ async def hotspots(
                 daynight,
                 modis_min_confidence,
                 VIIRS_RANKS[viirs_min_confidence],
-                country_geometry,
+                selected_geometry,
             )
-            try:
-                await asyncio.to_thread(
-                    request.app.state.cache.put_summary,
-                    summary_key,
-                    batch_key,
-                    daily_summary.to_cache(),
-                    fetched,
-                )
-            except sqlite3.Error:
-                logging.warning("Could not write dashboard summary cache; serving calculated data.")
-            return day, daily_summary, fetched, batch_cached, None
+            if len(batch_keys) == 1:
+                try:
+                    await asyncio.to_thread(
+                        request.app.state.cache.put_summary,
+                        summary_key,
+                        batch_keys[0],
+                        daily_summary.to_cache(),
+                        min(fetched_values),
+                    )
+                except sqlite3.Error:
+                    logging.warning("Could not write dashboard summary cache; serving calculated data.")
+            return day, daily_summary, fetched_values, cache_hits_for_day, None
 
         if summary:
             day_results = await asyncio.gather(*(load_summary_day(day) for day in dates))
+            successful_days = 0
             for day, daily_summary, fetched, cached, failure in day_results:
                 if failure is not None:
                     failures.append({"date": day.isoformat(), "detail": failure})
                     continue
                 assert daily_summary is not None and fetched is not None
                 product_summary.merge(daily_summary)
-                fetched_at.append(fetched)
+                fetched_at.extend(fetched)
+                successful_days += 1
                 cache_hits += cached
             day_results.clear()
             selected_count = product_summary.count
             selected_features = None
         else:
+            successful_days = 0
             for day in dates:
+                day_features = []
+                day_fetched = []
+                day_cache_hits = 0
                 try:
-                    features, fetched, cached = await load_batch(
-                        request.app, product, bounds, day, today
-                    )
+                    for bounds in area_bounds:
+                        features, fetched, cached = await load_batch(
+                            request.app, product, bounds, day, today
+                        )
+                        day_features.extend(features)
+                        day_fetched.append(fetched)
+                        day_cache_hits += cached
                 except FIRMSFailure as exc:
                     failures.append({"date": day.isoformat(), "detail": str(exc)})
                     continue
-                batches.append(features)
-                fetched_at.append(fetched)
-                cache_hits += cached
+                batches.append(day_features)
+                fetched_at.extend(day_fetched)
+                successful_days += 1
+                cache_hits += day_cache_hits
             selected_features = await asyncio.to_thread(
                 filter_features,
                 batches,
@@ -481,14 +600,14 @@ async def hotspots(
                 daynight,
                 modis_min_confidence,
                 viirs_min_confidence,
-                country_geometry,
+                selected_geometry,
             )
             selected_count = len(selected_features)
         report = {
             "source": product.value,
             "status": ("partial" if fetched_at else "error") if failures else "ok",
             "count": selected_count,
-            "successful_days": len(fetched_at),
+            "successful_days": successful_days,
             "cache_hits": cache_hits,
             "oldest_fetched_at": (
                 datetime.fromtimestamp(min(fetched_at), UTC).isoformat() if fetched_at else None
@@ -533,6 +652,25 @@ async def hotspots(
         "sources": reports,
         "window": {"start_utc": lower.isoformat(), "end_utc_exclusive": upper.isoformat(), "timezone": zone.key},
     }
+
+
+@app.post("/hotspots/area")
+async def hotspots_for_analysis_area(request: Request, query: AreaHotspotsQuery):
+    return await hotspots(
+        request,
+        area="custom",
+        days=query.days,
+        start_date=query.start_date,
+        start=None,
+        end=None,
+        tz=None,
+        daynight=query.daynight,
+        source=query.source,
+        modis_min_confidence=query.modis_min_confidence,
+        viirs_min_confidence=query.viirs_min_confidence,
+        summary=query.summary,
+        geometry_json=json.dumps(query.geometry, separators=(",", ":")),
+    )
 
 
 @app.get("/capabilities")
