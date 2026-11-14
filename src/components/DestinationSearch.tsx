@@ -260,7 +260,7 @@ export function DestinationSearch({ onSelect }: DestinationSearchProps) {
           </CommandList>
           {loading && (
             <p className="destination-status" role="status">
-              Searching places…
+              Searching places.
             </p>
           )}
           {error && (
@@ -378,7 +378,7 @@ export function CurrentLocationButton({ onSelect, className = '' }: CurrentLocat
             </TooltipTrigger>
           </PopoverTrigger>
           <TooltipContent>
-            {loading ? 'Waiting for browser location…' : 'Use my current location'}
+            {loading ? 'Waiting for browser location.' : 'Use my current location'}
           </TooltipContent>
         </Tooltip>
         {message && (

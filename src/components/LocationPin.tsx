@@ -61,9 +61,15 @@ export function LocationPin({ map, location, saved, onSave, onDismiss }: Locatio
     const marker = new Marker({ element, anchor: 'bottom', opacityWhenCovered: 0 })
       .setLngLat([longitude, latitude])
       .addTo(map)
+    const initialZoom = map.getZoom()
     const card = element.querySelector<HTMLElement>('.destination-pin-card')
     const keepCardVisible = () => {
-      if (!card) return
+      const hidden = map.getZoom() < initialZoom - 1
+      if (hidden && element.contains(element.ownerDocument.activeElement)) {
+        map.getCanvas().focus({ preventScroll: true })
+      }
+      element.toggleAttribute('data-zoom-hidden', hidden)
+      if (!card || hidden) return
       const container = map.getContainer().getBoundingClientRect()
       const pin = element.getBoundingClientRect()
       const pinCenter = pin.left + pin.width / 2 - container.left

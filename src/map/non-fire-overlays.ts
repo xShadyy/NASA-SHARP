@@ -192,7 +192,7 @@ export function createNonFireOverlayController(
     const abort = new AbortController()
     footprintRequests.set(id, abort)
     const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(20_000)])
-    status(key, `${date} UTC · loading scene outlines…`)
+    status(key, `${date} UTC · loading scene outlines.`)
     const features: Feature<Polygon>[] = []
     const seen = new Set<string>()
     let truncated = false
@@ -280,7 +280,7 @@ export function createNonFireOverlayController(
       } else if (key === 'showBuiltUp' && !viewIntersects(HBASE_BOUNDS)) {
         status(key, 'Outside the mapped HBASE extent.')
       } else if (!map.getSource(id) || !map.isSourceLoaded(id)) {
-        status(key, 'Loading requested overlay tiles…')
+        status(key, 'Loading requested overlay tiles.')
       } else {
         status(
           key,

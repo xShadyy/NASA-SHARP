@@ -11,19 +11,22 @@ export type CaptureSettings = {
   scalebar: boolean
 }
 
+export type CaptureResult = {
+  preview: Blob
+  image: Blob
+}
+
 /** CSS pixels measured from the map container's top-left corner. */
-export type CaptureRegion = { x: number; y: number; width: number; height: number }
+export type CaptureRegion = { x: number, y: number, width: number, height: number }
 
 const BASE_CREDITS = 'OpenFreeMap · © OpenMapTiles · © OpenStreetMap contributors · Natural Earth'
 
 function clampRegion(map: MapLibreMap, requested?: CaptureRegion | null): CaptureRegion {
   const width = map.getContainer().clientWidth
   const height = map.getContainer().clientHeight
-  if (width < 1 || height < 1)
-    throw new Error('The map is not visible. Open the map and try again.')
+  if (width < 1 || height < 1) throw new Error('The map is not visible. Open the map and try again.')
   if (!requested) return { x: 0, y: 0, width, height }
-  if (!Object.values(requested).every(Number.isFinite))
-    throw new Error('Select the screenshot area again.')
+  if (!Object.values(requested).every(Number.isFinite)) throw new Error('Select the screenshot area again.')
   const x = Math.max(0, Math.min(width, requested.x))
   const y = Math.max(0, Math.min(height, requested.y))
   const right = Math.max(x, Math.min(width, requested.x + requested.width))
@@ -50,8 +53,7 @@ function wrappedLines(context: CanvasRenderingContext2D, value: string, width: n
 function groundAt(map: MapLibreMap, x: number, y: number) {
   const location = map.unproject([x, y])
   const projected = map.project(location)
-  if (!Number.isFinite(location.lat) || Math.hypot(projected.x - x, projected.y - y) > 1)
-    return null
+  if (!Number.isFinite(location.lat) || Math.hypot(projected.x - x, projected.y - y) > 1) return null
   return location
 }
 
@@ -71,25 +73,18 @@ function localScale(map: MapLibreMap, region: CaptureRegion) {
       const maximum = geodesicDistanceKm(from.toArray(), to.toArray()) / conversion
       if (!(maximum > 0)) continue
       const magnitude = 10 ** Math.floor(Math.log10(maximum))
-      const distance =
-        [5, 2, 1].map((factor) => factor * magnitude).find((value) => value <= maximum) ??
-        magnitude / 2
+      const distance = [5, 2, 1].map((factor) => factor * magnitude).find((value) => value <= maximum) ?? magnitude / 2
       let lower = 0
       let upper = maxWidth
       for (let step = 0; step < 18; step++) {
         const span = (lower + upper) / 2
         const right = groundAt(map, x - maxWidth / 2 + span, y)
-        if (!right || geodesicDistanceKm(from.toArray(), right.toArray()) / conversion > distance)
-          upper = span
+        if (!right || geodesicDistanceKm(from.toArray(), right.toArray()) / conversion > distance) upper = span
         else lower = span
       }
       const label = miles
-        ? distance < 0.1
-          ? `${Math.round(distance * 5280)} ft`
-          : `${Number(distance.toPrecision(3))} mi`
-        : distance < 1
-          ? `${Math.round(distance * 1_000)} m`
-          : `${distance.toLocaleString('en', { maximumFractionDigits: 2 })} km`
+        ? distance < 0.1 ? `${Math.round(distance * 5280)} ft` : `${Number(distance.toPrecision(3))} mi`
+        : distance < 1 ? `${Math.round(distance * 1_000)} m` : `${distance.toLocaleString('en', { maximumFractionDigits: 2 })} km`
       return { width: (lower + upper) / 2, label }
     }
   }
@@ -97,18 +92,13 @@ function localScale(map: MapLibreMap, region: CaptureRegion) {
   return null
 }
 
-type PreparedPin = { element: SVGSVGElement; image: HTMLImageElement }
+type PreparedPin = { element: SVGSVGElement, image: HTMLImageElement }
 
 function visibleOpacity(element: Element, container: HTMLElement) {
   let opacity = 1
   for (let current: Element | null = element; current; current = current.parentElement) {
     const style = getComputedStyle(current)
-    if (
-      style.display === 'none' ||
-      style.visibility === 'hidden' ||
-      style.visibility === 'collapse'
-    )
-      return 0
+    if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return 0
     opacity *= Number.parseFloat(style.opacity)
     if (current === container) break
   }
@@ -120,51 +110,32 @@ function visibleOpacity(element: Element, container: HTMLElement) {
 async function preparePins(map: MapLibreMap): Promise<PreparedPin[]> {
   const container = map.getContainer()
   const pins = [...container.querySelectorAll<SVGSVGElement>('.destination-pin-symbol')]
-  const prepared = await Promise.all(
-    pins.map(async (element): Promise<PreparedPin | null> => {
-      if (!visibleOpacity(element, container)) return null
-      const svg = element.cloneNode(true) as SVGSVGElement
-      const style = getComputedStyle(element)
-      svg.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
-      svg.style.color = style.color
-      const markup = new XMLSerializer()
-        .serializeToString(svg)
-        .replace(/currentColor/gi, style.color)
-      const url = URL.createObjectURL(new Blob([markup], { type: 'image/svg+xml' }))
-      try {
-        const image = await new Promise<HTMLImageElement | null>((resolve) => {
-          const img = new Image()
-          const timer = setTimeout(() => resolve(null), 2_000)
-          img.onload = () => {
-            clearTimeout(timer)
-            resolve(img)
-          }
-          img.onerror = () => {
-            clearTimeout(timer)
-            resolve(null)
-          }
-          img.src = url
-        })
-        return image ? { element, image } : null
-      } finally {
-        URL.revokeObjectURL(url)
-      }
-    }),
-  )
+  const prepared = await Promise.all(pins.map(async (element): Promise<PreparedPin | null> => {
+    if (!visibleOpacity(element, container)) return null
+    const svg = element.cloneNode(true) as SVGSVGElement
+    const style = getComputedStyle(element)
+    svg.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+    svg.style.color = style.color
+    const markup = new XMLSerializer().serializeToString(svg).replace(/currentColor/gi, style.color)
+    const url = URL.createObjectURL(new Blob([markup], { type: 'image/svg+xml' }))
+    try {
+      const image = await new Promise<HTMLImageElement | null>((resolve) => {
+        const img = new Image()
+        const timer = setTimeout(() => resolve(null), 2_000)
+        img.onload = () => { clearTimeout(timer); resolve(img) }
+        img.onerror = () => { clearTimeout(timer); resolve(null) }
+        img.src = url
+      })
+      return image ? { element, image } : null
+    } finally { URL.revokeObjectURL(url) }
+  }))
   return prepared.filter((pin): pin is PreparedPin => pin !== null)
 }
 
 /** Draw only geographic DOM fallbacks, never pin cards or tool windows. Native
  * vector labels are already in the WebGL canvas; these markers cover the polar
  * region that MapLibre's Mercator symbol pipeline cannot represent. */
-function drawGeographicOverlays(
-  context: CanvasRenderingContext2D,
-  map: MapLibreMap,
-  region: CaptureRegion,
-  pins: PreparedPin[],
-  ratioX: number,
-  ratioY: number,
-) {
+function drawGeographicOverlays(context: CanvasRenderingContext2D, map: MapLibreMap, region: CaptureRegion, pins: PreparedPin[], ratioX: number, ratioY: number) {
   const container = map.getContainer()
   const mapBounds = container.getBoundingClientRect()
   const boundsFor = (element: Element) => {
@@ -174,15 +145,7 @@ function drawGeographicOverlays(
     const bounds = element.getBoundingClientRect()
     const x = bounds.left - mapBounds.left - region.x
     const y = bounds.top - mapBounds.top - region.y
-    if (
-      !bounds.width ||
-      !bounds.height ||
-      x + bounds.width < -6 ||
-      y + bounds.height < -6 ||
-      x > region.width + 6 ||
-      y > region.height + 6
-    )
-      return null
+    if (!bounds.width || !bounds.height || x + bounds.width < -6 || y + bounds.height < -6 || x > region.width + 6 || y > region.height + 6) return null
     return { x, y, width: bounds.width, height: bounds.height, opacity }
   }
 
@@ -193,10 +156,7 @@ function drawGeographicOverlays(
     context.save()
     context.globalAlpha = bounds.opacity
     const pixelRatio = Math.sqrt(ratioX * ratioY)
-    context.filter = getComputedStyle(element).filter.replace(
-      /(-?[\d.]+)px/g,
-      (_, value: string) => `${Number.parseFloat(value) * pixelRatio}px`,
-    )
+    context.filter = getComputedStyle(element).filter.replace(/(-?[\d.]+)px/g, (_, value: string) => `${Number.parseFloat(value) * pixelRatio}px`)
     context.drawImage(image, bounds.x, bounds.y, bounds.width, bounds.height)
     context.restore()
   }
@@ -243,13 +203,7 @@ function drawGeographicOverlays(
     labelContext.fillText(text, padding, baseline)
     context.save()
     context.globalAlpha = bounds.opacity
-    context.drawImage(
-      label,
-      bounds.x - padding,
-      bounds.y - padding,
-      label.width / ratioX,
-      label.height / ratioY,
-    )
+    context.drawImage(label, bounds.x - padding, bounds.y - padding, label.width / ratioX, label.height / ratioY)
     context.restore()
   }
 }
@@ -262,20 +216,18 @@ function annotate(
   scale: ReturnType<typeof localScale>,
   capturedAt: Date,
   includeSkyCredit: boolean,
+  measureOnly = false,
 ) {
   const width = region.width
-  const height = region.height
   const compact = width < 420
   const fontSize = compact ? 9 : 11
   const padding = Math.min(12, width / 12)
   const lineHeight = fontSize + 3
   context.font = `400 ${fontSize}px "Fira Sans", sans-serif`
   const container = map.getContainer()
-  const nasaVisible =
-    map.getLayer(NASA_LAYER_ID) && map.getLayoutProperty(NASA_LAYER_ID, 'visibility') !== 'none'
+  const nasaVisible = map.getLayer(NASA_LAYER_ID) && map.getLayoutProperty(NASA_LAYER_ID, 'visibility') !== 'none'
   const overlayCredits = container.dataset.overlayCredits?.split(' | ').filter(Boolean) ?? []
-  const credits = [
-    BASE_CREDITS,
+  const credits = [BASE_CREDITS,
     ...(nasaVisible ? ['NASA GIBS · Blue Marble / NASA Earth Observatory'] : []),
     ...overlayCredits,
     ...(map.getZoom() >= 4 &&
@@ -291,6 +243,15 @@ function annotate(
       : []),
     ...(includeSkyCredit ? [SKY_BACKGROUND_CAPTURE_CREDIT] : []),
   ].flatMap((credit) => wrappedLines(context, credit, Math.max(12, width - padding * 2)))
+  context.font = `700 ${compact ? 13 : 17}px "Fira Sans", sans-serif`
+  const titleLines = settings.header
+    ? wrappedLines(
+        context,
+        'SHARP - Satellite Harmonization and Activity Records Platform',
+        Math.max(12, width - padding * 2),
+      )
+    : []
+  context.font = `400 ${fontSize}px "Fira Sans", sans-serif`
   const footerLines = [
     ...(settings.timestamp
       ? [
@@ -302,43 +263,45 @@ function annotate(
       : []),
     ...credits,
   ]
-  const footerHeight = footerLines.length * lineHeight + padding * 1.5
-  const titleHeight = settings.header ? (compact ? 29 : 36) : 0
-  if (height < footerHeight + titleHeight + 16)
-    throw new Error('Choose a larger screenshot area so the map and source credits fit.')
-  context.fillStyle = 'rgba(5, 18, 45, .84)'
-  context.fillRect(0, Math.max(0, height - footerHeight), width, footerHeight)
-  context.fillStyle = '#fff'
+  const titleLineHeight = compact ? 17 : 21
+  const headerHeight = titleLines.length ? titleLines.length * titleLineHeight + padding * 2 : 0
+  const footerHeight = footerLines.length * lineHeight + padding * 2
+  if (measureOnly) return { headerHeight, footerHeight }
+  const style = getComputedStyle(container)
+  const background = style.getPropertyValue('--surface').trim() || '#05122d'
+  const foreground = style.getPropertyValue('--text').trim() || '#fff'
+  context.save()
+  context.translate(0, -headerHeight)
+  context.fillStyle = background
+  context.fillRect(0, 0, width, headerHeight)
+  context.restore()
+  context.fillStyle = background
+  context.fillRect(0, height, width, footerHeight)
+  context.fillStyle = foreground
   context.textBaseline = 'top'
-  footerLines.forEach((line, index) =>
+  context.font = `700 ${compact ? 13 : 17}px "Fira Sans", sans-serif`
+  titleLines.forEach((line, index) =>
     context.fillText(
       line,
       padding,
-      height - footerHeight + padding * 0.75 + index * lineHeight,
+      -headerHeight + padding + index * titleLineHeight,
       width - padding * 2,
     ),
   )
-  if (settings.header) {
-    context.fillStyle = 'rgba(5, 18, 45, .84)'
-    context.fillRect(0, 0, width, titleHeight)
+  context.font = `400 ${fontSize}px "Fira Sans", sans-serif`
+  footerLines.forEach((line, index) =>
+    context.fillText(line, padding, height + padding + index * lineHeight, width - padding * 2),
+  )
+  if (settings.scalebar && scale && height > 55) {
+    const y = height - 13
+    context.save()
     context.fillStyle = '#fff'
-    context.font = `700 ${compact ? 13 : 17}px "Fira Sans", sans-serif`
-    context.fillText(
-      'Ethereal · Earth explorer',
-      padding,
-      (titleHeight - (compact ? 13 : 17)) / 2,
-      width - padding * 2,
-    )
-  }
-  if (settings.scalebar && scale && height - footerHeight > 95) {
-    const y = height - footerHeight - 13
-    const label = `${scale.label} · local scale`
-    context.font = `400 ${fontSize}px "Fira Sans", sans-serif`
-    const boxWidth = Math.max(scale.width + 16, context.measureText(label).width + 16)
-    context.fillStyle = 'rgba(5, 18, 45, .84)'
-    context.fillRect(padding - 5, y - 31, boxWidth, 39)
-    context.fillStyle = '#fff'
-    context.fillText(label, padding + 3, y - 26)
+    context.font = '400 10px "Fira Sans", sans-serif'
+    context.textAlign = 'center'
+    context.shadowColor = '#000'
+    context.shadowBlur = 2 * map.getPixelRatio()
+    context.shadowOffsetY = map.getPixelRatio()
+    context.fillText(scale.label, padding + 3 + scale.width / 2, y - 20)
     context.strokeStyle = '#fff'
     context.lineWidth = 2
     context.beginPath()
@@ -347,7 +310,9 @@ function annotate(
     context.lineTo(padding + 3 + scale.width, y - 1)
     context.lineTo(padding + 3 + scale.width, y - 8)
     context.stroke()
+    context.restore()
   }
+  return { headerHeight, footerHeight }
 }
 
 /** Capture during MapLibre's next render, while the WebGL buffer is valid.
@@ -358,21 +323,36 @@ export async function captureMapImage(
   map: MapLibreMap,
   settings: CaptureSettings,
   requested?: CaptureRegion | null,
-): Promise<Blob> {
+): Promise<CaptureResult> {
   const region = clampRegion(map, requested)
   const pins = await preparePins(map)
   await document.fonts.load('400 12px "Fira Sans"').catch(() => undefined)
   await document.fonts.load('700 17px "Fira Sans"').catch(() => undefined)
   const source = map.getCanvas()
-  const ratioX = source.width / source.clientWidth
-  const ratioY = source.height / source.clientHeight
   const output = document.createElement('canvas')
   output.width = Math.max(1, Math.round(region.width * ratioX))
   output.height = Math.max(1, Math.round(region.height * ratioY))
+  const preview = document.createElement('canvas')
+  preview.width = output.width
+  preview.height = output.height
+  const previewContext = preview.getContext('2d')
   const context = output.getContext('2d')
-  if (!context) throw new Error('Your browser could not create an image. Please try again.')
+  if (!context || !previewContext)
+    throw new Error('Your browser could not create an image. Please try again.')
   const scale = settings.scalebar ? localScale(map, region) : null
   const capturedAt = new Date()
+  const includeSkyCredit = skyBackgroundVisible(map)
+  const { headerHeight, footerHeight } = annotate(
+    map,
+    context,
+    region,
+    settings,
+    scale,
+    capturedAt,
+    includeSkyCredit,
+    true,
+  )
+  output.height = Math.max(1, Math.ceil((headerHeight + region.height + footerHeight) * ratioY))
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => {
       map.off('render', snapshot)
@@ -382,10 +362,10 @@ export async function captureMapImage(
       clearTimeout(timer)
       map.off('render', snapshot)
       try {
-        context!.scale(ratioX, ratioY)
-        context!.fillStyle = '#000'
-        context!.fillRect(0, 0, region.width, region.height)
-        context!.drawImage(
+        previewContext!.scale(ratioX, ratioY)
+        previewContext!.fillStyle = '#000'
+        previewContext!.fillRect(0, 0, region.width, region.height)
+        previewContext!.drawImage(
           source,
           region.x * ratioX,
           region.y * ratioY,
@@ -396,24 +376,33 @@ export async function captureMapImage(
           region.width,
           region.height,
         )
-        drawGeographicOverlays(context!, map, region, pins, ratioX, ratioY)
-        annotate(map, context!, region, settings, scale, capturedAt, skyBackgroundVisible(map))
+        drawGeographicOverlays(previewContext!, map, region, pins, ratioX, ratioY)
+        context!.scale(ratioX, ratioY)
+        context!.translate(0, headerHeight)
+        context!.drawImage(preview, 0, 0, region.width, region.height)
+        annotate(map, context!, region, settings, scale, capturedAt, includeSkyCredit)
         resolve()
-      } catch (error) {
-        reject(error)
-      }
+      } catch (error) { reject(error) }
     }
     map.on('render', snapshot)
     map.triggerRepaint()
   })
+  const [previewBlob, image] = await Promise.all([
+    encodeCaptureImage(preview, settings.format),
+    encodeCaptureImage(output, settings.format),
+  ])
+  return { preview: previewBlob, image }
+}
+
+function encodeCaptureImage(canvas: HTMLCanvasElement, format: CaptureSettings['format']) {
   return new Promise<Blob>((resolve, reject) => {
     try {
-      output.toBlob(
+      canvas.toBlob(
         (blob) =>
           blob
             ? resolve(blob)
             : reject(new Error('The browser could not encode this image. Please try PNG.')),
-        settings.format === 'png' ? 'image/png' : 'image/jpeg',
+        format === 'png' ? 'image/png' : 'image/jpeg',
         0.94,
       )
     } catch (error) {
@@ -426,21 +415,4 @@ export async function captureMapImage(
       )
     }
   })
-}
-
-export async function downloadMapCapture(
-  map: MapLibreMap,
-  settings: CaptureSettings,
-  region?: CaptureRegion | null,
-): Promise<void> {
-  const blob = await captureMapImage(map, settings, region)
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = `ethereal-${new Date().toISOString().replace(/[:.]/g, '-')}.${settings.format}`
-  document.body.append(link)
-  link.click()
-  link.remove()
-  // Give browsers time to start the download before releasing the object URL.
-  setTimeout(() => URL.revokeObjectURL(url), 60_000)
 }
