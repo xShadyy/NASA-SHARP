@@ -17,16 +17,18 @@ export type CaptureResult = {
 }
 
 /** CSS pixels measured from the map container's top-left corner. */
-export type CaptureRegion = { x: number, y: number, width: number, height: number }
+export type CaptureRegion = { x: number; y: number; width: number; height: number }
 
 const BASE_CREDITS = 'OpenFreeMap · © OpenMapTiles · © OpenStreetMap contributors · Natural Earth'
 
 function clampRegion(map: MapLibreMap, requested?: CaptureRegion | null): CaptureRegion {
   const width = map.getContainer().clientWidth
   const height = map.getContainer().clientHeight
-  if (width < 1 || height < 1) throw new Error('The map is not visible. Open the map and try again.')
+  if (width < 1 || height < 1)
+    throw new Error('The map is not visible. Open the map and try again.')
   if (!requested) return { x: 0, y: 0, width, height }
-  if (!Object.values(requested).every(Number.isFinite)) throw new Error('Select the screenshot area again.')
+  if (!Object.values(requested).every(Number.isFinite))
+    throw new Error('Select the screenshot area again.')
   const x = Math.max(0, Math.min(width, requested.x))
   const y = Math.max(0, Math.min(height, requested.y))
   const right = Math.max(x, Math.min(width, requested.x + requested.width))
@@ -53,7 +55,8 @@ function wrappedLines(context: CanvasRenderingContext2D, value: string, width: n
 function groundAt(map: MapLibreMap, x: number, y: number) {
   const location = map.unproject([x, y])
   const projected = map.project(location)
-  if (!Number.isFinite(location.lat) || Math.hypot(projected.x - x, projected.y - y) > 1) return null
+  if (!Number.isFinite(location.lat) || Math.hypot(projected.x - x, projected.y - y) > 1)
+    return null
   return location
 }
 
@@ -73,18 +76,25 @@ function localScale(map: MapLibreMap, region: CaptureRegion) {
       const maximum = geodesicDistanceKm(from.toArray(), to.toArray()) / conversion
       if (!(maximum > 0)) continue
       const magnitude = 10 ** Math.floor(Math.log10(maximum))
-      const distance = [5, 2, 1].map((factor) => factor * magnitude).find((value) => value <= maximum) ?? magnitude / 2
+      const distance =
+        [5, 2, 1].map((factor) => factor * magnitude).find((value) => value <= maximum) ??
+        magnitude / 2
       let lower = 0
       let upper = maxWidth
       for (let step = 0; step < 18; step++) {
         const span = (lower + upper) / 2
         const right = groundAt(map, x - maxWidth / 2 + span, y)
-        if (!right || geodesicDistanceKm(from.toArray(), right.toArray()) / conversion > distance) upper = span
+        if (!right || geodesicDistanceKm(from.toArray(), right.toArray()) / conversion > distance)
+          upper = span
         else lower = span
       }
       const label = miles
-        ? distance < 0.1 ? `${Math.round(distance * 5280)} ft` : `${Number(distance.toPrecision(3))} mi`
-        : distance < 1 ? `${Math.round(distance * 1_000)} m` : `${distance.toLocaleString('en', { maximumFractionDigits: 2 })} km`
+        ? distance < 0.1
+          ? `${Math.round(distance * 5280)} ft`
+          : `${Number(distance.toPrecision(3))} mi`
+        : distance < 1
+          ? `${Math.round(distance * 1_000)} m`
+          : `${distance.toLocaleString('en', { maximumFractionDigits: 2 })} km`
       return { width: (lower + upper) / 2, label }
     }
   }
@@ -92,13 +102,18 @@ function localScale(map: MapLibreMap, region: CaptureRegion) {
   return null
 }
 
-type PreparedPin = { element: SVGSVGElement, image: HTMLImageElement }
+type PreparedPin = { element: SVGSVGElement; image: HTMLImageElement }
 
 function visibleOpacity(element: Element, container: HTMLElement) {
   let opacity = 1
   for (let current: Element | null = element; current; current = current.parentElement) {
     const style = getComputedStyle(current)
-    if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return 0
+    if (
+      style.display === 'none' ||
+      style.visibility === 'hidden' ||
+      style.visibility === 'collapse'
+    )
+      return 0
     opacity *= Number.parseFloat(style.opacity)
     if (current === container) break
   }
@@ -110,32 +125,51 @@ function visibleOpacity(element: Element, container: HTMLElement) {
 async function preparePins(map: MapLibreMap): Promise<PreparedPin[]> {
   const container = map.getContainer()
   const pins = [...container.querySelectorAll<SVGSVGElement>('.destination-pin-symbol')]
-  const prepared = await Promise.all(pins.map(async (element): Promise<PreparedPin | null> => {
-    if (!visibleOpacity(element, container)) return null
-    const svg = element.cloneNode(true) as SVGSVGElement
-    const style = getComputedStyle(element)
-    svg.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
-    svg.style.color = style.color
-    const markup = new XMLSerializer().serializeToString(svg).replace(/currentColor/gi, style.color)
-    const url = URL.createObjectURL(new Blob([markup], { type: 'image/svg+xml' }))
-    try {
-      const image = await new Promise<HTMLImageElement | null>((resolve) => {
-        const img = new Image()
-        const timer = setTimeout(() => resolve(null), 2_000)
-        img.onload = () => { clearTimeout(timer); resolve(img) }
-        img.onerror = () => { clearTimeout(timer); resolve(null) }
-        img.src = url
-      })
-      return image ? { element, image } : null
-    } finally { URL.revokeObjectURL(url) }
-  }))
+  const prepared = await Promise.all(
+    pins.map(async (element): Promise<PreparedPin | null> => {
+      if (!visibleOpacity(element, container)) return null
+      const svg = element.cloneNode(true) as SVGSVGElement
+      const style = getComputedStyle(element)
+      svg.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+      svg.style.color = style.color
+      const markup = new XMLSerializer()
+        .serializeToString(svg)
+        .replace(/currentColor/gi, style.color)
+      const url = URL.createObjectURL(new Blob([markup], { type: 'image/svg+xml' }))
+      try {
+        const image = await new Promise<HTMLImageElement | null>((resolve) => {
+          const img = new Image()
+          const timer = setTimeout(() => resolve(null), 2_000)
+          img.onload = () => {
+            clearTimeout(timer)
+            resolve(img)
+          }
+          img.onerror = () => {
+            clearTimeout(timer)
+            resolve(null)
+          }
+          img.src = url
+        })
+        return image ? { element, image } : null
+      } finally {
+        URL.revokeObjectURL(url)
+      }
+    }),
+  )
   return prepared.filter((pin): pin is PreparedPin => pin !== null)
 }
 
 /** Draw only geographic DOM fallbacks, never pin cards or tool windows. Native
  * vector labels are already in the WebGL canvas; these markers cover the polar
  * region that MapLibre's Mercator symbol pipeline cannot represent. */
-function drawGeographicOverlays(context: CanvasRenderingContext2D, map: MapLibreMap, region: CaptureRegion, pins: PreparedPin[], ratioX: number, ratioY: number) {
+function drawGeographicOverlays(
+  context: CanvasRenderingContext2D,
+  map: MapLibreMap,
+  region: CaptureRegion,
+  pins: PreparedPin[],
+  ratioX: number,
+  ratioY: number,
+) {
   const container = map.getContainer()
   const mapBounds = container.getBoundingClientRect()
   const boundsFor = (element: Element) => {
@@ -145,7 +179,15 @@ function drawGeographicOverlays(context: CanvasRenderingContext2D, map: MapLibre
     const bounds = element.getBoundingClientRect()
     const x = bounds.left - mapBounds.left - region.x
     const y = bounds.top - mapBounds.top - region.y
-    if (!bounds.width || !bounds.height || x + bounds.width < -6 || y + bounds.height < -6 || x > region.width + 6 || y > region.height + 6) return null
+    if (
+      !bounds.width ||
+      !bounds.height ||
+      x + bounds.width < -6 ||
+      y + bounds.height < -6 ||
+      x > region.width + 6 ||
+      y > region.height + 6
+    )
+      return null
     return { x, y, width: bounds.width, height: bounds.height, opacity }
   }
 
@@ -156,7 +198,10 @@ function drawGeographicOverlays(context: CanvasRenderingContext2D, map: MapLibre
     context.save()
     context.globalAlpha = bounds.opacity
     const pixelRatio = Math.sqrt(ratioX * ratioY)
-    context.filter = getComputedStyle(element).filter.replace(/(-?[\d.]+)px/g, (_, value: string) => `${Number.parseFloat(value) * pixelRatio}px`)
+    context.filter = getComputedStyle(element).filter.replace(
+      /(-?[\d.]+)px/g,
+      (_, value: string) => `${Number.parseFloat(value) * pixelRatio}px`,
+    )
     context.drawImage(image, bounds.x, bounds.y, bounds.width, bounds.height)
     context.restore()
   }
@@ -203,7 +248,13 @@ function drawGeographicOverlays(context: CanvasRenderingContext2D, map: MapLibre
     labelContext.fillText(text, padding, baseline)
     context.save()
     context.globalAlpha = bounds.opacity
-    context.drawImage(label, bounds.x - padding, bounds.y - padding, label.width / ratioX, label.height / ratioY)
+    context.drawImage(
+      label,
+      bounds.x - padding,
+      bounds.y - padding,
+      label.width / ratioX,
+      label.height / ratioY,
+    )
     context.restore()
   }
 }
@@ -226,9 +277,11 @@ function annotate(
   const lineHeight = fontSize + 3
   context.font = `400 ${fontSize}px "Fira Sans", sans-serif`
   const container = map.getContainer()
-  const nasaVisible = map.getLayer(NASA_LAYER_ID) && map.getLayoutProperty(NASA_LAYER_ID, 'visibility') !== 'none'
+  const nasaVisible =
+    map.getLayer(NASA_LAYER_ID) && map.getLayoutProperty(NASA_LAYER_ID, 'visibility') !== 'none'
   const overlayCredits = container.dataset.overlayCredits?.split(' | ').filter(Boolean) ?? []
-  const credits = [BASE_CREDITS,
+  const credits = [
+    BASE_CREDITS,
     ...(nasaVisible ? ['NASA GIBS · Blue Marble / NASA Earth Observatory'] : []),
     ...overlayCredits,
     ...(map.getZoom() >= 4 &&
@@ -385,7 +438,9 @@ export async function captureMapImage(
         context!.drawImage(preview, 0, 0, region.width, region.height)
         annotate(map, context!, region, settings, scale, capturedAt, includeSkyCredit)
         resolve()
-      } catch (error) { reject(error) }
+      } catch (error) {
+        reject(error)
+      }
     }
     map.on('render', snapshot)
     map.triggerRepaint()
