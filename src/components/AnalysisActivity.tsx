@@ -1,316 +1,171 @@
-import { useEffect, useId, useRef, useState } from 'react'
-import { CaretLeftIcon, CaretRightIcon } from '@phosphor-icons/react'
+import { useId, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import type { AnalysisArea } from '@/lib/analysis-area'
-import { fetchMonthActivity, type MonthActivity } from '@/lib/analysis-api'
+import { selectedActivityStats, type AnalysisActivityData } from '@/lib/analysis-api'
+import type { AnalysisFireStatus } from '@/hooks/use-analysis-fires'
 import {
   ANALYSIS_PLATFORMS,
-  activityStats,
   addUtcDays,
-  calendarWeeks,
-  clampRange,
-  crossesDateline,
+  eachUtcDay,
   formatUtcDay,
   formatUtcRange,
   heatLevel,
-  monthSpan,
-  shiftMonth,
   type AnalysisRange,
   type SeriesPoint,
 } from '@/lib/analysis-activity'
 
-const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 const PLATFORM_LABELS: Record<string, string> = {
+  terra: 'Terra',
   aqua: 'Aqua',
   'suomi-npp': 'Suomi NPP',
   'noaa-20': 'NOAA-20',
   'noaa-21': 'NOAA-21',
 }
 const PLATFORM_COLORS: Record<string, string> = {
+  terra: '#ef4444',
   aqua: '#e8a317',
   'suomi-npp': '#3b82f6',
   'noaa-20': '#22c55e',
   'noaa-21': '#c084fc',
 }
-
-type CacheEntry =
-  | { status: 'loading' }
-  | { status: 'ready'; data: MonthActivity }
-  | { status: 'error'; message: string }
-
 type AnalysisActivityProps = {
   area: AnalysisArea
   range: AnalysisRange
-  generation: number
-  onRangeChange: (range: AnalysisRange) => void
+  activity: AnalysisActivityData | null
+  status: AnalysisFireStatus
+  message: string
+  onRetry: () => void
+  focusedDay: string | null
+  onFocusDay: (day: string | null) => void
 }
 
 export function AnalysisActivity({
-  area,
   range,
-  generation,
-  onRangeChange,
+  activity,
+  status,
+  message,
+  onRetry,
+  focusedDay,
+  onFocusDay,
 }: AnalysisActivityProps) {
   const labelId = useId()
   const gridRef = useRef<HTMLDivElement>(null)
-  const anchorRef = useRef(range.start)
-  const draggedRef = useRef(false)
-  const pendingFocus = useRef<string | null>(null)
-  const selectionRef = useRef(range)
-  selectionRef.current = range
-  const [month, setMonth] = useState(() => range.start.slice(0, 7))
-  const [seenGeneration, setSeenGeneration] = useState(generation)
   const [detail, setDetail] = useState<string | null>(null)
-  const [retry, setRetry] = useState(0)
-  if (generation !== seenGeneration) {
-    setSeenGeneration(generation)
-    setMonth(range.start.slice(0, 7))
-  }
-
-  const dateline = crossesDateline(area.fullBounds ?? area.bounds)
-  const months = dateline
-    ? []
-    : [...new Set([month, range.start.slice(0, 7), range.end.slice(0, 7)])]
-  const cache = useMonthCache(area, months, retry, generation)
-  const weeks = calendarWeeks(month)
-  const days = new Map<string, MonthActivity['days'][number]>()
-  for (const entry of cache.values()) {
-    if (entry.status !== 'ready') continue
-    for (const day of entry.data.days) days.set(day.date, day)
-  }
-  const selectedMonths = [...new Set([range.start.slice(0, 7), range.end.slice(0, 7)])]
-  const selectedEntries = selectedMonths.map((item) => cache.get(`${area.id}:${item}`))
-  const selectedReady = selectedEntries.every((entry) => entry?.status === 'ready')
-  const error = selectedEntries.find((entry) => entry?.status === 'error')
-  const series = selectedReady
-    ? selectedEntries.flatMap((entry) => (entry?.status === 'ready' ? entry.data.series : []))
-    : []
-  const loadedMonth = selectedEntries.find(
-    (entry) =>
-      entry?.status === 'ready' && entry.data.start === range.start && entry.data.end === range.end,
-  )
-  const stats = selectedReady
-    ? activityStats(
-        series,
-        range,
-        loadedMonth?.status === 'ready' ? loadedMonth.data.medianFrp : null,
-        loadedMonth?.status === 'ready',
-      )
-    : null
-  const visible = cache.get(`${area.id}:${month}`)
-  const maxCount = Math.max(0, ...weeks.flat().map((day) => days.get(day)?.count ?? 0))
-  const monthDate = new Date(`${monthSpan(month).start}T00:00:00Z`)
-  const monthLabel = new Intl.DateTimeFormat('en-GB', {
-    month: 'long',
-    year: 'numeric',
-    timeZone: 'UTC',
-  }).format(monthDate)
-
-  useEffect(() => {
-    const day = pendingFocus.current
-    if (!day) return
-    const node = gridRef.current?.querySelector<HTMLButtonElement>(`[data-day="${day}"]`)
-    if (!node) return
-    node.focus()
-    pendingFocus.current = null
-  }, [month, range])
-
-  function selectDay(day: string, extend: boolean) {
-    pendingFocus.current = day
-    if (day.slice(0, 7) !== month) setMonth(day.slice(0, 7))
-    onRangeChange(extend ? clampRange(anchorRef.current, day) : clampRange(day, day))
-    if (!extend) anchorRef.current = day
-  }
-
-  function dayFromPoint(x: number, y: number) {
-    const node = document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-day]')
-    return node?.dataset.day ?? null
-  }
+  const displayRange = activity?.range ?? range
+  const stats = selectedActivityStats(activity, focusedDay)
+  const days = eachUtcDay(displayRange.start, displayRange.end)
+  const cells = new Map(activity?.days.map((day) => [day.date, day]) ?? [])
+  const maxCount = Math.max(0, ...Array.from(cells.values()).map((day) => day.count ?? 0))
+  const leading = new Date(displayRange.start + 'T00:00:00Z').getUTCDay()
+  const slots: (string | null)[] = [...Array.from({ length: leading }, () => null), ...days]
+  const series = activity?.series ?? []
+  const shownDays = focusedDay ? days.filter((day) => day === focusedDay) : days
 
   return (
     <section className="analysis-activity" aria-labelledby={labelId}>
       <h2 id={labelId}>Activity</h2>
-      <p className="analysis-activity-range">{formatUtcRange(range)} UTC</p>
-      <dl className="analysis-metrics">
-        <Metric
-          label="Detections"
-          value={stats ? formatNumber(stats.detections) : '—'}
-          detail="Returned FIRMS detections in the selected dates."
-        />
-        <Metric
-          label="Days with detections"
-          value={stats ? formatNumber(stats.daysWithDetections) : '—'}
-          detail="Selected UTC days with at least one returned detection."
-        />
-        <Metric
-          label="Peak day"
-          value={stats?.peakDate ? formatUtcDay(stats.peakDate) : '—'}
-          detail="Earliest selected day tied for the most detections."
-        />
-        <Metric
-          label="Median FRP"
-          value={
-            stats?.medianFrp === null || stats === null
-              ? '—'
-              : `${formatNumber(stats.medianFrp)} MW`
-          }
-          detail="Median fire radiative power for the whole loaded month. A shorter selection has no FRP values."
-        />
-      </dl>
-
-      {dateline && (
-        <p className="analysis-error" role="alert">
-          This area crosses 180° longitude, so the live query cannot bound it. Draw the part you
-          want on one side of the date line.
-        </p>
-      )}
-      {!dateline && error?.status === 'error' && (
+      <p className="analysis-activity-range">{formatUtcRange(displayRange)} UTC</p>
+      {['error', 'stale', 'partial'].includes(status) && (
         <div className="analysis-error" role="alert">
-          <p>{error.message}</p>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => setRetry((current) => current + 1)}
-          >
-            Retry
-          </Button>
+          <p>{message}</p>
+          {!/180(?:°| degrees)|31 UTC calendar days|smaller region|shorter period/i.test(
+            message,
+          ) && (
+            <Button size="sm" variant="outline" onClick={onRetry}>
+              {status === 'error' ? 'Retry' : 'Refresh'}
+            </Button>
+          )}
         </div>
       )}
-      {!dateline && !error && !selectedReady && (
+      {status === 'loading' && (
         <p className="analysis-notice" role="status">
-          Loading activity.
+          {message || 'Loading activity.'}
         </p>
       )}
-      {visible?.status === 'ready' && visible.data.completeness !== 'complete' && (
+      {activity?.completeness === 'partial' && (
         <p className="analysis-notice">
-          {visible.data.completeness === 'unavailable'
-            ? 'No stored coverage for this month.'
-            : 'Some days in this month are only partly covered.'}
+          Some source partitions are still missing. Counts reflect available data.
         </p>
       )}
-
+      {activity?.completeness === 'unavailable' && (
+        <p className="analysis-notice">No source coverage is available for this period.</p>
+      )}
       <div className="analysis-calendar">
         <div className="analysis-calendar-nav">
+          <h3>{formatUtcRange(displayRange)}</h3>
           <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Previous month"
-            onClick={() => setMonth((current) => shiftMonth(current, -1))}
+            size="sm"
+            variant="outline"
+            aria-pressed={!focusedDay}
+            onClick={() => onFocusDay(null)}
           >
-            <CaretLeftIcon size={16} />
-          </Button>
-          <h3>{monthLabel}</h3>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Next month"
-            onClick={() => setMonth((current) => shiftMonth(current, 1))}
-          >
-            <CaretRightIcon size={16} />
+            All days
           </Button>
         </div>
         <div className="analysis-heat">
           <div className="analysis-heat-dow" aria-hidden="true">
-            {WEEKDAYS.map((name) => (
-              <span key={name}>{name.slice(0, 1)}</span>
+            {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, index) => (
+              <span key={index}>{day}</span>
             ))}
           </div>
           <div
             ref={gridRef}
             className="analysis-heat-grid"
             role="group"
-            aria-label={`${monthLabel} activity`}
-            onPointerDown={(event) => {
-              if (event.button !== 0) return
-              const day = dayFromPoint(event.clientX, event.clientY)
-              if (!day) return
-              draggedRef.current = false
-              anchorRef.current = day
-              const next = clampRange(day, day)
-              selectionRef.current = next
-              event.currentTarget.setPointerCapture(event.pointerId)
-              onRangeChange(next)
-            }}
-            onPointerMove={(event) => {
-              if (!event.currentTarget.hasPointerCapture(event.pointerId)) return
-              const day = dayFromPoint(event.clientX, event.clientY)
-              if (!day) return
-              if (day !== anchorRef.current) draggedRef.current = true
-              const next = clampRange(anchorRef.current, day)
-              if (
-                next.start === selectionRef.current.start &&
-                next.end === selectionRef.current.end
-              )
-                return
-              selectionRef.current = next
-              onRangeChange(next)
-            }}
-            onPointerUp={() => {
-              anchorRef.current = selectionRef.current.start
-            }}
+            aria-label="Activity in the selected period"
           >
-            {weeks.map((week) =>
-              week.map((day) => {
-                const cell = days.get(day)
-                const outside = day.slice(0, 7) !== month
-                const selected = day >= range.start && day <= range.end
-                const level =
-                  cell?.state === 'unavailable' || cell?.count == null
-                    ? null
-                    : heatLevel(cell.count, maxCount)
-                const countLabel = !cell
-                  ? 'Not loaded'
-                  : cell.state === 'unavailable' || cell.count === null
+            {slots.map((day, index) => {
+              if (!day) return <span key={'empty-' + index} aria-hidden="true" />
+              const cell = cells.get(day)
+              const level =
+                cell?.state === 'unavailable' || cell?.count == null
+                  ? null
+                  : heatLevel(cell.count, maxCount)
+              const description =
+                formatUtcDay(day) +
+                '. ' +
+                (!cell
+                  ? 'Loading'
+                  : cell.count === null || cell.state === 'unavailable'
                     ? 'No coverage'
-                    : `${cell.count} harmonized active cells`
-                return (
-                  <button
-                    key={day}
-                    type="button"
-                    data-day={day}
-                    className="analysis-heat-day"
-                    data-level={level ?? undefined}
-                    data-state={cell ? cell.state : 'unloaded'}
-                    data-outside={outside || undefined}
-                    aria-pressed={selected}
-                    aria-label={`${formatUtcDay(day)}. ${countLabel}`}
-                    onClick={(event) => {
-                      if (draggedRef.current) {
-                        draggedRef.current = false
-                        event.preventDefault()
-                        return
-                      }
-                      anchorRef.current = day
-                      onRangeChange(clampRange(day, day))
-                    }}
-                    onFocus={() => setDetail(`${formatUtcDay(day)}. ${countLabel}`)}
-                    onPointerEnter={() => setDetail(`${formatUtcDay(day)}. ${countLabel}`)}
-                    onKeyDown={(event) => {
-                      const step =
-                        event.key === 'ArrowUp'
-                          ? -1
-                          : event.key === 'ArrowDown'
-                            ? 1
-                            : event.key === 'ArrowLeft'
-                              ? -7
-                              : event.key === 'ArrowRight'
-                                ? 7
-                                : 0
-                      if (!step) return
-                      event.preventDefault()
-                      selectDay(addUtcDays(day, step), event.shiftKey)
-                    }}
-                  />
-                )
-              }),
-            )}
+                    : cell.count + ' harmonized active cells')
+              return (
+                <button
+                  key={day}
+                  type="button"
+                  data-activity-day={day}
+                  className="analysis-heat-day"
+                  data-level={level ?? undefined}
+                  data-state={cell?.state ?? 'unloaded'}
+                  aria-label={description}
+                  title={description}
+                  aria-pressed={focusedDay === day}
+                  onClick={() => onFocusDay(focusedDay === day ? null : day)}
+                  onFocus={() => setDetail(description)}
+                  onPointerEnter={() => setDetail(description)}
+                  onKeyDown={(event) => {
+                    const step = (
+                      { ArrowUp: -1, ArrowDown: 1, ArrowLeft: -7, ArrowRight: 7 } as Record<
+                        string,
+                        number
+                      >
+                    )[event.key]
+                    if (!step) return
+                    event.preventDefault()
+                    const next = addUtcDays(day, step)
+                    gridRef.current
+                      ?.querySelector<HTMLButtonElement>('[data-activity-day="' + next + '"]')
+                      ?.focus()
+                  }}
+                >
+                  {Number(day.slice(8))}
+                </button>
+              )
+            })}
           </div>
         </div>
         <p className="analysis-heat-detail" aria-live="polite">
-          {detail ?? 'Click a day or drag across a period of up to 31 days.'}
+          {detail ?? 'Select a day to show its detections, or All days for the full period.'}
         </p>
         <div className="analysis-heat-legend">
           <span>Less</span>
@@ -321,76 +176,44 @@ export function AnalysisActivity({
           <span className="analysis-heat-swatch" data-state="unavailable" />
           <span>No coverage</span>
         </div>
-        <p className="analysis-heat-unit">
-          Cell color is harmonized afternoon active cells, not a count of fires.
-        </p>
+        <p className="analysis-heat-unit">Cell color shows harmonized afternoon active cells.</p>
       </div>
-
-      <ActivityTrend days={selectedReady ? eachSelectedDay(range) : []} series={series} />
+      <p className="analysis-stat-range">
+        {focusedDay ? formatUtcDay(focusedDay) : 'Full selected period'} UTC
+      </p>
+      <dl className="analysis-metrics">
+        <Metric
+          label="Detections"
+          value={stats ? formatNumber(stats.detections) : '-'}
+          detail="Returned FIRMS detections in the displayed dates."
+        />
+        <Metric
+          label="Days with detections"
+          value={stats ? formatNumber(stats.daysWithDetections) : '-'}
+          detail="Displayed UTC days with detections."
+        />
+        <Metric
+          label="Peak day"
+          value={stats?.peakDate ? formatUtcDay(stats.peakDate) : '-'}
+          detail="Earliest displayed day tied for the most detections."
+        />
+        <Metric
+          label="Median FRP"
+          value={stats?.medianFrp == null ? '-' : formatNumber(stats.medianFrp) + ' MW'}
+          detail="Median fire radiative power for the displayed dates."
+        />
+      </dl>
+      <p className="analysis-heat-unit">
+        Statistics count returned satellite detections. Calendar cells use the existing harmonized
+        afternoon method.
+      </p>
+      <ActivityTrend days={activity ? shownDays : []} series={series} />
     </section>
   )
 }
 
-function useMonthCache(area: AnalysisArea, months: string[], retry: number, generation: number) {
-  const cache = useRef(new Map<string, CacheEntry>())
-  const [version, setVersion] = useState(0)
-  const monthsKey = months.join(',')
-  const identity = `${area.id}:${generation}`
-  useEffect(() => {
-    cache.current.clear()
-  }, [identity])
-  useEffect(() => {
-    if (!monthsKey) return
-    const controller = new AbortController()
-    const requested = monthsKey.split(',')
-    const pending = requested.filter((item) => {
-      const entry = cache.current.get(`${area.id}:${item}`)
-      return !entry || entry.status === 'error'
-    })
-    if (!pending.length) return
-    for (const item of pending) cache.current.set(`${area.id}:${item}`, { status: 'loading' })
-    setVersion((current) => current + 1)
-    for (const item of pending) {
-      const key = `${area.id}:${item}`
-      fetchMonthActivity(area.id, area.geometry, item, controller.signal)
-        .then((data) => {
-          if (controller.signal.aborted) return
-          cache.current.set(key, { status: 'ready', data })
-          setVersion((current) => current + 1)
-        })
-        .catch((error: unknown) => {
-          if (controller.signal.aborted) return
-          cache.current.set(key, {
-            status: 'error',
-            message: error instanceof Error ? error.message : 'The activity could not be loaded.',
-          })
-          setVersion((current) => current + 1)
-        })
-    }
-    return () => {
-      controller.abort()
-      for (const item of pending) {
-        const key = `${area.id}:${item}`
-        if (cache.current.get(key)?.status === 'loading') cache.current.delete(key)
-      }
-    }
-  }, [area, identity, monthsKey, retry])
-  void version
-  return cache.current
-}
-
-function eachSelectedDay(range: AnalysisRange) {
-  const days: string[] = []
-  let cursor = range.start
-  while (cursor <= range.end && days.length < 31) {
-    days.push(cursor)
-    cursor = addUtcDays(cursor, 1)
-  }
-  return days
-}
-
 function formatNumber(value: number | null) {
-  if (value === null) return '—'
+  if (value === null) return '-'
   return new Intl.NumberFormat('en-GB', { maximumFractionDigits: 1 }).format(value)
 }
 
@@ -404,7 +227,7 @@ function Metric({ label, value, detail }: { label: string; value: string; detail
 }
 
 function ActivityTrend({ days, series }: { days: string[]; series: SeriesPoint[] }) {
-  const platforms = ANALYSIS_PLATFORMS.filter((platform) =>
+  const platforms = ['terra', ...ANALYSIS_PLATFORMS].filter((platform) =>
     series.some((point) => point.platform === platform && days.includes(point.date)),
   )
   const rows = platforms.map((platform) => ({
@@ -486,7 +309,7 @@ function ActivityTrend({ days, series }: { days: string[]; series: SeriesPoint[]
         </svg>
       )}
       <ul className="analysis-trend-legend">
-        {ANALYSIS_PLATFORMS.map((platform) => (
+        {platforms.map((platform) => (
           <li key={platform}>
             <span style={{ background: PLATFORM_COLORS[platform] }} />
             {PLATFORM_LABELS[platform]}

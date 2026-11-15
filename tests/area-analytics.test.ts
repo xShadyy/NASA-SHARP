@@ -88,7 +88,7 @@ test('aggregates operational breakdowns without merging sensor confidence scales
       source: 'MODIS_NRT',
       sensor: 'MODIS',
       confidence: 90,
-      confidence_scale: '0–100',
+      confidence_scale: '0-100',
       confidence_class: null,
       frp_mw: 50,
       daynight: 'N',
@@ -103,12 +103,12 @@ test('aggregates operational breakdowns without merging sensor confidence scales
   )
   assert.deepEqual(confidenceBuckets([viirs, modis]), [
     { label: 'VIIRS N', count: 1 },
-    { label: 'MODIS 80–100', count: 1 },
+    { label: 'MODIS 80-100', count: 1 },
   ])
   assert.deepEqual(frpBuckets([viirs, modis]).slice(0, 3), [
-    { label: '0–10 MW', count: 0 },
-    { label: '10–50 MW', count: 1 },
-    { label: '50–100 MW', count: 1 },
+    { label: '0-10 MW', count: 0 },
+    { label: '10-50 MW', count: 1 },
+    { label: '50-100 MW', count: 1 },
   ])
   assert.equal(medianFrp([viirs, modis]), 31.25)
   assert.deepEqual(filterDetections([viirs, modis], 'MODIS', 'night'), [modis])

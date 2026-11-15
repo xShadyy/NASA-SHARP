@@ -1,0 +1,107 @@
+{
+  "recorded_at": "2026-11-15T11:14:37.742199+00:00",
+  "results": [
+    {
+      "scenario": "small-region-day",
+      "fixture": "isolated synthetic NASA-format daily CSV; no external requests",
+      "days": 1,
+      "observations_per_day": 500,
+      "peak_tracemalloc_bytes": 1964310,
+      "sqlite_bytes": 36864,
+      "measurements": {
+        "cold": {
+          "acquisition_ms": 73.01,
+          "query_and_serialization_ms": 114.02,
+          "upstream_mock_calls": 1,
+          "map_bytes": 307692,
+          "detection_count": 500,
+          "acquisition_cache_hit": false
+        },
+        "warm": {
+          "acquisition_ms": 0.07,
+          "query_and_serialization_ms": 41.17,
+          "upstream_mock_calls": 0,
+          "map_bytes": 307692,
+          "detection_count": 500,
+          "acquisition_cache_hit": true
+        },
+        "disk": {
+          "acquisition_ms": 29.13,
+          "query_and_serialization_ms": 68.6,
+          "upstream_mock_calls": 0,
+          "map_bytes": 307692,
+          "detection_count": 500,
+          "acquisition_cache_hit": true
+        }
+      }
+    },
+    {
+      "scenario": "dense-country-week",
+      "fixture": "isolated synthetic NASA-format daily CSV; no external requests",
+      "days": 7,
+      "observations_per_day": 3000,
+      "peak_tracemalloc_bytes": 63620038,
+      "sqlite_bytes": 167936,
+      "measurements": {
+        "cold": {
+          "acquisition_ms": 2453.61,
+          "query_and_serialization_ms": 4321.09,
+          "upstream_mock_calls": 7,
+          "map_bytes": 12965313,
+          "detection_count": 21000,
+          "acquisition_cache_hit": false
+        },
+        "warm": {
+          "acquisition_ms": 0.13,
+          "query_and_serialization_ms": 1792.93,
+          "upstream_mock_calls": 0,
+          "map_bytes": 12965313,
+          "detection_count": 21000,
+          "acquisition_cache_hit": true
+        },
+        "disk": {
+          "acquisition_ms": 1009.15,
+          "query_and_serialization_ms": 2848.43,
+          "upstream_mock_calls": 0,
+          "map_bytes": 12965313,
+          "detection_count": 21000,
+          "acquisition_cache_hit": true
+        }
+      }
+    },
+    {
+      "scenario": "large-region-31-days",
+      "fixture": "isolated synthetic NASA-format daily CSV; no external requests",
+      "days": 31,
+      "observations_per_day": 1000,
+      "peak_tracemalloc_bytes": 93039510,
+      "sqlite_bytes": 290816,
+      "measurements": {
+        "cold": {
+          "acquisition_ms": 3802.16,
+          "query_and_serialization_ms": 6456.71,
+          "upstream_mock_calls": 31,
+          "map_bytes": 19117862,
+          "detection_count": 31000,
+          "acquisition_cache_hit": false
+        },
+        "warm": {
+          "acquisition_ms": 0.34,
+          "query_and_serialization_ms": 2682.1,
+          "upstream_mock_calls": 0,
+          "map_bytes": 19117862,
+          "detection_count": 31000,
+          "acquisition_cache_hit": true
+        },
+        "disk": {
+          "acquisition_ms": 1491.3,
+          "query_and_serialization_ms": 4276.71,
+          "upstream_mock_calls": 0,
+          "map_bytes": 19117862,
+          "detection_count": 31000,
+          "acquisition_cache_hit": true
+        }
+      }
+    }
+  ]
+}

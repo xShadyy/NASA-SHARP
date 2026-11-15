@@ -155,38 +155,6 @@
   color: var(--contrast-foreground);
 }
 
-.fire-map-legend {
-  position: absolute;
-  z-index: 2;
-  left: 18px;
-  bottom: 78px;
-  display: grid;
-  gap: 8px;
-  max-width: 260px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--surface) 92%, transparent);
-  color: var(--text);
-  font-size: 12px;
-  line-height: 1.4;
-}
-.fire-map-legend p {
-  margin: 0;
-}
-.fire-map-legend ul {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 12px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.fire-map-legend li {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
 .fire-popup-wrap .maplibregl-popup-content {
   padding: 10px 12px;
   border-radius: 6px;
@@ -203,6 +171,31 @@
   font-size: 12px;
   line-height: 1.45;
   white-space: pre-line;
+}
+.fire-popup p strong {
+  display: inline;
+  margin: 0;
+  font-size: inherit;
+}
+.fire-popup button {
+  margin: 4px 5px 0 0;
+  padding: 4px 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+.fire-popup button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.fire-popup button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }
 
 .map-scale-bar {

@@ -62,6 +62,12 @@ class Detection:
     confidence_class: str | None
     confidence_pct: int | None
     day_night: str | None
+    scan_km: float | None = None
+    track_km: float | None = None
+    nominal_resolution_m: float | None = None
+    source_product: str | None = None
+    product_version: str | None = None
+    processing_tier: str | None = None
 
 
 @dataclass(frozen=True)
@@ -86,6 +92,9 @@ class CanonicalStore:
     rows: tuple[Detection, ...]
     coverage: tuple[Coverage, ...]
     source: str
+    fetched_at: float | None = None
+    expires_at: float | None = None
+    cache_hit: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -322,6 +331,9 @@ def detection_from_row(row: dict[str, str | None]) -> Detection:
         confidence,
         _optional_int(row.get("confidence_pct")),
         day_night,
+        _optional_float(row.get("scan_km") or row.get("scan")),
+        _optional_float(row.get("track_km") or row.get("track")),
+        _optional_float(row.get("nominal_resolution_m")),
     )
 
 
@@ -467,6 +479,23 @@ def _row_kept(row: Detection, filters: Filters) -> bool:
     if row.platform == "aqua":
         return _modis_keeps(row, filters.modis_confidence_min)
     return row.confidence_class in filters.viirs_confidence
+
+
+def observation_kept(row: Detection, filters: Filters) -> bool:
+    if row.platform not in VIIRS_IDS or row.confidence_class is not None or filters.viirs_confidence != frozenset(CONFIDENCE_RANK):
+        return _row_kept(row, filters)
+    if row.platform not in filters.platforms:
+        return False
+    if filters.day_night != "all" and row.day_night != {"day": "D", "night": "N"}[filters.day_night]:
+        return False
+    if filters.frp_min is not None or filters.frp_max is not None:
+        if row.frp_mw is None:
+            return False
+        if filters.frp_min is not None and row.frp_mw < filters.frp_min:
+            return False
+        if filters.frp_max is not None and row.frp_mw > filters.frp_max:
+            return False
+    return True
 
 
 def _coverage_index(coverage: tuple[Coverage, ...]) -> dict[tuple[date, str], str]:
@@ -779,11 +808,16 @@ def kept_detections(query: dict, store: CanonicalStore, filters: Filters, start:
         return []
     rows = []
     area = prepared_area(geometry)
+    interval = query["interval"]
+    lower = datetime.fromisoformat(interval["start"].replace("Z", "+00:00"))
+    upper = datetime.fromisoformat(interval["endExclusive"].replace("Z", "+00:00"))
     for row in store.rows:
+        if not lower <= row.acquired_at < upper:
+            continue
         day = row.acquired_at.astimezone(UTC).date()
         if day < start or day >= end or (focused is not None and day != focused):
             continue
-        if not _row_kept(row, filters) or not area.contains(row.longitude, row.latitude):
+        if not observation_kept(row, filters) or not area.contains(row.longitude, row.latitude):
             continue
         rows.append(row)
     rows.sort(key=lambda row: row.acquired_at, reverse=True)
@@ -801,7 +835,8 @@ def _median(values: list[float]) -> float | None:
 
 
 def detection_id(row: Detection) -> str:
-    return f"{row.platform}:{row.acquired_at.astimezone(UTC).strftime('%Y-%m-%dT%H:%MZ')}:{row.longitude:.5f}:{row.latitude:.5f}"
+    identity = json.dumps([row.platform, row.acquired_at.astimezone(UTC).isoformat(), row.longitude, row.latitude], separators=(",", ":"))
+    return f"{row.platform}:{hashlib.sha256(identity.encode()).hexdigest()[:24]}"
 
 
 def observation_record(row: Detection, store: CanonicalStore) -> dict:
@@ -813,30 +848,62 @@ def observation_record(row: Detection, store: CanonicalStore) -> dict:
         "platform": row.platform,
         "longitude": row.longitude,
         "latitude": row.latitude,
-        "dayNight": "day" if row.day_night == "D" else "night",
+        "dayNight": "day" if row.day_night == "D" else "night" if row.day_night == "N" else "unknown",
         "confidence": (
-            {"kind": "numeric", "value": row.confidence_pct if row.confidence_pct is not None else 0, "unit": "native MODIS confidence (0–100)"}
+            {"kind": "numeric", "value": row.confidence_pct, "unit": "native MODIS confidence (0-100)"}
             if modis
-            else {"kind": "categorical", "value": row.confidence_class or "nominal"}
+            else {"kind": "categorical", "value": row.confidence_class}
         ),
         "frpMw": row.frp_mw,
-        "provenance": store.source,
-        "productVersion": DATASET_VERSION,
-        "processingTier": "firms-active-fire",
+        "scanKm": row.scan_km,
+        "trackKm": row.track_km,
+        "nominalResolutionM": row.nominal_resolution_m,
+        "provenance": row.source_product or store.source,
+        "productVersion": row.product_version or DATASET_VERSION,
+        "processingTier": row.processing_tier or "firms-active-fire",
+        "sourceProduct": row.source_product,
+    }
+
+
+def observation_coverage_states(store: CanonicalStore, filters: Filters, start: date, end: date) -> dict[date, str]:
+    coverage_index = _coverage_index(store.coverage)
+    return {
+        start + timedelta(days=index): _overall([
+            coverage_index.get((start + timedelta(days=index), platform), "unavailable")
+            for platform in filters.platforms
+        ]) for index in range((end - start).days)
     }
 
 
 def overview_document(query: dict, store: CanonicalStore, updated_at: datetime | None = None) -> dict:
     result, filters, start, end, updated = evaluate_query(query, store, updated_at)
     rows = kept_detections(query, store, filters, start, end)
-    availability = result.completeness
-    blank = availability == "unavailable"
+    states_by_day = observation_coverage_states(store, filters, start, end)
+    availability = _overall(list(states_by_day.values()))
+    blank = availability == "unavailable" and not rows
     by_day: dict[date, int] = defaultdict(int)
     for row in rows:
         by_day[row.acquired_at.astimezone(UTC).date()] += 1
     peak = min(by_day, key=lambda day: (-by_day[day], day.toordinal())) if by_day else None
+    rows_by_day = defaultdict(list)
+    for row in rows:
+        rows_by_day[row.acquired_at.astimezone(UTC).date()].append(row)
+    daily = []
+    for activity_day in result.days:
+        selected = rows_by_day[activity_day.day]
+        raw_state = states_by_day[activity_day.day]
+        unavailable = raw_state == "unavailable" and not selected
+        daily.append({
+            "date": activity_day.day.isoformat(),
+            "detectionCount": None if unavailable else len(selected),
+            "daysWithDetections": None if unavailable else int(bool(selected)),
+            "peakDate": activity_day.day.isoformat() if selected else None,
+            "medianFrp": None if unavailable else _median([row.frp_mw for row in selected if row.frp_mw is not None]),
+            "state": raw_state,
+        })
     return {
         "data": {
+            "daily": daily,
             "detectionCount": _metric(None if blank else len(rows), "returned detections", "FIRMS active-fire records inside the area after the native filters. Not a count of distinct fires or harmonized cells.", availability),
             "daysWithDetections": _metric(None if blank else len(by_day), "UTC days", "UTC days in the applied interval with at least one returned detection.", availability),
             "peakDate": _metric(None if peak is None else peak.isoformat(), "UTC date", "Earliest UTC day tied for the most returned detections. Unavailable days are excluded.", availability),
@@ -892,7 +959,7 @@ def observations_document(query: dict, store: CanonicalStore, body: dict | None 
     options = _options(body)
     focused = _focused_day(options, start, end)
     page, page_size = _page(options)
-    rows = [row for row in kept_detections(query, store, filters, start, end, focused) if row.day_night in {"D", "N"}]
+    rows = [row for row in kept_detections(query, store, filters, start, end, focused)]
     offset = (page - 1) * page_size
     coverage = result.coverage if focused is None else f"{focused.isoformat()} UTC. {result.coverage}"
     return {
@@ -909,7 +976,7 @@ def observations_document(query: dict, store: CanonicalStore, body: dict | None 
 def observation_document(query: dict, store: CanonicalStore, body: dict | None = None, updated_at: datetime | None = None) -> dict:
     result, filters, start, end, updated = evaluate_query(query, store, updated_at)
     wanted = body.get("id") if isinstance(body, dict) else None
-    match = next((row for row in kept_detections(query, store, filters, start, end) if detection_id(row) == wanted and row.day_night in {"D", "N"}), None)
+    match = next((row for row in kept_detections(query, store, filters, start, end) if detection_id(row) == wanted), None)
     return {
         "data": None if match is None else observation_record(match, store),
         "meta": _meta(query["id"], result, updated, {"count": "returned detections", "time": "UTC"}, result.completeness, result.coverage, (COMPANION_NOTE,)),
@@ -919,7 +986,9 @@ def observation_document(query: dict, store: CanonicalStore, body: dict | None =
 def map_source_document(query: dict, store: CanonicalStore, body: dict | None = None, updated_at: datetime | None = None) -> dict:
     result, filters, start, end, updated = evaluate_query(query, store, updated_at)
     focused = _focused_day(_options(body), start, end)
-    rows = [row for row in kept_detections(query, store, filters, start, end, focused) if row.day_night in {"D", "N"}]
+    rows = kept_detections(query, store, filters, start, end, focused)
+    if len(rows) > 100_000:
+        raise RejectedQuery("This selection contains more than 100,000 satellite hotspot detections. Select a smaller region or shorter period; no records were truncated.")
     features = []
     for row in rows:
         record = observation_record(row, store)
@@ -930,13 +999,19 @@ def map_source_document(query: dict, store: CanonicalStore, body: dict | None = 
             "properties": {**record, "observationId": record["id"], "queryId": query["id"]},
         })
     coverage = result.coverage if focused is None else f"{focused.isoformat()} UTC. {result.coverage}"
+    raw_states = observation_coverage_states(store, filters, start, end)
+    completeness = raw_states.get(focused, "unavailable") if focused is not None else _overall(list(raw_states.values()))
     return {
         "data": {
             "type": "geojson",
             "data": {"type": "FeatureCollection", "features": features},
             "attribution": "NASA FIRMS active-fire detections inside the applied area.",
         },
-        "meta": _meta(query["id"], result, updated, {"count": "returned detections", "time": "UTC"}, result.completeness, coverage, (COMPANION_NOTE,)),
+        "meta": {
+            **_meta(query["id"], result, updated, {"count": "returned detections", "time": "UTC"}, completeness, coverage, (COMPANION_NOTE,)),
+            "representation": "individual-detections",
+            "processingTier": "firms-active-fire",
+        },
     }
 
 
@@ -962,7 +1037,7 @@ def capabilities_payload(store: CanonicalStore, today: date | None = None) -> di
         if dates:
             loaded_dates.extend(dates)
         confidence = (
-            {"kind": "numeric", "min": 0, "max": 100, "unit": "native MODIS confidence (0–100)"}
+            {"kind": "numeric", "min": 0, "max": 100, "unit": "native MODIS confidence (0-100)"}
             if sensor == "MODIS"
             else {"kind": "categorical", "values": ["low", "nominal", "high"]}
         )
@@ -1050,11 +1125,11 @@ def parse_utc_interval(interval: dict) -> tuple[date, date]:
         start = datetime.fromisoformat(str(interval.get("start", "")).replace("Z", "+00:00"))
         end = datetime.fromisoformat(str(interval.get("endExclusive", "")).replace("Z", "+00:00"))
     except ValueError as exc:
-        raise ValueError("Analysis requires UTC midnight, start-inclusive/end-exclusive dates.") from exc
+        raise ValueError("Analysis requires UTC start-inclusive/end-exclusive timestamps.") from exc
     if start.tzinfo is None or end.tzinfo is None or start.utcoffset() != timedelta(0) or end.utcoffset() != timedelta(0):
-        raise ValueError("Analysis requires UTC midnight, start-inclusive/end-exclusive dates.")
-    if start.timetz().replace(tzinfo=None) != time.min or end.timetz().replace(tzinfo=None) != time.min or end <= start:
-        raise ValueError("Analysis requires UTC midnight, start-inclusive/end-exclusive dates.")
+        raise ValueError("Analysis requires UTC start-inclusive/end-exclusive timestamps.")
+    if end <= start:
+        raise ValueError("Analysis requires UTC start-inclusive/end-exclusive timestamps.")
     if (end.date() - start.date()).days > 366 * 100:
         raise ValueError("Choose a period shorter than 100 years.")
-    return start.date(), end.date()
+    return start.date(), end.date() + (timedelta(days=1) if end.timetz().replace(tzinfo=None) != time.min else timedelta(0))

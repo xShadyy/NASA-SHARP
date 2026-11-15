@@ -1,8 +1,11 @@
 import type { AreaGeometry } from '@/lib/analysis-area'
 import {
-  addUtcDays,
   analysisQuery,
+  eachUtcDay,
   monthSpan,
+  rangeQuery,
+  type AnalysisRange,
+  type ActivityStats,
   type CalendarDay,
   type SeriesPoint,
 } from '@/lib/analysis-activity'
@@ -18,6 +21,33 @@ export type MonthActivity = {
   series: SeriesPoint[]
   medianFrp: number | null
   completeness: string
+  stats?: ActivityStats
+  dailyStats?: Record<string, ActivityStats>
+}
+
+export type AnalysisMetadata = {
+  queryId?: string
+  datasetVersion?: string
+  methodVersion?: string
+  completeness?: string
+  coverage?: string
+  generatedAt?: string
+  fetchedAt?: string
+  expiresAt?: string
+  newestObservationAt?: string | null
+  freshness?: string
+  updatedAt?: string
+}
+
+export type AnalysisActivityData = MonthActivity & {
+  range: AnalysisRange
+  areaName: string
+}
+
+export type AnalysisSelectionData = {
+  features: FireFeature[]
+  activity: AnalysisActivityData
+  meta: AnalysisMetadata
 }
 
 export async function fetchMonthActivity(
@@ -40,18 +70,148 @@ export async function fetchMonthActivity(
     days: calendarDays(calendar),
     series: seriesPoints(series),
     medianFrp: medianFrp(overview),
+    stats: overviewStats(overview),
+    dailyStats: overviewDailyStats(overview),
     completeness: completeness(calendar),
   }
+}
+
+export async function fetchRangeActivity(
+  areaId: string,
+  geometry: AreaGeometry,
+  range: AnalysisRange,
+  signal: AbortSignal,
+): Promise<MonthActivity> {
+  const query = rangeQuery(areaId, geometry, range)
+  const [calendar, overview, series] = await Promise.all([
+    postAnalysis('/analysis/calendar', query, signal),
+    postAnalysis('/analysis/overview', query, signal),
+    postAnalysis('/analysis/time-series', query, signal),
+  ])
+  return {
+    month: range.start.slice(0, 7),
+    start: range.start,
+    end: range.end,
+    days: calendarDays(calendar),
+    series: seriesPoints(series),
+    medianFrp: medianFrp(overview),
+    stats: overviewStats(overview),
+    dailyStats: overviewDailyStats(overview),
+    completeness: completeness(calendar),
+  }
+}
+
+export async function fetchAnalysisSelection(
+  areaId: string,
+  areaName: string,
+  geometry: AreaGeometry,
+  range: AnalysisRange,
+  signal: AbortSignal,
+): Promise<AnalysisSelectionData> {
+  const query = rangeQuery(areaId, geometry, range)
+  const [map, activity] = await Promise.all([
+    postAnalysis('/analysis/map-source', query, signal),
+    fetchRangeActivity(areaId, geometry, range, signal),
+  ])
+  const body = record(map, 'The fire map')
+  const features = fireMapFeatures(map)
+  const missingDailyStats = eachUtcDay(activity.start, activity.end).some(
+    (day) => !activity.dailyStats?.[day],
+  )
+  return {
+    features,
+    activity: {
+      ...activity,
+      dailyStats: missingDailyStats
+        ? { ...cachedDailyStats(activity, features), ...activity.dailyStats }
+        : activity.dailyStats,
+      range,
+      areaName,
+    },
+    meta: body.meta && typeof body.meta === 'object' ? (body.meta as AnalysisMetadata) : {},
+  }
+}
+
+export function analysisSelectionKey(areaId: string, geometry: AreaGeometry, range: AnalysisRange) {
+  return [
+    'analysis-selection',
+    areaId,
+    JSON.stringify(rangeQuery(areaId, geometry, range)),
+  ] as const
+}
+
+export function selectedActivityStats(activity: AnalysisActivityData | null, day: string | null) {
+  if (!activity) return null
+  if (!day) return activity.stats ?? null
+  return activity.dailyStats?.[day] ?? cachedDailyStats(activity)[day] ?? null
+}
+
+function cachedDailyStats(
+  activity: MonthActivity,
+  features: FireFeature[] = [],
+): Record<string, ActivityStats> {
+  const seriesByDay = new Map<string, SeriesPoint[]>()
+  for (const point of activity.series) {
+    if (point.endDate !== point.date) continue
+    const points = seriesByDay.get(point.date) ?? []
+    points.push(point)
+    seriesByDay.set(point.date, points)
+  }
+  const observationsByDay = new Map<string, { count: number; frp: number[] }>()
+  for (const feature of features) {
+    const instant = Date.parse(feature.properties.acquiredAt)
+    if (!Number.isFinite(instant)) continue
+    const day = new Date(instant).toISOString().slice(0, 10)
+    const observations = observationsByDay.get(day) ?? { count: 0, frp: [] }
+    observations.count += 1
+    const power = feature.properties.frpMw
+    if (typeof power === 'number' && Number.isFinite(power) && power >= 0)
+      observations.frp.push(power)
+    observationsByDay.set(day, observations)
+  }
+  return Object.fromEntries(
+    eachUtcDay(activity.start, activity.end).map((day) => {
+      const measured = (seriesByDay.get(day) ?? []).filter((point) => point.state !== 'unavailable')
+      if (!measured.length)
+        return [
+          day,
+          {
+            detections: null,
+            daysWithDetections: null,
+            peakDate: null,
+            medianFrp: null,
+          } satisfies ActivityStats,
+        ]
+      const detections = measured.reduce((count, point) => count + point.count, 0)
+      const observations = observationsByDay.get(day)
+      const powers =
+        observations?.count === detections ? observations.frp.sort((a, b) => a - b) : []
+      const middle = Math.floor(powers.length / 2)
+      const medianFrp = !powers.length
+        ? null
+        : powers.length % 2
+          ? powers[middle]
+          : (powers[middle - 1] + powers[middle]) / 2
+      return [
+        day,
+        {
+          detections,
+          daysWithDetections: detections > 0 ? 1 : 0,
+          peakDate: detections > 0 ? day : null,
+          medianFrp,
+        } satisfies ActivityStats,
+      ]
+    }),
+  )
 }
 
 export async function fetchAnalysisFires(
   areaId: string,
   geometry: AreaGeometry,
-  start: string,
-  end: string,
+  range: AnalysisRange,
   signal: AbortSignal,
 ): Promise<FireFeature[]> {
-  const query = analysisQuery(areaId, geometry, start, addUtcDays(end, 1))
+  const query = rangeQuery(areaId, geometry, range)
   return fireMapFeatures(await postAnalysis('/analysis/map-source', query, signal))
 }
 
@@ -130,4 +290,40 @@ function completeness(body: unknown) {
   const meta = record(body, 'The activity calendar').meta
   const value = record(meta, 'The activity calendar').completeness
   return typeof value === 'string' ? value : 'unavailable'
+}
+
+function overviewStats(body: unknown): ActivityStats {
+  const data = record(record(body, 'The activity summary').data, 'The activity summary')
+  const value = (name: string) => record(data[name], name).value
+  return {
+    detections:
+      typeof value('detectionCount') === 'number' ? (value('detectionCount') as number) : null,
+    daysWithDetections:
+      typeof value('daysWithDetections') === 'number'
+        ? (value('daysWithDetections') as number)
+        : null,
+    peakDate: typeof value('peakDate') === 'string' ? (value('peakDate') as string) : null,
+    medianFrp: typeof value('medianFrp') === 'number' ? (value('medianFrp') as number) : null,
+  }
+}
+
+function overviewDailyStats(body: unknown): Record<string, ActivityStats> {
+  const data = record(record(body, 'The activity summary').data, 'The activity summary')
+  if (!Array.isArray(data.daily)) return {}
+  return Object.fromEntries(
+    data.daily.map((item) => {
+      const day = record(item, 'Daily activity summary')
+      if (typeof day.date !== 'string') throw new Error('A daily summary has no date.')
+      return [
+        day.date,
+        {
+          detections: typeof day.detectionCount === 'number' ? day.detectionCount : null,
+          daysWithDetections:
+            typeof day.daysWithDetections === 'number' ? day.daysWithDetections : null,
+          peakDate: typeof day.peakDate === 'string' ? day.peakDate : null,
+          medianFrp: typeof day.medianFrp === 'number' ? day.medianFrp : null,
+        },
+      ]
+    }),
+  )
 }

@@ -796,7 +796,7 @@ export function AreaAnalytics({
             <div className="area-analytics-range-foot">
               <span>1 day</span>
               <span id="area-analytics-range-dates">
-                {formatDay(windows.currentStart, { year: 'numeric' })} –{' '}
+                {formatDay(windows.currentStart, { year: 'numeric' })} -{' '}
                 {formatDay(windows.endDate, { year: 'numeric' })} UTC
               </span>
               <span>30 days</span>
@@ -883,7 +883,7 @@ export function AreaAnalytics({
           <div className="area-analytics-glance-main">
             <p className="area-analytics-eyebrow">
               {areaLabel.toUpperCase()} · {days} DAYS ·{' '}
-              {formatDay(windows.currentStart, { year: 'numeric' })} –{' '}
+              {formatDay(windows.currentStart, { year: 'numeric' })} -{' '}
               {formatDay(windows.endDate, { year: 'numeric' })} UTC
             </p>
             <h2 id="area-analytics-glance-title">Fire Activity at a Glance</h2>
@@ -986,7 +986,7 @@ export function AreaAnalytics({
               <span>Compared with</span>
               <strong>
                 {comparison
-                  ? `${formatNumber(previousData?.count ?? 0)} detections · ${formatDay(windows.previousStart, { year: 'numeric' })}–${formatDay(shiftUtcDate(windows.currentStart, -1), { year: 'numeric' })} UTC`
+                  ? `${formatNumber(previousData?.count ?? 0)} detections · ${formatDay(windows.previousStart, { year: 'numeric' })}-${formatDay(shiftUtcDate(windows.currentStart, -1), { year: 'numeric' })} UTC`
                   : comparisonLoading
                     ? 'Loading equal-length comparison…'
                     : 'Previous interval unavailable'}

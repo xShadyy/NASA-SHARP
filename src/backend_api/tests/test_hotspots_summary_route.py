@@ -29,7 +29,7 @@ def feature(day: date, frp: float, longitude=-68.1, latitude=-13.1):
             "acquired_at": f"{day.isoformat()}T13:30:00Z",
             "acquired_at_local": f"{day.isoformat()}T13:30:00+00:00",
             "confidence": 90,
-            "confidence_scale": "0–100",
+            "confidence_scale": "0-100",
             "confidence_class": None,
             "frp_mw": frp,
             "brightness_k": 310.0,

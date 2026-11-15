@@ -51,7 +51,7 @@ In addition to numerical information, you could consider how color ramps might r
 _You may (but are not required to) consider the following:_
 
 - Your target audience can include early warning and emergency responders, scientists, land managers, and firefighters.
-- Consider making your web application interactive – for example, a map where users can draw the area of interest, or an option to enter latitude and longitude.
+- Consider making your web application interactive - for example, a map where users can draw the area of interest, or an option to enter latitude and longitude.
 - Consider using accessible color ramps.
 - Your tool could depict a burning calendar
 - Your tool could focus on a few key indices and figures and present them through data visualizations, such as:

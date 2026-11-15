@@ -11,9 +11,9 @@ from harmonize import geometry_contains
 
 SAMPLE_LIMIT = 500
 FRP_RANGES = (
-    ("0–10 MW", 0, 10),
-    ("10–50 MW", 10, 50),
-    ("50–100 MW", 50, 100),
+    ("0-10 MW", 0, 10),
+    ("10-50 MW", 10, 50),
+    ("50-100 MW", 50, 100),
     ("100+ MW", 100, math.inf),
 )
 
@@ -51,9 +51,9 @@ class AreaAnalyticsSummary:
             label = f"VIIRS {confidence.upper()}" if isinstance(confidence, str) else "VIIRS unknown"
         elif isinstance(confidence, (int, float)):
             label = (
-                "MODIS 80–100"
+                "MODIS 80-100"
                 if confidence >= 80
-                else "MODIS 30–79" if confidence >= 30 else "MODIS 0–29"
+                else "MODIS 30-79" if confidence >= 30 else "MODIS 0-29"
             )
         else:
             label = "MODIS unknown"
@@ -223,9 +223,9 @@ class AreaAnalyticsSummary:
             "VIIRS N",
             "VIIRS L",
             "VIIRS unknown",
-            "MODIS 80–100",
-            "MODIS 30–79",
-            "MODIS 0–29",
+            "MODIS 80-100",
+            "MODIS 30-79",
+            "MODIS 0-29",
             "MODIS unknown",
         )
         return {

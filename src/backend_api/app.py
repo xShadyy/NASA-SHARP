@@ -12,8 +12,9 @@ import sqlite3
 import tempfile
 import time as clock
 import zlib
+from collections import OrderedDict
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from enum import Enum
@@ -34,6 +35,8 @@ from cache import BatchCache
 from area_analytics_summary import AreaAnalyticsSummary
 from harmonize import (
     CanonicalStore,
+    observation_kept,
+    filters_from_query,
     Coverage,
     Detection,
     RejectedQuery,
@@ -322,11 +325,13 @@ def parse_features(text: str, source: Source) -> list[dict]:
                 raise ValueError("Missing satellite")
             confidence = row["confidence"].strip().lower()
             if is_modis:
-                confidence = int(confidence)
-                if not 0 <= confidence <= 100:
+                confidence = int(confidence) if confidence else None
+                if confidence is not None and not 0 <= confidence <= 100:
                     raise ValueError("Invalid MODIS confidence")
-            elif confidence not in VIIRS_RANKS:
+            elif confidence and confidence not in VIIRS_RANKS:
                 raise ValueError("Invalid VIIRS confidence")
+            elif not confidence:
+                confidence = None
 
             # Drop identical rows within this product and keep separate satellite observations.
             if None in row or any(value is None for value in row.values()):
@@ -346,8 +351,8 @@ def parse_features(text: str, source: Source) -> list[dict]:
                     "nominal_resolution_m": 1000 if is_modis else 375,
                     "acquired_at": acquired.isoformat().replace("+00:00", "Z"),
                     "confidence": confidence,
-                    "confidence_scale": "0–100" if is_modis else "low/nominal/high",
-                    "confidence_class": None if is_modis else VIIRS_CLASSES[confidence],
+                    "confidence_scale": "0-100" if is_modis else "low/nominal/high",
+                    "confidence_class": None if is_modis else VIIRS_CLASSES.get(confidence),
                     "frp_mw": optional_number(row, "frp"),
                     "scan_km": optional_number(row, "scan"),
                     "track_km": optional_number(row, "track"),
@@ -390,6 +395,12 @@ async def availability(request: Request):
         raise HTTPException(502, "FIRMS returned malformed availability CSV.") from None
 
 
+def batch_ttl(product: Source, day: date, today: date) -> int:
+    if product.value.endswith("_SP"):
+        return 7 * 86400
+    return 300 if day >= today - timedelta(days=1) else 86400
+
+
 async def fetch_and_cache_batch(
     app: FastAPI,
     product: Source,
@@ -410,12 +421,7 @@ async def fetch_and_cache_batch(
         raise FIRMSFailure("FIRMS returned data outside the requested UTC day; retry the query.")
     if day == today and datetime.fromtimestamp(fetched, UTC).date() != today:
         raise FIRMSFailure("The UTC day changed during retrieval; retry the query.")
-    if product.value.endswith("_SP"):
-        ttl = 7 * 86400
-    elif day >= today - timedelta(days=1):
-        ttl = 300
-    else:
-        ttl = 86400
+    ttl = batch_ttl(product, day, today)
     try:
         await asyncio.to_thread(app.state.cache.put, key, features, fetched, ttl)
     except sqlite3.Error:
@@ -423,7 +429,7 @@ async def fetch_and_cache_batch(
     return features, fetched
 
 
-async def load_batch(app: FastAPI, product: Source, bounds: str, day: date, today: date):
+async def load_batch(app: FastAPI, product: Source, bounds: str, day: date, today: date, acquisition_started: asyncio.Event | None = None):
     key = app.state.cache.key(product.value, bounds, day.isoformat())
     lock = app.state.batch_locks[hash(key) % len(app.state.batch_locks)]
     async with lock:
@@ -456,10 +462,18 @@ async def load_batch(app: FastAPI, product: Source, bounds: str, day: date, toda
             task.add_done_callback(clear_fetch)
         fetch.waiters += 1
 
+    observer = None
+    if acquisition_started is not None:
+        async def observe_start():
+            await fetch.started.wait()
+            acquisition_started.set()
+        observer = asyncio.create_task(observe_start())
     try:
         features, fetched = await asyncio.shield(fetch.task)
         return features, fetched, shared_fetch
     finally:
+        if observer is not None:
+            observer.cancel()
         fetch.waiters -= 1
         if fetch.waiters == 0 and not fetch.started.is_set() and not fetch.task.done():
             fetch.task.cancel()
@@ -481,9 +495,9 @@ def filter_features(
             if daynight != "all" and props["daynight"] != {"day": "D", "night": "N"}[daynight]:
                 continue
             confidence = props["confidence"]
-            if props["sensor"] == "MODIS" and confidence < modis_min:
+            if props["sensor"] == "MODIS" and (confidence is None and modis_min > 0 or confidence is not None and confidence < modis_min):
                 continue
-            if props["sensor"] == "VIIRS" and VIIRS_RANKS[confidence] < VIIRS_RANKS[viirs_min]:
+            if props["sensor"] == "VIIRS" and (confidence is None and viirs_min != "l" or confidence is not None and VIIRS_RANKS[confidence] < VIIRS_RANKS[viirs_min]):
                 continue
             features.append({
                 **feature,
@@ -892,6 +906,12 @@ def feature_to_detection(feature: dict) -> Detection | None:
         None if modis else props.get("confidence_class"),
         int(confidence) if modis and isinstance(confidence, int) else None,
         props.get("daynight"),
+        None if props.get("scan_km") is None else float(props["scan_km"]),
+        None if props.get("track_km") is None else float(props["track_km"]),
+        None if props.get("nominal_resolution_m") is None else float(props["nominal_resolution_m"]),
+        str(props["source"]) if props.get("source") else None,
+        str(props["version"]) if props.get("version") else None,
+        str(props["processing"]) if props.get("processing") else None,
     )
 
 
@@ -918,112 +938,183 @@ def product_on(platform: str, day: date, windows: dict[str, tuple[date, date]]) 
     return None
 
 
-async def firms_canonical_store(app: FastAPI, query: dict, bbox: tuple[float, float, float, float]) -> CanonicalStore:
+def validate_acquisition_longitudes(geometry: dict) -> None:
+    if not isinstance(geometry, dict) or geometry.get("type") not in {"Polygon", "MultiPolygon"}:
+        raise RejectedQuery("Analysis area must be a Polygon or MultiPolygon.")
+    polygons = [geometry.get("coordinates")] if geometry["type"] == "Polygon" else geometry.get("coordinates")
+    try:
+        longitudes = [float(position[0]) for polygon in polygons for ring in polygon for position in ring]
+    except (TypeError, ValueError, IndexError) as exc:
+        raise RejectedQuery("Analysis area contains invalid coordinates.") from exc
+    if not longitudes or any(not math.isfinite(value) or value < -180 or value > 180 for value in longitudes):
+        raise RejectedQuery("Analysis area longitude must stay between -180 and 180 degrees.")
+    linear_span = max(longitudes) - min(longitudes)
+    if linear_span <= 180:
+        return
+    circular = sorted({value % 360 for value in longitudes})
+    largest_gap = max(circular[(index + 1) % len(circular)] + (360 if index == len(circular) - 1 else 0) - value for index, value in enumerate(circular))
+    if 360 - largest_gap < 180:
+        raise RejectedQuery("This area crosses 180 degrees longitude. Live analysis currently supports one side of the date line per query.")
+
+
+async def firms_canonical_store(app: FastAPI, query: dict, bbox: tuple[float, float, float, float], started: asyncio.Event | None = None) -> CanonicalStore:
+    validate_acquisition_longitudes(query.get("aoi", {}).get("geometry"))
     try:
         start, end = parse_utc_interval(query.get("interval"))
     except ValueError as exc:
         raise RejectedQuery(str(exc)) from exc
     if (end - start).days > LIVE_ANALYSIS_DAYS:
         raise RejectedQuery("Live FIRMS analysis accepts at most 31 UTC days. Narrow the date range.")
-    requested = query.get("filters", {}).get("platforms") if isinstance(query.get("filters"), dict) else None
-    selected = [item for item in requested if item in PLATFORM_PRODUCTS] if isinstance(requested, list) else []
-    if not selected:
-        selected = ["aqua", "suomi-npp", "noaa-20", "noaa-21"]
+    selected = acquisition_platforms(query)
     windows = await product_windows(app)
     bounds = ",".join(format(Decimal(str(value)), "f") for value in bbox)
-    jobs: list[tuple[Source | None, date, int, tuple[str, ...]]] = []
-    seen: set[tuple[str | None, date, int]] = set()
+    today = datetime.now(UTC).date()
+    jobs: dict[tuple[Source, date], set[str]] = {}
+    unavailable = []
     for platform in selected:
         cursor = start
         while cursor < end:
             product = product_on(platform, cursor, windows)
-            span = 1
-            while span < 5 and cursor + timedelta(days=span) < end and product_on(platform, cursor + timedelta(days=span), windows) == product:
-                span += 1
-            identity = (None if product is None else product.value, cursor, span)
-            if identity not in seen:
-                seen.add(identity)
-                covered = tuple(
-                    item for item in selected
-                    if product is not None and product.value in PLATFORM_PRODUCTS[item]
-                )
-                jobs.append((product, cursor, span, covered))
-            cursor += timedelta(days=span)
+            if product is not None:
+                jobs.setdefault((product, cursor), set()).add(platform)
+            cursor += timedelta(days=1)
 
-    async def run(product: Source | None, cursor: date, span: int, covered: tuple[str, ...]):
-        days = [cursor + timedelta(days=offset) for offset in range(span) if cursor + timedelta(days=offset) < end]
-        if product is None:
-            return [], [], None
-        path = f"/api/area/csv/{app.state.key}/{product.value}/{bounds}/{span}/{cursor.isoformat()}"
+    async def run(product: Source, day: date, covered: set[str]):
         try:
-            text = await fetch_csv(app, path)
-            features = await asyncio.to_thread(parse_features, text, product)
+            features, fetched, cached = await load_batch(app, product, bounds, day, today, started)
+            expires = fetched + batch_ttl(product, day, today)
+            try:
+                persisted_expiry = await asyncio.to_thread(app.state.cache.expires_at, app.state.cache.key(product.value, bounds, day.isoformat()), fetched)
+                if persisted_expiry is not None:
+                    expires = min(expires, persisted_expiry)
+            except (sqlite3.Error, AttributeError):
+                pass
+            return features, [Coverage(day, item, "complete") for item in covered], None, fetched, expires, cached
         except FIRMSFailure as exc:
-            return [], [Coverage(day, item, "partial") for day in days for item in covered], str(exc)
-        return features, [Coverage(day, item, "complete") for day in days for item in covered], None
+            return [], [Coverage(day, item, "partial") for item in covered], str(exc), None, clock.time() + 30, False
 
-    loaded = await asyncio.gather(*(run(*job) for job in jobs))
-    features = [feature for batch, _, _ in loaded for feature in batch]
-    coverage = [record for _, records, _ in loaded for record in records]
-    errors = [error for _, _, error in loaded if error]
-    rows = []
-    for feature in features:
-        try:
-            row = feature_to_detection(feature)
-        except (TypeError, ValueError):
-            continue
-        if row is not None and start <= row.acquired_at.astimezone(UTC).date() < end:
-            rows.append(row)
+    workers = asyncio.Semaphore(4)
+    async def bounded(product: Source, day: date, covered: set[str]):
+        async with workers:
+            return await run(product, day, covered)
+    pending = [asyncio.create_task(bounded(product, day, covered)) for (product, day), covered in jobs.items()]
+    loaded = []
+    coverage = list(unavailable)
+    rows = {}
+    try:
+        for completed in asyncio.as_completed(pending):
+            features, records, error, fetched, expires, cached = await completed
+            coverage.extend(records)
+            loaded.append((None, records, error, fetched, expires, cached))
+            for feature in features:
+                try:
+                    row = feature_to_detection(feature)
+                except (TypeError, ValueError, KeyError):
+                    continue
+                if row is not None and start <= row.acquired_at.astimezone(UTC).date() < end:
+                    identity = (row.platform, row.acquired_at, row.longitude, row.latitude)
+                    rows[identity] = row
+                    if len(rows) > MAX_CANONICAL_ACQUISITION_ROWS:
+                        raise RejectedQuery("This bounding region exceeds the 200,000 candidate-observation acquisition budget. Select a smaller region or shorter period; no records were truncated.")
+    finally:
+        for task in pending:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+    errors = [error for _, _, error, *_ in loaded if error]
     if jobs and errors and not rows and all(record.state != "complete" for record in coverage):
         raise RuntimeError(errors[0])
+    fetched = [item[3] for item in loaded if item[3] is not None]
     return CanonicalStore(
-        tuple(rows),
-        tuple(coverage),
-        "NASA FIRMS area API for this bounding box. Points are kept only when they fall inside the analysis polygon.",
+        tuple(sorted(rows.values(), key=lambda row: (row.acquired_at, row.platform, row.longitude, row.latitude))), tuple(sorted(coverage, key=lambda record: (record.day, record.platform))),
+        "NASA FIRMS daily area batches. Exact point-in-polygon filtering follows acquisition.",
+        min(fetched) if fetched else None,
+        min((item[4] for item in loaded), default=clock.time() + 300),
+        bool(loaded) and all(item[5] for item in loaded),
     )
 
 
-_FIRMS_STORES: dict[tuple, CanonicalStore] = {}
-_FIRMS_TASKS: dict[tuple, asyncio.Task] = {}
+@dataclass
+class FirmsStoreEntry:
+    store: CanonicalStore
+    size: int
+
+
+@dataclass
+class FirmsStoreTask:
+    task: asyncio.Task
+    started: asyncio.Event
+    waiters: int = 0
+
+
+MAX_CANONICAL_ACQUISITION_ROWS = 200_000
+MAX_FIRMS_STORES = 4
+MAX_FIRMS_STORE_ROWS = 200_000
+MAX_FIRMS_STORE_BYTES = 64 * 1024 * 1024
+_FIRMS_STORES: OrderedDict[tuple, FirmsStoreEntry] = OrderedDict()
+_FIRMS_TASKS: dict[tuple, FirmsStoreTask] = {}
+
+
+def acquisition_platforms(query: dict) -> tuple[str, ...]:
+    filters = query.get("filters") if isinstance(query.get("filters"), dict) else {}
+    requested = filters.get("platforms")
+    selected = {item for item in requested if item in PLATFORM_PRODUCTS} if isinstance(requested, list) else set()
+    return tuple(sorted(selected or {"aqua", "suomi-npp", "noaa-20", "noaa-21"}))
 
 
 def firms_store_key(query: dict, bbox: tuple[float, float, float, float]) -> tuple:
-    interval = query.get("interval") if isinstance(query.get("interval"), dict) else {}
-    filters = query.get("filters") if isinstance(query.get("filters"), dict) else {}
-    platforms = filters.get("platforms") if isinstance(filters.get("platforms"), list) else []
-    viirs = filters.get("viirsConfidence") if isinstance(filters.get("viirsConfidence"), list) else []
-    return (
-        tuple(round(float(value), 4) for value in bbox),
-        str(interval.get("start")),
-        str(interval.get("endExclusive")),
-        tuple(sorted(item for item in platforms if isinstance(item, str))),
-        str(filters.get("dayNight")),
-        filters.get("modisConfidenceMin"),
-        tuple(sorted(item for item in viirs if isinstance(item, str))),
-        filters.get("frpMin"),
-        filters.get("frpMax"),
-    )
+    start, end = parse_utc_interval(query.get("interval"))
+    return tuple(float(value) for value in bbox), start, end, acquisition_platforms(query)
+
+
+def retain_firms_store(key: tuple, store: CanonicalStore):
+    now = clock.time()
+    for cached_key, entry in list(_FIRMS_STORES.items()):
+        if entry.store.expires_at is None or entry.store.expires_at <= now:
+            del _FIRMS_STORES[cached_key]
+    size = len(store.rows) * 1024 + len(store.coverage) * 256 + len(store.source)
+    if len(store.rows) > MAX_FIRMS_STORE_ROWS or size > MAX_FIRMS_STORE_BYTES or store.expires_at is None or store.expires_at <= now:
+        return
+    _FIRMS_STORES[key] = FirmsStoreEntry(store, size)
+    _FIRMS_STORES.move_to_end(key)
+    while len(_FIRMS_STORES) > MAX_FIRMS_STORES or sum(len(entry.store.rows) for entry in _FIRMS_STORES.values()) > MAX_FIRMS_STORE_ROWS or sum(entry.size for entry in _FIRMS_STORES.values()) > MAX_FIRMS_STORE_BYTES:
+        _FIRMS_STORES.popitem(last=False)
 
 
 async def shared_firms_store(app: FastAPI, query: dict, bbox: tuple[float, float, float, float]) -> CanonicalStore:
-    key = firms_store_key(query, bbox)
-    ready = _FIRMS_STORES.get(key)
-    if ready is not None:
-        return ready
-    task = _FIRMS_TASKS.get(key)
-    if task is None:
-        task = asyncio.create_task(firms_canonical_store(app, query, bbox))
-        _FIRMS_TASKS[key] = task
     try:
-        store = await task
-    except Exception:
-        _FIRMS_TASKS.pop(key, None)
-        raise
-    _FIRMS_STORES[key] = store
-    _FIRMS_TASKS.pop(key, None)
-    while len(_FIRMS_STORES) > 4:
-        _FIRMS_STORES.pop(next(iter(_FIRMS_STORES)))
-    return store
+        key = (id(app), *firms_store_key(query, bbox))
+    except ValueError as exc:
+        raise RejectedQuery(str(exc)) from exc
+    entry = _FIRMS_STORES.get(key)
+    if entry is not None:
+        if entry.store.expires_at is not None and entry.store.expires_at > clock.time():
+            _FIRMS_STORES.move_to_end(key)
+            return replace(entry.store, cache_hit=True)
+        del _FIRMS_STORES[key]
+    shared = _FIRMS_TASKS.get(key)
+    if shared is None:
+        started = asyncio.Event()
+        async def acquire():
+            store = await firms_canonical_store(app, query, bbox, started)
+            retain_firms_store(key, store)
+            return store
+        task = asyncio.create_task(acquire())
+        shared = FirmsStoreTask(task, started)
+        _FIRMS_TASKS[key] = shared
+        def completed(done: asyncio.Task):
+            if _FIRMS_TASKS.get(key) is shared:
+                _FIRMS_TASKS.pop(key, None)
+            if not done.cancelled():
+                done.exception()
+        task.add_done_callback(completed)
+    shared.waiters += 1
+    try:
+        return await asyncio.shield(shared.task)
+    finally:
+        shared.waiters -= 1
+        if shared.waiters == 0 and not shared.task.done():
+            shared.task.cancel()
 
 
 async def analysis_document(request: Request, build):
@@ -1043,8 +1134,48 @@ async def analysis_document(request: Request, build):
             raise RejectedQuery("Analysis query identity is required.")
         store = store_from_environment(bbox)
         if request.app.state.key and not store.rows and not store.coverage and isinstance(bbox, tuple):
+            validate_acquisition_longitudes(geometry)
             store = await shared_firms_store(request.app, query, bbox)
-        return await asyncio.to_thread(build, query, store, body)
+        interval = query.get("interval", {})
+        try:
+            lower = datetime.fromisoformat(str(interval.get("start", "")).replace("Z", "+00:00"))
+            upper = datetime.fromisoformat(str(interval.get("endExclusive", "")).replace("Z", "+00:00"))
+        except (ValueError, AttributeError) as exc:
+            raise RejectedQuery("Analysis requires a UTC interval.") from exc
+        if lower.tzinfo is None or upper.tzinfo is None or upper <= lower:
+            raise RejectedQuery("Analysis requires a valid start-inclusive/end-exclusive interval.")
+        partial_start = any((lower.hour, lower.minute, lower.second, lower.microsecond))
+        partial_end = any((upper.hour, upper.minute, upper.second, upper.microsecond))
+        if partial_start or partial_end:
+            store = CanonicalStore(
+                tuple(
+                    row for row in store.rows
+                    if (not partial_start or row.acquired_at.date() != lower.date() or row.acquired_at >= lower)
+                    and (not partial_end or row.acquired_at.date() != upper.date() or row.acquired_at < upper)
+                ),
+                store.coverage,
+                store.source,
+                store.fetched_at,
+                store.expires_at,
+                store.cache_hit,
+            )
+        document = await asyncio.to_thread(build, query, store, body)
+        now = clock.time()
+        as_utc = lambda value: datetime.fromtimestamp(value, UTC).isoformat().replace("+00:00", "Z") if value is not None else None
+        metadata = document.setdefault("meta", {})
+        selected_area = prepared_area(geometry)
+        selected_filters = filters_from_query(query.get("filters") if isinstance(query.get("filters"), dict) else {})
+        focused_day = body.get("options", {}).get("day") if isinstance(body.get("options"), dict) else None
+        newest = max((row.acquired_at for row in store.rows if lower <= row.acquired_at < upper and (focused_day is None or row.acquired_at.date().isoformat() == focused_day) and observation_kept(row, selected_filters) and selected_area.contains(row.longitude, row.latitude)), default=None)
+        metadata.update({
+            "generatedAt": as_utc(now),
+            "fetchedAt": as_utc(store.fetched_at),
+            "expiresAt": as_utc(store.expires_at),
+            "newestObservationAt": newest.isoformat().replace("+00:00", "Z") if newest is not None else None,
+            "freshness": "unknown" if store.fetched_at is None else "fresh" if store.expires_at is not None and store.expires_at > now else "stale",
+            "acquisitionCacheHit": store.cache_hit,
+        })
+        return document
     except RejectedQuery as exc:
         return JSONResponse({"message": str(exc)}, status_code=422)
     except RuntimeError as exc:

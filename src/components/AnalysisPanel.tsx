@@ -1,5 +1,4 @@
-import { useDeferredValue, useId, useMemo, useRef, useState } from 'react'
-import type { DateRange } from 'react-day-picker'
+import { useDeferredValue, useId, useMemo, useState } from 'react'
 import { Command as CommandPrimitive } from 'cmdk'
 import {
   ArrowCounterClockwiseIcon,
@@ -12,19 +11,12 @@ import {
 } from '@phosphor-icons/react'
 import { AnalysisActivity } from '@/components/AnalysisActivity'
 import { Button } from '@/components/ui/button'
-import { Calendar } from '@/components/ui/calendar'
+import { AnalysisDatePicker } from '@/components/AnalysisDatePicker'
 import { Command, CommandItem, CommandList } from '@/components/ui/command'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { areaPolygons } from '@/lib/analysis-area'
-import {
-  MAX_ANALYSIS_DAYS,
-  clampRange,
-  formatUtcRange,
-  pickerDateToUtcDay,
-  utcDayToPickerDate,
-  utcToday,
-  type AnalysisRange,
-} from '@/lib/analysis-activity'
+import { type AnalysisRange } from '@/lib/analysis-activity'
+import type { AnalysisActivityData, AnalysisMetadata } from '@/lib/analysis-api'
 import { FIRE_LEVELS } from '@/lib/fire-severity'
 import type { AnalysisFireStatus } from '@/hooks/use-analysis-fires'
 import type { AnalysisState } from '@/lib/analysis-state'
@@ -56,6 +48,10 @@ type AnalysisPanelProps = {
   range: AnalysisRange
   generation: number
   onRangeChange: (range: AnalysisRange) => void
+  focusedDay: string | null
+  onFocusDay: (day: string | null) => void
+  activity: AnalysisActivityData | null
+  fireMeta: AnalysisMetadata | null
   fireStatus: AnalysisFireStatus
   fireCount: number
   fireMessage: string
@@ -83,44 +79,25 @@ export function AnalysisPanel({
   onClear,
   onClose,
   range,
-  generation,
   onRangeChange,
+  focusedDay,
+  onFocusDay,
+  activity,
+  fireMeta,
   fireStatus,
   fireCount,
   fireMessage,
   onRetryFires,
 }: AnalysisPanelProps) {
   const [tab, setTab] = useState<'area' | 'activity'>('area')
-  const [calendarMonth, setCalendarMonth] = useState(() => range.start.slice(0, 7))
-  const [trackedRangeStart, setTrackedRangeStart] = useState(range.start)
-  const awaitingEnd = useRef(false)
-  const writtenRange = useRef(range)
-  if (writtenRange.current.start !== range.start || writtenRange.current.end !== range.end) {
-    writtenRange.current = range
-    awaitingEnd.current = false
-  }
-  if (range.start !== trackedRangeStart) {
-    setTrackedRangeStart(range.start)
-    setCalendarMonth(range.start.slice(0, 7))
-  }
-
-  function choosePeriodDay(triggerDate: Date) {
-    const today = utcToday()
-    const picked = pickerDateToUtcDay(triggerDate)
-    const day = picked > today ? today : picked
-    const next = awaitingEnd.current ? clampRange(range.start, day) : { start: day, end: day }
-    awaitingEnd.current = !awaitingEnd.current
-    writtenRange.current = next
-    setCalendarMonth(day.slice(0, 7))
-    onRangeChange(next)
-  }
   const [method, setMethod] = useState<'country' | 'draw'>(() =>
     (state.draft ?? state.confirmed)?.type === 'country' || !(state.draft ?? state.confirmed)
       ? 'country'
       : 'draw',
   )
   const selectedCountry =
-    state.pendingCountry ?? (state.draft?.type === 'country' ? state.draft : null)
+    state.pendingCountry ??
+    ((state.draft ?? state.confirmed)?.type === 'country' ? (state.draft ?? state.confirmed) : null)
   const [query, setQuery] = useState(() => {
     if (state.pendingCountry) return state.pendingCountry.name
     const selected = state.draft ?? state.confirmed
@@ -193,6 +170,57 @@ export function AnalysisPanel({
           <XIcon size={19} />
         </Button>
       </header>
+      <section className="analysis-data-context" aria-label="Map observations and status">
+        <div className="analysis-context-row">
+          <strong>{activity?.areaName ?? state.confirmed?.name ?? 'Select an area'}</strong>
+          <span className="analysis-query-state" data-state={fireStatus}>
+            {
+              {
+                idle: 'Not loaded',
+                loading: 'Loading',
+                ready: fireCount ? 'Loaded' : 'No detections',
+                partial: 'Partial data',
+                unavailable: 'Unavailable',
+                stale: 'Stale data',
+                error: 'Request failed',
+              }[fireStatus]
+            }
+          </span>
+        </div>
+        <p className="analysis-query-dates">
+          {(activity?.range ?? range).start} - {(activity?.range ?? range).end} UTC
+        </p>
+        <div className="analysis-color-heading">
+          <span>Fire radiative power (MW)</span>
+        </div>
+        <ul className="analysis-compact-legend" aria-label="Fire radiative power">
+          {FIRE_LEVELS.map((item) => (
+            <li key={item.id}>
+              <span style={{ background: item.color }} />
+              {item.detail.replace('to under', '-<')}
+            </li>
+          ))}
+        </ul>
+        <details className="analysis-source-details">
+          <summary>
+            Source checked:{' '}
+            {fireMeta?.fetchedAt
+              ? fireMeta.fetchedAt.replace('T', ' ').replace(/(?:\.\d+)?Z$/, '') + ' UTC'
+              : 'not loaded'}
+          </summary>
+          {fireMeta?.newestObservationAt && (
+            <p>
+              Latest satellite observation:{' '}
+              {fireMeta.newestObservationAt.replace('T', ' ').replace(/(?:\.\d+)?Z$/, '')} UTC
+            </p>
+          )}
+          <p>
+            FRP is radiative power, not temperature or a danger rating. Squares show satellite
+            hotspots; close zoom shows approximate sensor footprints.
+          </p>
+          {fireMeta?.coverage && <p>{fireMeta.coverage}</p>}
+        </details>
+      </section>
       <div className="analysis-panel-body">
         {tab === 'activity' && !state.confirmed && (
           <p className="analysis-notice">Confirm an area to see activity.</p>
@@ -200,117 +228,65 @@ export function AnalysisPanel({
         {state.confirmed && (
           <div hidden={tab !== 'activity'}>
             <AnalysisActivity
-              key={state.confirmed.id}
+              key={`${state.confirmed.id}:${range.start}:${range.end}:${range.startAt ?? ''}:${range.endAt ?? ''}`}
               area={state.confirmed}
               range={range}
-              generation={generation}
-              onRangeChange={onRangeChange}
+              activity={activity}
+              status={fireStatus}
+              message={fireMessage}
+              onRetry={onRetryFires}
+              focusedDay={focusedDay}
+              onFocusDay={onFocusDay}
             />
           </div>
         )}
         {tab === 'area' && (
           <>
-            <section className="analysis-period" aria-labelledby={`${id}-period-title`}>
-              <h2 id={`${id}-period-title`}>Period</h2>
-              <p className="analysis-intro">
-                Choose the dates before confirming the area. Click one day, or a second day for a
-                period of up to {MAX_ANALYSIS_DAYS} days.
-              </p>
-              <p className="analysis-period-selection">{formatUtcRange(range)}</p>
-              <Calendar
-                mode="range"
-                required
-                excludeDisabled
-                selected={{
-                  from: utcDayToPickerDate(range.start),
-                  to: utcDayToPickerDate(range.end),
-                }}
-                month={utcDayToPickerDate(`${calendarMonth}-01`)}
-                onMonthChange={(date) => setCalendarMonth(pickerDateToUtcDay(date).slice(0, 7))}
-                disabled={{ after: utcDayToPickerDate(utcToday()) }}
-                onSelect={(_selected: DateRange, triggerDate) => choosePeriodDay(triggerDate)}
-                className="analysis-period-calendar"
-              />
-              <ul className="fire-legend" aria-label="Fire severity">
-                {FIRE_LEVELS.map((level) => (
-                  <li key={level.id}>
-                    <span className="fire-swatch" style={{ background: level.color }} />
-                    <span>
-                      {level.label}
-                      <small>{level.detail}</small>
-                    </span>
-                  </li>
-                ))}
-              </ul>
-              <p className="analysis-period-note">
-                Colors follow fire radiative power. A detection without it is shown in yellow.
-              </p>
-              {fireStatus === 'loading' && (
-                <p className="analysis-notice" role="status">
-                  Loading fires for this period.
-                </p>
-              )}
-              {fireStatus === 'ready' && (
-                <p className="analysis-notice" role="status">
-                  {fireCount === 1 ? '1 fire on the map.' : `${fireCount} fires on the map.`}
-                </p>
-              )}
-              {fireStatus === 'error' && (
-                <div className="analysis-error" role="alert">
-                  <p>{fireMessage}</p>
-                  {!fireMessage.includes('180°') && (
-                    <Button type="button" size="sm" variant="outline" onClick={onRetryFires}>
-                      Retry fires
-                    </Button>
-                  )}
-                </div>
-              )}
-              {fireStatus === 'idle' && (
-                <p className="analysis-period-note">
-                  Confirm the area to show its fires on the map for this period.
-                </p>
-              )}
-            </section>
             <section aria-labelledby={`${id}-area-title`}>
               <h2 id={`${id}-area-title`}>Area of interest</h2>
-              <p className="analysis-intro">
-                Choose the boundary you want to work with. Preview it on the map before confirming.
-              </p>
-              <ToggleGroup
-                type="single"
-                value={method}
-                className="analysis-methods"
-                aria-label="Area selection method"
-                onValueChange={(value) => {
-                  if ((value !== 'country' && value !== 'draw') || value === method) return
-                  onCancel()
-                  setMethod(value)
-                }}
-              >
-                <ToggleGroupItem value="country">
-                  <GlobeHemisphereWestIcon size={18} />
-                  Select country
-                </ToggleGroupItem>
-                <ToggleGroupItem value="draw">
-                  <PolygonIcon size={18} />
-                  Draw area
-                </ToggleGroupItem>
-              </ToggleGroup>
+              <div className="analysis-selection-tools">
+                <ToggleGroup
+                  type="single"
+                  value={method}
+                  className="analysis-methods"
+                  aria-label="Area selection method"
+                  onValueChange={(value) => {
+                    if ((value !== 'country' && value !== 'draw') || value === method) return
+                    onCancel()
+                    setMethod(value)
+                  }}
+                >
+                  <ToggleGroupItem value="country">
+                    <GlobeHemisphereWestIcon size={18} />
+                    Select country
+                  </ToggleGroupItem>
+                  <ToggleGroupItem value="draw">
+                    <PolygonIcon size={18} />
+                    Draw area
+                  </ToggleGroupItem>
+                </ToggleGroup>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="analysis-map-pick"
+                  aria-pressed={picking}
+                  disabled={!ready || catalogueLoading || Boolean(catalogueError)}
+                  onClick={() => {
+                    if (method !== 'country') {
+                      onCancel()
+                      setMethod('country')
+                      onPickingChange(true)
+                    } else onPickingChange(!picking)
+                  }}
+                >
+                  <CrosshairIcon size={14} />
+                  Select on map
+                </Button>
+              </div>
 
               {method === 'country' ? (
                 <div className="analysis-country-section">
                   <span className="analysis-field-label">Country</span>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="analysis-map-pick"
-                    aria-pressed={picking}
-                    disabled={!ready || catalogueLoading || Boolean(catalogueError)}
-                    onClick={() => onPickingChange(!picking)}
-                  >
-                    <CrosshairIcon size={18} />
-                    {picking ? 'Selecting on map' : 'Select on map'}
-                  </Button>
                   {picking && (
                     <p className="analysis-picking-hint" role="status">
                       Click a highlighted country. Escape cancels selection.
@@ -343,29 +319,31 @@ export function AnalysisPanel({
                         disabled={catalogueLoading}
                         aria-label="Search countries"
                       />
-                      <CommandList className="analysis-country-list" aria-label="Countries">
-                        {results.map((country) => (
-                          <CommandItem
-                            key={country.id}
-                            value={country.id}
-                            onSelect={() => {
-                              setQuery(country.name)
-                              onCountrySelect(country.id)
-                            }}
-                            aria-label={country.name}
-                          >
-                            <span>{country.name}</span>
-                            {area?.id === country.id && (
-                              <CheckCircleIcon size={16} aria-hidden="true" />
-                            )}
-                          </CommandItem>
-                        ))}
-                        {!catalogueLoading && !results.length && (
-                          <p className="analysis-notice">
-                            No matching countries. Try another name.
-                          </p>
-                        )}
-                      </CommandList>
+                      {(!selectedCountry || query !== selectedCountry.name) && (
+                        <CommandList className="analysis-country-list" aria-label="Countries">
+                          {results.map((country) => (
+                            <CommandItem
+                              key={country.id}
+                              value={country.id}
+                              onSelect={() => {
+                                setQuery(country.name)
+                                onCountrySelect(country.id)
+                              }}
+                              aria-label={country.name}
+                            >
+                              <span>{country.name}</span>
+                              {area?.id === country.id && (
+                                <CheckCircleIcon size={16} aria-hidden="true" />
+                              )}
+                            </CommandItem>
+                          ))}
+                          {!catalogueLoading && !results.length && (
+                            <p className="analysis-notice">
+                              No matching countries. Try another name.
+                            </p>
+                          )}
+                        </CommandList>
+                      )}
                     </Command>
                   )}
                   {loadingCountry && (
@@ -393,7 +371,7 @@ export function AnalysisPanel({
                       aria-pressed={state.phase === 'drawing' && state.tool === 'polygon'}
                       onClick={() => draw('polygon')}
                     >
-                      <PolygonIcon size={22} />
+                      <PolygonIcon size={18} />
                       <span>Draw polygon</span>
                     </Button>
                     <Button
@@ -403,7 +381,7 @@ export function AnalysisPanel({
                       aria-pressed={state.phase === 'drawing' && state.tool === 'rectangle'}
                       onClick={() => draw('rectangle')}
                     >
-                      <RectangleIcon size={22} />
+                      <RectangleIcon size={18} />
                       <span>Draw rectangle</span>
                     </Button>
                   </div>
@@ -433,6 +411,39 @@ export function AnalysisPanel({
                 </div>
               )}
             </section>
+            <section className="analysis-period" aria-label="Period">
+              <h2>Period</h2>
+              <AnalysisDatePicker range={range} onChange={onRangeChange} />
+              {fireStatus === 'loading' && (
+                <p className="analysis-notice" role="status">
+                  Loading observations for this period.
+                </p>
+              )}
+              {['ready', 'partial', 'stale'].includes(fireStatus) && (
+                <p className="analysis-notice" role="status">
+                  {fireCount === 1
+                    ? '1 satellite detection.'
+                    : `${fireCount} satellite detections.`}
+                </p>
+              )}
+              {['error', 'unavailable', 'partial', 'stale'].includes(fireStatus) && (
+                <div className="analysis-error" role="alert">
+                  <p>{fireMessage}</p>
+                  {!/180(?:°| degrees)|31 UTC calendar days|smaller region|shorter period/i.test(
+                    fireMessage,
+                  ) && (
+                    <Button type="button" size="sm" variant="outline" onClick={onRetryFires}>
+                      Retry fires
+                    </Button>
+                  )}
+                </div>
+              )}
+              {fireStatus === 'idle' && (
+                <p className="analysis-period-note">
+                  Confirm the area to show satellite hotspots for this period.
+                </p>
+              )}
+            </section>
 
             <section
               className="analysis-selection"
@@ -450,27 +461,16 @@ export function AnalysisPanel({
               </span>
               <h3>{loadingCountry?.name ?? area?.name ?? 'Define your area'}</h3>
               {area && !loadingCountry ? (
-                <p>
-                  {area.type === 'country'
-                    ? 'Country boundary'
-                    : area.type === 'rectangle'
-                      ? 'Custom rectangle'
-                      : 'Custom polygon'}
-                  {area.type === 'country' && areaPolygons(area.geometry).length > 1
-                    ? ` · ${areaPolygons(area.geometry).length} polygon parts`
-                    : ''}
-                </p>
-              ) : (
+                area.type !== 'country' && (
+                  <p>{area.type === 'rectangle' ? 'Custom rectangle' : 'Custom polygon'}</p>
+                )
+              ) : state.phase === 'loading' || state.phase === 'drawing' ? (
                 <p>
                   {state.phase === 'loading'
-                    ? state.confirmed
-                      ? 'Loading the full country boundary. Your confirmed area stays selected.'
-                      : 'Loading the full country boundary before confirmation.'
-                    : state.phase === 'drawing'
-                      ? 'Your boundary will appear here when the drawing is complete.'
-                      : 'Select a country or draw a polygon or rectangle on the map.'}
+                    ? 'Loading the full country boundary.'
+                    : 'Your boundary will appear here when the drawing is complete.'}
                 </p>
-              )}
+              ) : null}
               {state.confirmed && activeDraft && (
                 <p className="analysis-confirmed-note">
                   Confirmed area: {state.confirmed.name}. Escape restores it.
@@ -479,12 +479,6 @@ export function AnalysisPanel({
               {state.error && method !== 'country' && (
                 <p className="analysis-error" role="alert">
                   {state.error}
-                </p>
-              )}
-              {!activeDraft && state.confirmed && (
-                <p className="analysis-confirmed-note">
-                  Area confirmed. Fires for this period are on the map, and Activity uses the same
-                  dates.
                 </p>
               )}
               {area?.type === 'country' && areaPolygons(area.geometry).length > 1 && (

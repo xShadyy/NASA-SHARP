@@ -1,11 +1,19 @@
 import type { AreaBounds, AreaGeometry } from '@/lib/analysis-area'
 
+export const MODIS_START_DAY = '2000-11-01'
+export const VIIRS_START_DAY = '2012-01-20'
 export const MAX_ANALYSIS_DAYS = 31
 export const ANALYSIS_PLATFORMS = ['aqua', 'suomi-npp', 'noaa-20', 'noaa-21'] as const
 
 const DAY_MS = 86_400_000
 
-export type AnalysisRange = { start: string; end: string }
+export type AnalysisRange = {
+  start: string
+  end: string
+  startAt?: string
+  endAt?: string
+  preset?: '24h' | '7d' | 'month'
+}
 
 export type CalendarDay = {
   date: string
@@ -65,8 +73,8 @@ export function formatUtcDay(day: string) {
 export function formatUtcRange(range: AnalysisRange) {
   if (range.start === range.end) return formatUtcDay(range.start)
   if (range.start.slice(0, 7) === range.end.slice(0, 7))
-    return `${Number(range.start.slice(8))}–${formatUtcDay(range.end)}`
-  return `${formatUtcDay(range.start)} – ${formatUtcDay(range.end)}`
+    return `${Number(range.start.slice(8))}-${formatUtcDay(range.end)}`
+  return `${formatUtcDay(range.start)} - ${formatUtcDay(range.end)}`
 }
 
 export function monthSpan(month: string) {
@@ -118,6 +126,42 @@ export function eachUtcDay(start: string, end: string) {
     cursor = addUtcDays(cursor, 1)
   }
   return days
+}
+
+export function rangePreset(preset: '24h' | '7d' | 'month', now = new Date()): AnalysisRange {
+  const end = utcToday(now)
+  if (preset === '24h') {
+    const startAt = new Date(now.getTime() - DAY_MS).toISOString()
+    return {
+      start: startAt.slice(0, 10),
+      end: new Date(now.getTime() - 1).toISOString().slice(0, 10),
+      startAt,
+      endAt: now.toISOString(),
+      preset,
+    }
+  }
+  const days = preset === '7d' ? 7 : Number(monthSpan(end.slice(0, 7)).end.slice(8))
+  return { start: addUtcDays(end, 1 - days), end, preset }
+}
+
+export function rangeQuery(areaId: string, geometry: AreaGeometry, range: AnalysisRange) {
+  const query = analysisQuery(areaId, geometry, range.start, addUtcDays(range.end, 1))
+  query.interval = {
+    start: range.startAt ?? query.interval.start,
+    endExclusive: range.endAt ?? query.interval.endExclusive,
+  }
+  query.id = [query.id, query.interval.start, query.interval.endExclusive].join(':')
+  return query
+}
+
+export function focusRange(range: AnalysisRange, day: string | null): AnalysisRange {
+  if (!day || day < range.start || day > range.end) return range
+  return {
+    start: day,
+    end: day,
+    startAt: day === range.start ? range.startAt : undefined,
+    endAt: day === range.end ? range.endAt : undefined,
+  }
 }
 
 export function crossesDateline(bounds: AreaBounds) {

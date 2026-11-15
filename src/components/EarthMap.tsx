@@ -26,8 +26,8 @@ import { createScaleBar } from '@/map/scale-bar'
 import { createReferenceTileCache } from '@/map/reference-tile-cache'
 import { createAnalysisController, type AnalysisController } from '@/map/analysis-controller'
 import { createFireDotController } from '@/map/fire-dots'
-import { FIRE_LEVELS, type FireFeature } from '@/lib/fire-severity'
-import type { AnalysisFireStatus } from '@/hooks/use-analysis-fires'
+import type { FireFeature } from '@/lib/fire-severity'
+import { addUtcDays, type AnalysisRange } from '@/lib/analysis-activity'
 import type { AnalysisState } from '@/lib/analysis-state'
 import type { AnalysisArea } from '@/lib/analysis-area'
 import {
@@ -48,7 +48,7 @@ import type {
   MeasurementUnit,
 } from '@/lib/measurement-units'
 import type { MeasurementColor, MeasurementColors } from '@/map/measurement-colors'
-import type { LocationTarget } from '@/lib/locations'
+import { locationKey, type LocationTarget } from '@/lib/locations'
 import type { SharedCoordinates } from '@/lib/share-hash'
 import { LocationPin } from '@/components/LocationPin'
 import { MapLayersControl } from '@/components/LayerSettings'
@@ -119,9 +119,8 @@ type EarthMapProps = {
   onBackgroundChange: (background: MapBackground) => void
   dataDate: string | null
   fires: FireFeature[]
-  fireStatus: AnalysisFireStatus
-  fireMessage: string
-  onRetryFires: () => void
+  focusedFireDay: string | null
+  fireRange: AnalysisRange
   measurementMode: 'orbit' | MeasurementMode
   measurementUnit: MeasurementUnit
   measurementColors: MeasurementColors
@@ -133,6 +132,8 @@ type EarthMapProps = {
   savedNavigation: boolean
   destination: LocationTarget | null
   destinationSaved: boolean
+  savedLocations: LocationTarget[]
+  onRemoveSavedLocation: (location: LocationTarget) => void
   onSaveLocation: (location: LocationTarget) => void
   onDismissLocation: () => void
   onCameraChange: (camera: MapCameraState) => void
@@ -185,9 +186,8 @@ export function EarthMap({
   onSharedNavigationApplied,
   dataDate,
   fires,
-  fireStatus,
-  fireMessage,
-  onRetryFires,
+  focusedFireDay,
+  fireRange,
   referenceLayers,
   showSpace,
   onSpaceChange,
@@ -205,6 +205,8 @@ export function EarthMap({
   savedNavigation,
   destination,
   destinationSaved,
+  savedLocations,
+  onRemoveSavedLocation,
   onSaveLocation,
   onDismissLocation,
   onCameraChange,
@@ -301,9 +303,19 @@ export function EarthMap({
   useEffect(() => {
     const controller = firesRef.current
     if (!controller) return
-    controller.setInteractive(analysis.phase !== 'drawing' && analysis.phase !== 'editing')
     controller.setData(fires)
-  }, [fires, analysis.phase, mapInstance])
+  }, [fires, mapInstance])
+
+  useEffect(() => {
+    firesRef.current?.setInteractive(analysis.phase !== 'drawing' && analysis.phase !== 'editing')
+  }, [analysis.phase, mapInstance])
+
+  useEffect(() => {
+    firesRef.current?.setDisplay({
+      focusedDay: focusedFireDay,
+      endUtcExclusive: fireRange.endAt ?? `${addUtcDays(fireRange.end, 1)}T00:00:00.000Z`,
+    })
+  }, [focusedFireDay, fireRange.end, fireRange.endAt, mapInstance])
 
   useEffect(() => {
     analysisUnitsRef.current = { distance: analysisDistanceUnit, area: analysisAreaUnit }
@@ -951,34 +963,6 @@ export function EarthMap({
           onSpaceChange={onSpaceChange}
         />
       </div>
-      {fireStatus !== 'idle' && (
-        <div className="fire-map-legend" role="status">
-          <p>
-            {fireStatus === 'loading'
-              ? 'Loading fires'
-              : fireStatus === 'error'
-                ? fireMessage
-                : fires.length === 1
-                  ? '1 fire'
-                  : `${fires.length} fires`}
-          </p>
-          {fireStatus === 'error' && !fireMessage.includes('180°') && (
-            <Button type="button" variant="outline" size="sm" onClick={onRetryFires}>
-              Retry
-            </Button>
-          )}
-          {fireStatus !== 'error' && (
-            <ul>
-              {FIRE_LEVELS.map((level) => (
-                <li key={level.id}>
-                  <span className="fire-swatch" style={{ background: level.color }} />
-                  {level.label}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
       <output
         ref={scaleOutputRef}
         className="map-scale-bar"
@@ -993,13 +977,27 @@ export function EarthMap({
         hidden
       />
       {ready &&
+        mapInstance &&
+        savedLocations.map((location) => (
+          <LocationPin
+            key={locationKey(location)}
+            map={mapInstance}
+            location={location}
+            saved
+            onSave={onSaveLocation}
+            onDismiss={onDismissLocation}
+            onRemove={onRemoveSavedLocation}
+          />
+        ))}
+      {ready &&
         destination &&
+        !destinationSaved &&
         mapInstance &&
         (destination.kind !== 'country' || savedNavigation) && (
           <LocationPin
             map={mapInstance}
             location={destination}
-            saved={destinationSaved}
+            saved={false}
             onSave={onSaveLocation}
             onDismiss={onDismissLocation}
           />

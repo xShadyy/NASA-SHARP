@@ -86,6 +86,11 @@ class BatchCache:
         body, fetched = row
         return json.loads(zlib.decompress(body)), fetched
 
+    def expires_at(self, key: str, fetched: float) -> float | None:
+        with closing(self.connect()) as db:
+            row = db.execute("SELECT expires FROM batches WHERE key = ? AND fetched = ?", (key, fetched)).fetchone()
+        return float(row[0]) if row is not None else None
+
     def put(self, key: str, features: list[dict], fetched: float, ttl: int):
         body = zlib.compress(json.dumps(features, separators=(",", ":")).encode())
         if len(body) > MAX_COMPRESSED_BYTES:

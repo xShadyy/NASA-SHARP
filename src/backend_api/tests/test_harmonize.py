@@ -19,6 +19,7 @@ from harmonize import (
     geometry_contains,
     harmonized_daily_activity,
     load_csv_store,
+    parse_utc_interval,
 )
 
 AREA = {
@@ -100,6 +101,12 @@ class HarmonizedActivityTest(unittest.TestCase):
 
     def activity(self, start: date, end: date):
         return harmonized_daily_activity(self.rows, AREA, start, end, self.coverage, FILTERS)
+
+    def test_partial_utc_interval_covers_only_touched_days(self):
+        self.assertEqual(parse_utc_interval({"start": "2026-11-14T14:25:00Z", "endExclusive": "2026-11-15T14:25:00Z"}), (date(2026, 11, 14), date(2026, 11, 16)))
+        self.assertEqual(parse_utc_interval({"start": "2026-11-14T00:00:00Z", "endExclusive": "2026-11-15T00:00:00Z"}), (date(2026, 11, 14), date(2026, 11, 15)))
+        with self.assertRaises(ValueError):
+            parse_utc_interval({"start": "2026-11-15T00:00:00Z", "endExclusive": "2026-11-14T00:00:00Z"})
 
     def test_cell_union_and_satellite_double_count(self):
         self.assertEqual(cell_id(0.5, 0.5), cell_id(0.5003, 0.5))
@@ -276,6 +283,19 @@ class CalendarRouteTest(unittest.TestCase):
                     self.assertEqual(len(page["data"]["rows"]), 2)
                     mapped = client.post("/analysis/map-source", json=payload).json()
                     self.assertEqual(len(mapped["data"]["data"]["features"]), 2)
+                    partial = {"query": {**payload["query"], "interval": {"start": "2005-07-01T13:31:00Z", "endExclusive": "2005-07-02T13:31:00Z"}}}
+                    excluded = client.post("/analysis/map-source", json=partial)
+                    self.assertEqual(excluded.status_code, 200, excluded.text)
+                    self.assertEqual(excluded.json()["data"]["data"]["features"], [])
+                    summary = client.post("/analysis/overview", json=partial)
+                    self.assertEqual(summary.json()["data"]["detectionCount"]["value"], 0)
+                    partial["query"]["interval"]["start"] = "2005-07-01T13:30:00Z"
+                    included = client.post("/analysis/map-source", json=partial)
+                    self.assertEqual(len(included.json()["data"]["data"]["features"]), 2)
+                    partial["query"]["interval"]["endExclusive"] = "2005-07-01T13:30:00Z"
+                    partial["query"]["interval"]["start"] = "2005-07-01T00:00:00Z"
+                    excluded_end = client.post("/analysis/map-source", json=partial)
+                    self.assertEqual(excluded_end.json()["data"]["data"]["features"], [])
                     blocked = client.get("/hotspots", params={"area": "0,0,1,1", "days": 1})
                     self.assertEqual(blocked.status_code, 503)
             finally:

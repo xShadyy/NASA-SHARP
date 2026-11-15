@@ -130,7 +130,7 @@ activity, its short-term direction, and the reliability of the data. Use
 **Observed satellite activity** as the concept—not "severity," "threat level,"
 "fire danger," or a red/green all-clear indicator.
 
-The panel must summarize the **same selected 1–30 UTC-calendar-day interval**
+The panel must summarize the **same selected 1-30 UTC-calendar-day interval**
 as the Area Analytics KPIs and charts and compare it with the immediately preceding
 equal-length interval. Do not run a separate rolling-24-hour snapshot. Show
 the selected duration and date range, selected area (confirmed Analysis area or the

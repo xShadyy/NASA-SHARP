@@ -88,7 +88,7 @@ box over California and surrounding areas.
 | Query parameter        | Value                                                                                                                                                                                                                                                                                         |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `area`                 | Required. `west,south,east,north` in decimal degrees, `world`, or `netherlands`. `netherlands` queries and clips to the generalized European Netherlands boundary; Caribbean Netherlands is not included. Split a box crossing the antimeridian into two requests.                            |
-| `days`                 | 1–31 UTC calendar days. Without a start date, the window ends today in UTC and includes today's observations so far.                                                                                                                                                                          |
+| `days`                 | 1-31 UTC calendar days. Without a start date, the window ends today in UTC and includes today's observations so far.                                                                                                                                                                          |
 | `start_date`           | Optional `YYYY-MM-DD`. The window starts on this date and extends forward inclusively. Use this or the precise start/end parameters for standard-processing products.                                                                                                                         |
 | `start` and `end`      | ISO 8601 date and time, inclusive start and exclusive end. Supply both and omit `start_date` and `days`. At most 31 UTC calendar days per query.                                                                                                                                              |
 | `tz`                   | IANA timezone, for example `Europe/Amsterdam`. Required for timestamps without an offset. The response includes `acquired_at_local` in this zone, with UTC as the default. Explicit timestamp offsets determine the query instants when supplied. Legacy `start_date` and `days` stay in UTC. |
@@ -199,7 +199,7 @@ The API uses one schema with sensor, satellite, product and version, UTC
 acquisition time, GeoJSON location, fire radiative power in MW and the
 reported scan and track dimensions in km. It also reports nominal
 resolution in meters and labels the brightness temperature band. Preserve
-the sensor's native confidence. MODIS reports a 0–100 value and VIIRS
+the sensor's native confidence. MODIS reports a 0-100 value and VIIRS
 reports low/nominal/high. The meaning and detection sensitivity differ
 between products and overpass conditions.
 

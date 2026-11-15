@@ -401,6 +401,7 @@ function App() {
     const today = utcToday()
     return { start: today, end: today }
   })
+  const [analysisFocusedDay, setAnalysisFocusedDay] = useState<string | null>(null)
   const [activityGeneration, setActivityGeneration] = useState(0)
   const analysisOpen = activeNav === 'Burning Activity Calendar'
   const fires = useAnalysisFires(analysisOpen ? analysis.confirmed : null, analysisRange)
@@ -811,6 +812,7 @@ function App() {
                     dispatchAnalysis({ type: 'edit' })
                   }}
                   onConfirm={() => {
+                    setAnalysisFocusedDay(null)
                     setActivityGeneration((current) => current + 1)
                     countrySelection.setPicking(false)
                     dispatchAnalysis({ type: 'confirm' })
@@ -824,7 +826,14 @@ function App() {
                   }}
                   range={analysisRange}
                   generation={activityGeneration}
-                  onRangeChange={setAnalysisRange}
+                  onRangeChange={(next) => {
+                    setAnalysisFocusedDay(null)
+                    setAnalysisRange(next)
+                  }}
+                  focusedDay={analysisFocusedDay}
+                  onFocusDay={setAnalysisFocusedDay}
+                  activity={fires.activity}
+                  fireMeta={fires.meta}
                   fireStatus={fires.status}
                   fireCount={fires.count}
                   fireMessage={fires.message}
@@ -872,11 +881,10 @@ function App() {
                           setShareRevision((current) => current + 1)
                         }, 0)
                       }}
-                      dataDate={analysisRange.end}
-                    fires={fires.features}
-                    fireStatus={fires.status}
-                    fireMessage={fires.message}
-                    onRetryFires={fires.retry}
+                      dataDate={analysisFocusedDay ?? analysisRange.end}
+                      fires={fires.features}
+                      focusedFireDay={analysisFocusedDay}
+                      fireRange={analysisRange}
                       referenceLayers={referenceLayers}
                       onReferenceChange={changeReferenceLayer}
                       showSpace={showSpace}
@@ -893,6 +901,8 @@ function App() {
                       navigationRequest={destinationRequest}
                       savedNavigation={savedNavigation}
                       destination={destination}
+                      savedLocations={savedLocations}
+                      onRemoveSavedLocation={(location) => removeLocations([location])}
                       destinationSaved={Boolean(
                         destination &&
                         savedLocations.some(

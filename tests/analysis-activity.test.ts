@@ -8,6 +8,9 @@ import {
   clampRange,
   crossesDateline,
   monthSpan,
+  rangePreset,
+  rangeQuery,
+  focusRange,
   type SeriesPoint,
 } from '../src/lib/analysis-activity'
 
@@ -23,6 +26,50 @@ const polygon: Polygon = {
     ],
   ],
 }
+
+test('presets use exact 24 hours and calendar-aware month lengths', () => {
+  const now = new Date('2026-11-15T14:25:00.000Z')
+  const hours = rangePreset('24h', now)
+  assert.equal(hours.startAt, '2026-11-14T14:25:00.000Z')
+  assert.equal(hours.endAt, now.toISOString())
+  const midnight = rangePreset('24h', new Date('2026-11-15T00:00:00.000Z'))
+  assert.equal(midnight.start, '2026-11-14')
+  assert.equal(midnight.end, '2026-11-14')
+  assert.deepEqual(rangeQuery('area', polygon, hours).interval, {
+    start: hours.startAt,
+    endExclusive: hours.endAt,
+  })
+  assert.equal(rangePreset('7d', now).start, '2026-11-09')
+  assert.equal(rangePreset('month', now).start, '2026-10-17')
+  assert.equal(rangePreset('month', new Date('2026-12-15T14:25:00Z')).start, '2026-11-15')
+  assert.equal(rangePreset('month', new Date('2024-02-29T14:25:00Z')).start, '2024-02-01')
+})
+
+test('day focus preserves the chosen period and intersects partial day boundaries', () => {
+  const range = rangePreset('24h', new Date('2026-11-15T14:25:00.000Z'))
+  const first = focusRange(range, '2026-11-14')
+  const last = focusRange(range, '2026-11-15')
+  assert.equal(first.startAt, range.startAt)
+  assert.equal(first.endAt, undefined)
+  assert.equal(last.startAt, undefined)
+  assert.equal(last.endAt, range.endAt)
+  assert.equal(focusRange(range, null), range)
+  assert.equal(focusRange(range, '2026-11-01'), range)
+  assert.equal(range.start, '2026-11-14')
+  assert.equal(range.end, '2026-11-15')
+})
+
+test('historical selections retain the scientific afternoon-platform method', () => {
+  for (const [start, end] of [
+    ['2000-11-01', '2000-11-02'],
+    ['2012-01-01', '2012-01-20'],
+    ['2026-11-01', '2026-11-02'],
+  ]) {
+    const query = analysisQuery('area', polygon, start, end)
+    assert.deepEqual(query.filters.platforms, ['aqua', 'suomi-npp', 'noaa-20', 'noaa-21'])
+    assert.equal(query.processingMode, 'harmonized')
+  }
+})
 
 function point(date: string, platform: string, count: number, state = 'complete'): SeriesPoint {
   return { date, endDate: date, count, platform, state }

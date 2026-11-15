@@ -123,7 +123,7 @@ export function confidenceBuckets(features: HotspotDetection[]) {
     if (sensor === 'VIIRS') {
       label = typeof confidence === 'string' ? `VIIRS ${confidence.toUpperCase()}` : 'VIIRS unknown'
     } else if (typeof confidence === 'number') {
-      label = confidence >= 80 ? 'MODIS 80–100' : confidence >= 30 ? 'MODIS 30–79' : 'MODIS 0–29'
+      label = confidence >= 80 ? 'MODIS 80-100' : confidence >= 30 ? 'MODIS 30-79' : 'MODIS 0-29'
     } else {
       label = 'MODIS unknown'
     }
@@ -134,9 +134,9 @@ export function confidenceBuckets(features: HotspotDetection[]) {
     'VIIRS N',
     'VIIRS L',
     'VIIRS unknown',
-    'MODIS 80–100',
-    'MODIS 30–79',
-    'MODIS 0–29',
+    'MODIS 80-100',
+    'MODIS 30-79',
+    'MODIS 0-29',
     'MODIS unknown',
   ]
   return order
@@ -146,9 +146,9 @@ export function confidenceBuckets(features: HotspotDetection[]) {
 
 export function frpBuckets(features: HotspotDetection[]) {
   const ranges = [
-    { label: '0–10 MW', min: 0, max: 10 },
-    { label: '10–50 MW', min: 10, max: 50 },
-    { label: '50–100 MW', min: 50, max: 100 },
+    { label: '0-10 MW', min: 0, max: 10 },
+    { label: '10-50 MW', min: 10, max: 50 },
+    { label: '50-100 MW', min: 50, max: 100 },
     { label: '100+ MW', min: 100, max: Infinity },
   ]
   const counts = ranges.map(({ label }) => ({ label, count: 0 }))
