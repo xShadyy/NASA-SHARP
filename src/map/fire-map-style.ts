@@ -18,6 +18,40 @@ export const FOOTPRINT_MIN_ZOOM = 12
 export const MAX_VISIBLE_FOOTPRINTS = 1500
 export const FIRE_CLUSTER_THRESHOLD = 20000
 
+export const FIRE_PIXEL_COLOR = '#ff0000'
+export const GLOBAL_FIRE_PIXEL_COLOR = FIRE_PIXEL_COLOR
+
+// The 24 px square at pixelRatio 2 is 12 CSS px at scale 1. Keep
+// individual global detections visible: 2.25 CSS px at overview, 1 px at close zoom.
+const GLOBAL_FIRE_PIXEL_SCALES = [
+  [0, 0.1875],
+  [4, 0.15],
+  [8, 0.1125],
+  [12, 1 / 12],
+] as const
+export const GLOBAL_FIRE_PIXEL_SIZE_EXPRESSION: ExpressionSpecification = [
+  'interpolate',
+  ['linear'],
+  ['zoom'],
+  ...GLOBAL_FIRE_PIXEL_SCALES.flatMap(([zoom, scale]) => [zoom, scale]),
+]
+
+/** Solid square width in CSS pixels, shared by native and GPU renderers. */
+export function globalFirePixelSize(zoom: number) {
+  const level = Number.isNaN(zoom) ? 0 : zoom
+  if (level <= GLOBAL_FIRE_PIXEL_SCALES[0][0]) return 12 * GLOBAL_FIRE_PIXEL_SCALES[0][1]
+  for (let index = 1; index < GLOBAL_FIRE_PIXEL_SCALES.length; index++) {
+    const [endZoom, endScale] = GLOBAL_FIRE_PIXEL_SCALES[index]
+    if (level <= endZoom) {
+      const [startZoom, startScale] = GLOBAL_FIRE_PIXEL_SCALES[index - 1]
+      return (
+        12 * (startScale + ((level - startZoom) / (endZoom - startZoom)) * (endScale - startScale))
+      )
+    }
+  }
+  return 12 * GLOBAL_FIRE_PIXEL_SCALES[GLOBAL_FIRE_PIXEL_SCALES.length - 1][1]
+}
+
 export const FIRE_COLOR_EXPRESSION: ExpressionSpecification = [
   'match',
   ['get', 'severity'],
@@ -81,7 +115,7 @@ export function fireLayerSpecifications(): (
       filter: ['!', ['has', 'point_count']],
       layout: {
         'icon-image': FIRE_SQUARE_IMAGE,
-        'icon-size': ['interpolate', ['linear'], ['zoom'], 0, 0.375, 8, 0.51, 14, 0.63],
+        'icon-size': ['interpolate', ['linear'], ['zoom'], 0, 0.75, 8, 1.02, 14, 1.26],
         'icon-allow-overlap': true,
         'icon-ignore-placement': true,
         'icon-padding': 0,
@@ -110,7 +144,7 @@ export function fireLayerSpecifications(): (
         'icon-padding': 0,
         'icon-anchor': 'center',
         'symbol-sort-key': ['coalesce', ['get', 'latestEpoch'], 0],
-        'text-field': ['to-string', ['get', 'point_count_abbreviated']],
+        'text-field': ['to-string', ['coalesce', ['get', 'detectionCount'], ['get', 'point_count']]],
         'text-size': 10,
         'text-font': ['Fira Sans'],
         'text-allow-overlap': true,

@@ -8,6 +8,7 @@ import {
   GLOBAL_AGGREGATE_LAYER,
 } from '../src/map/global-fire-controller'
 import type { GlobalManifest } from '../src/hooks/use-global-fires'
+import { FIRE_COLOR_EXPRESSION } from '../src/map/fire-map-style'
 
 class FakePopup {
   callbacks = new Map<string, () => void>()
@@ -127,6 +128,51 @@ const tile = (id = 'group') => ({
   ],
 })
 const flush = () => new Promise((resolve) => setTimeout(resolve, 20))
+
+test('display-only global pixels keep FRP colors without count labels or inspection requests', async (context) => {
+  const map = new FakeMap()
+  let requests = 0
+  let inspections = 0
+  const loadedSnapshots: Array<string | undefined> = []
+  const renderer = createGlobalFireController(map as unknown as MapLibreMap, {
+    displayOnly: true,
+    createPopup: () => new FakePopup() as unknown as Popup,
+    onObservations: () => {},
+    onStatus: (status) => loadedSnapshots.push(status.snapshotId),
+    onOpenAnalytics: () => inspections++,
+    fetch: (async () => {
+      requests++
+      return new Response(JSON.stringify(tile()))
+    }) as typeof fetch,
+  })
+  context.after(() => renderer.destroy())
+  renderer.setManifest(manifest())
+  await flush()
+  const source = map.getSource(GLOBAL_AGGREGATE_SOURCE)!
+  const updates = source.updates
+  const layer = map.getLayer(GLOBAL_AGGREGATE_LAYER) as {
+    layout: Record<string, unknown>
+    paint: Record<string, unknown>
+  }
+  assert.equal(layer.layout['text-field'], '')
+  assert.deepEqual(loadedSnapshots, ['version1', 'version1'])
+  assert.deepEqual(layer.paint['icon-color'], FIRE_COLOR_EXPRESSION)
+  assert.equal(map.events.get('click')?.size ?? 0, 0)
+  renderer.setInteractive(true)
+  map.emit('click')
+  map.emit('click')
+  await flush()
+  assert.equal(requests, 1)
+  assert.equal(inspections, 0)
+  assert.equal(source.updates, updates)
+  map.sources.clear()
+  map.layers.clear()
+  map.images.clear()
+  map.emit('style.load')
+  await flush()
+  assert.equal((map.getLayer(GLOBAL_AGGREGATE_LAYER) as typeof layer).layout['text-field'], '')
+  assert.equal(requests, 1)
+})
 
 test('adding empty viewport tiles preserves identical canonical source objects', async (context) => {
   const map = new FakeMap()

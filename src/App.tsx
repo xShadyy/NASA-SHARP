@@ -44,16 +44,21 @@ import { analysisReducer, initialAnalysisState } from '@/lib/analysis-state'
 import {
   utcToday,
   focusRange,
+  rangePreset,
   MAX_ANALYSIS_DAYS,
   type AnalysisRange,
 } from '@/lib/analysis-activity'
 import {
   createInvestigation,
+  createGlobalInvestigation,
+  investigationKey,
   type InvestigationScope,
   type FrozenSelection,
 } from '@/lib/investigation'
+import { areaBounds, type AreaGeometry } from '@/lib/analysis-area'
 import { useAnalysisCountrySelection } from '@/hooks/use-analysis-country-selection'
 import { useAnalysisFires } from '@/hooks/use-analysis-fires'
+import type { FireFeature } from '@/lib/fire-severity'
 import { CapturePanel } from '@/components/CapturePanel'
 import { CaptureSelection } from '@/components/CaptureSelection'
 import { LocationNameDialog } from '@/components/LocationNameDialog'
@@ -84,8 +89,10 @@ import {
   type MeasurementColor,
   type MeasurementColors,
 } from '@/map/measurement-colors'
-import type { EarthMapHandle, MapCameraState } from '@/components/EarthMap'
+import type { EarthMapHandle, MapCameraState, GlobalStartupState } from '@/components/EarthMap'
+import { GLOBAL_STARTUP_TIMEOUT_MS, mergeGlobalStartupState } from '@/lib/global-startup'
 import { Button } from '@/components/ui/button'
+import { Spinner } from '@/components/ui/spinner'
 import { ButtonGroup } from '@/components/ui/button-group'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Separator } from '@/components/ui/separator'
@@ -433,36 +440,186 @@ function App() {
   })
   const [activeNav, setActiveNav] = useState('Saved locations')
   const [analysis, dispatchAnalysis] = useReducer(analysisReducer, initialAnalysisState)
-  const [analysisRange, setAnalysisRange] = useState<AnalysisRange>(() => {
-    const today = utcToday()
-    return { start: today, end: today }
-  })
+  const [analysisRange, setAnalysisRange] = useState<AnalysisRange>(() => rangePreset('24h'))
   const [analysisFocusedDay, setAnalysisFocusedDay] = useState<string | null>(null)
   const [activityGeneration, setActivityGeneration] = useState(0)
   const analysisOpen = activeNav === 'Burning Activity Calendar'
-  const fires = useAnalysisFires(analysis.confirmed, analysisRange, analysisFocusedDay)
   const [mapFilters, setMapFilters] = useState<InvestigationScope['filters']>({})
   const [mapSelection, setMapSelection] = useState<{
     selection: FrozenSelection
-    features: typeof fires.features
+    features: FireFeature[]
   } | null>(null)
-  function openAnalytics() {
+  const [highlightScope, setHighlightScope] = useState<InvestigationScope | null>(null)
+  const compatibleMapHighlight =
+    highlightScope &&
+    highlightScope.area.id === analysis.confirmed?.id &&
+    JSON.stringify(highlightScope.range) === JSON.stringify(analysisRange)
+      ? highlightScope
+      : null
+  const mapFocusedDay = compatibleMapHighlight?.focusedDay ?? analysisFocusedDay
+  const fires = useAnalysisFires(analysis.confirmed, analysisRange, mapFocusedDay, {
+    filters: compatibleMapHighlight?.filters ?? mapFilters,
+    selection: compatibleMapHighlight
+      ? compatibleMapHighlight.selection
+      : mapSelection?.selection,
+  })
+  const [analyticsScope, setAnalyticsScope] = useState<InvestigationScope | null>(null)
+  const [globalMapScope, setGlobalMapScope] = useState<InvestigationScope | null>(null)
+  const [latestGlobalScope, setLatestGlobalScope] = useState<InvestigationScope | null>(null)
+  const [startup, setStartup] = useState<GlobalStartupState>({
+    ready: false,
+    phase: 'fetching',
+    error: '',
+  })
+  const [entered, setEntered] = useState(false)
+  const [startupAttempt, setStartupAttempt] = useState(0)
+  const [startupStartedAt] = useState(() => Date.now())
+  useEffect(() => {
+    if (!startup.ready) return
+    const timer = setTimeout(
+      () => setEntered(true),
+      Math.max(0, 450 - (Date.now() - startupStartedAt)),
+    )
+    return () => clearTimeout(timer)
+  }, [startup.ready, startupStartedAt])
+  useEffect(() => {
+    if (entered || startup.ready) return
+    const timer = setTimeout(
+      () =>
+        setStartup((current) =>
+          current.ready
+            ? current
+            : {
+                ...current,
+                error:
+                  'Loading the last 24 hours is taking longer than expected. Check your connection and retry.',
+              },
+        ),
+      GLOBAL_STARTUP_TIMEOUT_MS,
+    )
+    return () => clearTimeout(timer)
+  }, [entered, startup.ready, startupAttempt])
+  const [analyticsMobile, setAnalyticsMobile] = useState(false)
+  const [analyticsTab, setAnalyticsTab] = useState<'map' | 'analytics'>('analytics')
+  const [mapShare, setMapShare] = useState(45)
+  const [analyticsSnapshot, setAnalyticsSnapshot] = useState<
+    { url: string; scopeKey: string } | undefined
+  >()
+  const snapshotRequest = useRef(0)
+  const dividerDrag = useRef(false)
+  const mapSelectionCurrent =
+    !!mapSelection &&
+    (mapSelection.selection.sourceGeneration
+      ? mapSelection.selection.sourceGeneration === fires.meta?.sourceGeneration
+      : mapSelection.features === fires.features)
+  function openAnalytics(selection?: FrozenSelection, cellGeometry?: AreaGeometry) {
+    let transferred: InvestigationScope | null
+    if (selection?.global)
+      transferred = createGlobalInvestigation(selection.global, selection.filters, {
+        sourceGeneration: selection.global.snapshotId,
+      })
+    else if (cellGeometry || analysis.confirmed) {
+      const area = cellGeometry
+        ? {
+            id: `cell:${JSON.stringify(cellGeometry.coordinates)}`,
+            name: 'Selected diagnostic cell',
+            type: 'polygon' as const,
+            geometry: cellGeometry,
+            bounds: areaBounds(cellGeometry),
+          }
+        : analysis.confirmed!
+      transferred = createInvestigation(
+        area,
+        analysisRange,
+        fires.meta,
+        analysisFocusedDay,
+        { ...mapFilters, ...selection?.filters },
+        selection ?? mapSelection?.selection,
+      )
+    } else transferred = globalMapScope ?? latestGlobalScope
+    setAnalyticsScope(transferred ? structuredClone(transferred) : null)
+    setAnalyticsSnapshot(undefined)
+    // A brief image is captured only after explicitly applying and checking its source version.
+    snapshotRequest.current++
+    setAnalyticsTab('analytics')
     setActiveNav('Area Analytics')
   }
+  function applyAnalyticsScope(scope: InvestigationScope) {
+    setHighlightScope(null)
+    if (scope.selection?.global) {
+      setGlobalMapScope(structuredClone(scope))
+      dispatchAnalysis({ type: 'apply-investigation', area: null })
+    } else {
+      setGlobalMapScope(null)
+      dispatchAnalysis({ type: 'apply-investigation', area: scope.area })
+      setAnalysisRange(scope.range)
+      setAnalysisFocusedDay(scope.focusedDay)
+      setMapFilters(scope.filters)
+      setMapSelection(
+        scope.selection ? { selection: scope.selection, features: fires.features } : null,
+      )
+    }
+    setAnalyticsTab('map')
+  }
+  async function captureAnalyticsScope(scope: InvestigationScope) {
+    const requestId = ++snapshotRequest.current
+    applyAnalyticsScope(scope)
+    const deadline = Date.now() + 15000
+    let capture
+    while (Date.now() < deadline && requestId === snapshotRequest.current) {
+      await new Promise((resolve) => setTimeout(resolve, 150))
+      capture = await mapRef.current?.captureInvestigation(scope)
+      if (capture) break
+    }
+    if (!capture || requestId !== snapshotRequest.current)
+      throw new Error(
+        'This investigation is not ready on the map. Wait for observations, then capture again.',
+      )
+    const url = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result))
+      reader.onerror = reject
+      reader.readAsDataURL(capture.image)
+    })
+    if (requestId !== snapshotRequest.current) return
+    setAnalyticsSnapshot({ url, scopeKey: investigationKey(scope) })
+    setAnalyticsTab('analytics')
+  }
   const fireQuery = useMemo(
-    () =>
-      analysis.confirmed
-        ? createInvestigation(
-            analysis.confirmed,
-            (Date.parse(analysisRange.end) - Date.parse(analysisRange.start)) / 86_400_000 >=
-              MAX_ANALYSIS_DAYS && analysisFocusedDay
-              ? focusRange(analysisRange, analysisFocusedDay)
-              : analysisRange,
-          ).query
-        : null,
-    [analysis.confirmed, analysisRange, analysisFocusedDay],
+    () => {
+      const selectedQuery = compatibleMapHighlight
+        ? compatibleMapHighlight.selection?.query
+        : mapSelectionCurrent
+          ? mapSelection?.selection.query
+          : undefined
+      return (
+        selectedQuery ??
+        (analysis.confirmed
+          ? createInvestigation(
+              analysis.confirmed,
+              (Date.parse(analysisRange.end) - Date.parse(analysisRange.start)) / 86_400_000 >=
+                MAX_ANALYSIS_DAYS && mapFocusedDay
+                ? focusRange(analysisRange, mapFocusedDay)
+                : analysisRange,
+            ).query
+          : null)
+      )
+    },
+    [
+      analysis.confirmed,
+      analysisRange,
+      mapFocusedDay,
+      compatibleMapHighlight,
+      mapSelectionCurrent,
+      mapSelection,
+    ],
   )
   const countrySelection = useAnalysisCountrySelection(analysisOpen, analysis, dispatchAnalysis)
+  const diagnosticQuery = useMemo(
+    () =>
+      analysis.confirmed ? createInvestigation(analysis.confirmed, analysisRange).query : null,
+    [analysis.confirmed, analysisRange],
+  )
   const [camera, setCamera] = useState<MapCameraState>({
     ready: false,
     zoom: 1,
@@ -526,6 +683,15 @@ function App() {
   const measurementUnit = mode === 'area' ? areaUnit : distanceUnit
   const themeAction = theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme'
   const areaAnalyticsOpen = activeNav === 'Area Analytics'
+  useEffect(() => {
+    const stage = stageRef.current
+    if (!stage) return
+    const observer = new ResizeObserver(([entry]) =>
+      setAnalyticsMobile(entry.contentRect.width < 820),
+    )
+    observer.observe(stage)
+    return () => observer.disconnect()
+  }, [])
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -761,7 +927,54 @@ function App() {
   return (
     <MantineProvider theme={mantineTheme} forceColorScheme={theme}>
       <TooltipProvider>
-        <div className="app-shell">
+        {!entered && (
+          <div
+            className="startup-loading"
+            data-slot="startup-loading"
+            role={startup.error ? 'alert' : undefined}
+            aria-live="polite"
+          >
+            <img
+              src={`${import.meta.env.BASE_URL}brand/${theme === 'dark' ? 'sharp-logo-white.svg' : 'sharp-logo.svg'}`}
+              alt="SHARP"
+              width={120}
+              height={64}
+            />
+            {startup.error ? (
+              <>
+                <p>{startup.error}</p>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setStartup({ ready: false, phase: 'fetching', error: '' })
+                    setStartupAttempt((value) => value + 1)
+                  }}
+                >
+                  Retry
+                </Button>
+                <Button variant="ghost" onClick={() => setEntered(true)}>
+                  Open map
+                </Button>
+              </>
+            ) : (
+              <>
+                <Spinner className="startup-spinner" />
+                <p>
+                  {startup.phase === 'fetching'
+                    ? 'Loading hotspots from the last 24 hours…'
+                    : 'Preparing the globe…'}
+                </p>
+              </>
+            )}
+          </div>
+        )}
+        <div
+          className="app-shell"
+          data-slot="app-content"
+          data-startup-pending={!entered || undefined}
+          inert={!entered}
+          aria-hidden={!entered || undefined}
+        >
           <header className="app-header">
             <div
               className="header-brand"
@@ -876,6 +1089,8 @@ function App() {
                     dispatchAnalysis({ type: 'edit' })
                   }}
                   onConfirm={() => {
+                    setGlobalMapScope(null)
+                    setHighlightScope(null)
                     setMapFilters({})
                     setMapSelection(null)
                     setAnalysisFocusedDay(null)
@@ -886,6 +1101,8 @@ function App() {
                   onFitArea={() => dispatchAnalysis({ type: 'fit' })}
                   onCancel={countrySelection.cancel}
                   onClear={() => {
+                    setGlobalMapScope(null)
+                    setHighlightScope(null)
                     setMapFilters({})
                     setMapSelection(null)
                     countrySelection.clear()
@@ -897,6 +1114,7 @@ function App() {
                   range={analysisRange}
                   generation={activityGeneration}
                   onRangeChange={(next) => {
+                    setHighlightScope(null)
                     setMapFilters({})
                     setMapSelection(null)
                     setAnalysisFocusedDay(null)
@@ -909,7 +1127,6 @@ function App() {
                   fireStatus={fires.status}
                   fireCount={fires.count}
                   fireMessage={fires.message}
-                  onRetryFires={fires.retry}
                   onOpenAnalytics={() => openAnalytics()}
                 />
               )}
@@ -920,8 +1137,46 @@ function App() {
                   areaAnalyticsOpen ? 'Area Analytics workspace' : 'Global Earth explorer'
                 }
                 data-capture-selecting={selectingCapture || undefined}
+                data-investigation-layout={
+                  areaAnalyticsOpen
+                    ? analyticsMobile
+                      ? 'mobile'
+                      : 'split'
+                    : undefined
+                }
+                data-investigation-tab={analyticsTab}
+                style={{ '--map-share': `${mapShare}%` } as CSSProperties}
               >
-                <div className="map-workspace" inert={areaAnalyticsOpen}>
+                {areaAnalyticsOpen && analyticsMobile && (
+                  <div
+                    role="tablist"
+                    aria-label="Investigation views"
+                    className="investigation-mobile-tabs"
+                  >
+                    <Button
+                      role="tab"
+                      aria-selected={analyticsTab === 'map'}
+                      variant="outline"
+                      onClick={() => setAnalyticsTab('map')}
+                    >
+                      Map
+                    </Button>
+                    <Button
+                      role="tab"
+                      aria-selected={analyticsTab === 'analytics'}
+                      variant="outline"
+                      onClick={() => setAnalyticsTab('analytics')}
+                    >
+                      Analytics
+                    </Button>
+                  </div>
+                )}
+                <div
+                  className="map-workspace"
+                  inert={
+                    areaAnalyticsOpen && analyticsMobile && analyticsTab !== 'map'
+                  }
+                >
                   <Suspense
                     fallback={
                       <div className="map-loading" role="status">
@@ -930,7 +1185,11 @@ function App() {
                     }
                   >
                     <EarthMap
+                      key={startupAttempt}
                       ref={mapRef}
+                      onStartupChange={(next) =>
+                        setStartup((current) => mergeGlobalStartupState(current, next))
+                      }
                       analysis={analysis}
                       analysisOpen={analysisOpen}
                       analysisPicking={countrySelection.picking}
@@ -954,21 +1213,31 @@ function App() {
                           setShareRevision((current) => current + 1)
                         }, 0)
                       }}
-                      dataDate={analysisFocusedDay ?? analysisRange.end}
+                      dataDate={mapFocusedDay ?? analysisRange.end}
                       fires={fires.features}
-                      focusedFireDay={analysisFocusedDay}
+                      focusedFireDay={mapFocusedDay}
                       fireRange={analysisRange}
                       fireQuery={fireQuery}
+                      diagnosticQuery={diagnosticQuery}
                       fireSourceGeneration={fires.meta?.sourceGeneration}
                       fireFilters={mapFilters}
                       selectedObservationIds={
-                        mapSelection
-                          ? mapSelection.features === fires.features
-                            ? mapSelection.selection.observationIds
-                            : []
-                          : undefined
+                        compatibleMapHighlight
+                          ? compatibleMapHighlight.selection?.observationIds
+                          : mapSelection
+                            ? mapSelectionCurrent
+                              ? mapSelection.selection.observationIds
+                              : []
+                            : undefined
                       }
                       onOpenAnalytics={openAnalytics}
+                      globalInvestigation={globalMapScope}
+                      highlightInvestigation={highlightScope}
+                      onGlobalInvestigation={setLatestGlobalScope}
+                      onResetGlobalInvestigation={() => {
+                        setGlobalMapScope(null)
+                        setHighlightScope(null)
+                      }}
                       referenceLayers={referenceLayers}
                       onReferenceChange={changeReferenceLayer}
                       showSpace={showSpace}
@@ -1148,20 +1417,87 @@ function App() {
                 {mapSelection && !areaAnalyticsOpen && (
                   <div className="map-investigation-selection">
                     <span>
-                      {mapSelection.features === fires.features
+                      {mapSelectionCurrent
                         ? `Selected group · ${mapSelection.selection.observationIds?.length ?? 0} observations`
                         : 'Source changed. Select the group again to refresh its membership.'}
                     </span>
-                    <Button variant="outline" size="sm" onClick={() => setMapSelection(null)}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setMapSelection(null)
+                        setMapFilters({})
+                        setHighlightScope(null)
+                        setAnalysisFocusedDay(null)
+                      }}
+                    >
                       Whole area
                     </Button>
                   </div>
                 )}
                 {areaAnalyticsOpen && (
-                  <AreaAnalytics
-                    analysisArea={analysis.confirmed}
-                    onClose={() => setActiveNav('Saved locations')}
-                  />
+                  <>
+                    {!analyticsMobile && (
+                      <div
+                        className="investigation-divider"
+                        role="separator"
+                        aria-label="Resize map and analytics"
+                        aria-orientation="vertical"
+                        aria-valuemin={30}
+                        aria-valuemax={65}
+                        aria-valuenow={mapShare}
+                        tabIndex={0}
+                        onKeyDown={(event) => {
+                          if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+                            event.preventDefault()
+                            setMapShare((value) =>
+                              Math.max(
+                                30,
+                                Math.min(65, value + (event.key === 'ArrowLeft' ? 2 : -2)),
+                              ),
+                            )
+                          }
+                        }}
+                        onPointerDown={(event) => {
+                          dividerDrag.current = true
+                          event.currentTarget.setPointerCapture(event.pointerId)
+                        }}
+                        onPointerMove={(event) => {
+                          if (!dividerDrag.current || !stageRef.current) return
+                          const box = stageRef.current.getBoundingClientRect()
+                          setMapShare(
+                            Math.max(
+                              (320 / box.width) * 100,
+                              Math.min(
+                                100 - (408 / box.width) * 100,
+                                (1 - (event.clientX - box.left) / box.width) * 100,
+                              ),
+                            ),
+                          )
+                        }}
+                        onPointerUp={() => {
+                          dividerDrag.current = false
+                        }}
+                        onLostPointerCapture={() => {
+                          dividerDrag.current = false
+                        }}
+                      />
+                    )}
+                    <div
+                      className="analytics-workspace"
+                      hidden={analyticsMobile && analyticsTab !== 'analytics'}
+                    >
+                      <AreaAnalytics
+                        analysisArea={analysis.confirmed}
+                        scope={analyticsScope}
+                        onApply={applyAnalyticsScope}
+                        onHighlight={setHighlightScope}
+                        snapshot={analyticsSnapshot}
+                        onCapture={captureAnalyticsScope}
+                        onClose={() => setActiveNav('Saved locations')}
+                      />
+                    </div>
+                  </>
                 )}
               </main>
             </div>

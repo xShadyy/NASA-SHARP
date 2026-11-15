@@ -34,8 +34,9 @@ from starlette.requests import ClientDisconnect
 from cache import BatchCache
 from area_analytics_summary import AreaAnalyticsSummary
 from observation_explorer import (
-    SelectionInvalid, cached_snapshot, has_snapshot, export_document, freeze_document,
+    SelectionInvalid, SourceUnavailable, cached_snapshot, export_document, freeze_document,
     observations_document as explorer_document, remember_snapshot, source_generation,
+    freshness_metadata,
 )
 from harmonize import (
     CanonicalStore,
@@ -64,6 +65,7 @@ from global_ingestion import run_owner
 FIRMS_URL = "https://firms.modaps.eosdis.nasa.gov"
 VIIRS_RANKS = {"l": 0, "n": 1, "h": 2}
 VIIRS_CLASSES = {"l": "low", "n": "nominal", "h": "high"}
+VIIRS_ENCODINGS = {**{value: key for key, value in VIIRS_CLASSES.items()}, **{key: key for key in VIIRS_CLASSES}}
 MAX_CSV_BYTES = 50 * 1024 * 1024
 NETHERLANDS_EUROPE_GEOMETRY = {
     "type": "Polygon",
@@ -162,6 +164,11 @@ async def lifespan(app: FastAPI):
         try:
             yield
         finally:
+            history_tasks = list(getattr(app.state, "history_tasks", {}).values())
+            for task in history_tasks:
+                task.cancel()
+            if history_tasks:
+                await asyncio.gather(*history_tasks, return_exceptions=True)
             global_owner.cancel()
             await asyncio.gather(global_owner, return_exceptions=True)
             pending_fetches = [fetch.task for fetch in app.state.batch_fetches.values()]
@@ -350,14 +357,17 @@ def parse_features(text: str, source: Source) -> list[dict]:
             satellite = row["satellite"].strip()
             if not satellite:
                 raise ValueError("Missing satellite")
-            confidence = row["confidence"].strip().lower()
+            native_confidence = row["confidence"].strip()
+            confidence = native_confidence.lower()
             if is_modis:
                 confidence = int(confidence) if confidence else None
                 if confidence is not None and not 0 <= confidence <= 100:
                     raise ValueError("Invalid MODIS confidence")
-            elif confidence and confidence not in VIIRS_RANKS:
-                raise ValueError("Invalid VIIRS confidence")
-            elif not confidence:
+            elif confidence:
+                if confidence not in VIIRS_ENCODINGS:
+                    raise ValueError("Invalid VIIRS confidence")
+                confidence = VIIRS_ENCODINGS[confidence]
+            else:
                 confidence = None
 
             # Drop identical rows within this product and keep separate satellite observations.
@@ -378,6 +388,7 @@ def parse_features(text: str, source: Source) -> list[dict]:
                     "nominal_resolution_m": 1000 if is_modis else 375,
                     "acquired_at": acquired.isoformat().replace("+00:00", "Z"),
                     "confidence": confidence,
+                    "confidence_native": native_confidence or None,
                     "confidence_scale": "0-100" if is_modis else "low/nominal/high",
                     "confidence_class": None if is_modis else VIIRS_CLASSES.get(confidence),
                     "frp_mw": optional_number(row, "frp"),
@@ -451,6 +462,8 @@ async def fetch_and_cache_batch(
 
 class GlobalFeatureBatch(list):
     coverage_state = "complete"
+    source_states = ()
+    expires_at = None
 
 
 def global_source_partition(app, product, day):
@@ -474,9 +487,15 @@ def global_source_batch(app, product, bounds, day):
     bbox = None if bounds == "world" else tuple(float(value) for value in bounds.split(","))
     result = GlobalFeatureBatch()
     result.coverage_state = partition["coverage"]
+    state = next((item for item in manifest.get("sources", []) if item["source"] == product.value), {})
+    result.source_states = ({**state, "day": day.isoformat(), "retrievedAt": datetime.fromtimestamp(partition["retrieved"], UTC).isoformat().replace("+00:00", "Z")},)
+    result.expires_at = partition["retrieved"] + int(os.environ.get("SHARP_GLOBAL_STALE_SECONDS", "3600"))
+    if state.get("status") != "ok":
+        result.expires_at = min(result.expires_at, clock.time())
     classes = {"low": "l", "nominal": "n", "high": "h"}
     from harmonize import detection_id
-    for row in stored.iter_observations(manifest["snapshot"], "7d", bbox):
+    lower = datetime.combine(day, time.min, UTC)
+    for row in stored.iter_observations(manifest["snapshot"], "7d", bbox, interval=(lower, lower + timedelta(days=1)), partition_version=partition["version"]):
         if row.acquired_at.date() != day or row.source_product != product.value:
             continue
         modis = row.platform in {"aqua", "terra"}
@@ -485,7 +504,7 @@ def global_source_batch(app, product, bounds, day):
                        "properties": {"id": identity, "source": row.source_product, "sensor": "MODIS" if modis else "VIIRS", "satellite": row.platform,
                                       "processing": row.processing_tier, "nominal_resolution_m": row.nominal_resolution_m,
                                       "acquired_at": row.acquired_at.isoformat().replace("+00:00", "Z"), "confidence": row.confidence_pct if modis else classes.get(row.confidence_class),
-                                      "confidence_scale": "0-100" if modis else "low/nominal/high", "confidence_class": row.confidence_class,
+                                      "confidence_scale": "0-100" if modis else "low/nominal/high", "confidence_class": row.confidence_class, "confidence_native": row.confidence_native,
                                       "frp_mw": row.frp_mw, "scan_km": row.scan_km, "track_km": row.track_km, "brightness_k": None, "brightness_band": None,
                                       "daynight": row.day_night, "fire_type_code": None, "version": row.product_version, "snapshot": manifest["snapshot"]}})
         if len(result) > MAX_CANONICAL_ACQUISITION_ROWS:
@@ -493,9 +512,9 @@ def global_source_batch(app, product, bounds, day):
     return result, partition["retrieved"], True
 
 
-async def load_batch(app: FastAPI, product: Source, bounds: str, day: date, today: date, acquisition_started: asyncio.Event | None = None):
+async def load_batch(app: FastAPI, product: Source, bounds: str, day: date, today: date, acquisition_started: asyncio.Event | None = None, *, require_complete: bool = False):
     retained = await asyncio.to_thread(global_source_batch, app, product, bounds, day)
-    if retained is not None:
+    if retained is not None and (not require_complete or day == today or getattr(retained[0], "coverage_state", "complete") == "complete"):
         return retained
     key = app.state.cache.key(product.value, bounds, day.isoformat())
     lock = app.state.batch_locks[hash(key) % len(app.state.batch_locks)]
@@ -504,7 +523,8 @@ async def load_batch(app: FastAPI, product: Source, bounds: str, day: date, toda
             cached = await asyncio.to_thread(app.state.cache.get, key)
             if cached is not None:
                 features, fetched = cached
-                return features, fetched, True
+                if not require_complete or day == today or fetched >= datetime.combine(day + timedelta(days=1), time.min, UTC).timestamp():
+                    return features, fetched, True
         except (sqlite3.Error, ValueError, zlib.error):
             logging.warning("Could not read FIRMS cache; fetching from NASA.")
 
@@ -920,7 +940,6 @@ def analysis_capabilities():
     try:
         store = store_from_environment()
         from historical_activity import load_archive
-        from activity_outlook import TARGET
         manifest, archive = load_archive()
         historical_available = bool(manifest and archive and archive.coverage)
         capabilities = capabilities_payload(store)
@@ -933,8 +952,6 @@ def analysis_capabilities():
                 "regionId": manifest.get("regionId") if manifest else None,
                 "coverageStart": min(item.day for item in archive.coverage).isoformat() if historical_available else None,
                 "coverageEndInclusive": max(item.day for item in archive.coverage).isoformat() if historical_available else None},
-            "forecast": {"target": TARGET, "horizonHours": 24,
-                "availability": "region-and-validation-dependent" if historical_available else "unavailable"},
         })
     except ValueError as exc:
         return JSONResponse({"message": str(exc)}, status_code=422)
@@ -1004,6 +1021,7 @@ def feature_to_detection(feature: dict) -> Detection | None:
         str(props["source"]) if props.get("source") else None,
         str(props["version"]) if props.get("version") else None,
         str(props["processing"]) if props.get("processing") else None,
+        confidence_native=props.get("confidence_native"),
     )
 
 
@@ -1031,22 +1049,49 @@ def product_on(platform: str, day: date, windows: dict[str, tuple[date, date]]) 
 
 
 def validate_acquisition_longitudes(geometry: dict) -> None:
+    analysis_acquisition_boxes(geometry)
+
+
+def analysis_acquisition_boxes(geometry: dict, limit=8) -> list[str]:
     if not isinstance(geometry, dict) or geometry.get("type") not in {"Polygon", "MultiPolygon"}:
         raise RejectedQuery("Analysis area must be a Polygon or MultiPolygon.")
     polygons = [geometry.get("coordinates")] if geometry["type"] == "Polygon" else geometry.get("coordinates")
-    try:
-        longitudes = [float(position[0]) for polygon in polygons for ring in polygon for position in ring]
-    except (TypeError, ValueError, IndexError) as exc:
-        raise RejectedQuery("Analysis area contains invalid coordinates.") from exc
-    if not longitudes or any(not math.isfinite(value) or value < -180 or value > 180 for value in longitudes):
-        raise RejectedQuery("Analysis area longitude must stay between -180 and 180 degrees.")
-    linear_span = max(longitudes) - min(longitudes)
-    if linear_span <= 180:
-        return
-    circular = sorted({value % 360 for value in longitudes})
-    largest_gap = max(circular[(index + 1) % len(circular)] + (360 if index == len(circular) - 1 else 0) - value for index, value in enumerate(circular))
-    if 360 - largest_gap < 180:
-        raise RejectedQuery("This area crosses 180 degrees longitude. Live analysis currently supports one side of the date line per query.")
+    if not isinstance(polygons, list) or not polygons:
+        raise RejectedQuery("Analysis area has no polygon coordinates.")
+    boxes = []
+    for polygon in polygons:
+        try:
+            parts = area_boxes_for_geometry({"type": "Polygon", "coordinates": polygon})
+        except HTTPException as exc:
+            if exc.detail == "Analysis area must enclose a non-zero area.":
+                continue
+            raise RejectedQuery(str(exc.detail)) from exc
+        for part in parts:
+            west, south, east, north = map(float, part.split(","))
+            steps = max(1, math.ceil((east - west) / 120))
+            for step in range(steps):
+                box = (west + (east - west) * step / steps, south,
+                       west + (east - west) * (step + 1) / steps, north)
+                if any(old[0] <= box[0] and old[1] <= box[1] and old[2] >= box[2] and old[3] >= box[3] for old in boxes):
+                    continue
+                boxes = [old for old in boxes if not (box[0] <= old[0] and box[1] <= old[1] and box[2] >= old[2] and box[3] >= old[3])]
+                boxes.append(box)
+                while len(boxes) > limit:
+                    choices = []
+                    for left in range(len(boxes)):
+                        for right in range(left + 1, len(boxes)):
+                            a, b = boxes[left], boxes[right]
+                            merged = (min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3]))
+                            if merged[2] - merged[0] <= 180:
+                                cost = (merged[2] - merged[0]) * (merged[3] - merged[1]) - (a[2] - a[0]) * (a[3] - a[1]) - (b[2] - b[0]) * (b[3] - b[1])
+                                choices.append((cost, left, right, merged))
+                    if not choices:
+                        raise RejectedQuery("This area's separate territories need a smaller regional selection.")
+                    _cost, left, right, merged = min(choices)
+                    boxes = [box for index, box in enumerate(boxes) if index not in (left, right)] + [merged]
+    if not boxes:
+        raise RejectedQuery("Analysis area must enclose a non-zero area.")
+    return [",".join(format(Decimal(str(value)), "f") for value in box) for box in sorted(boxes)]
 
 
 def stored_global_aoi(app, query, bbox):
@@ -1063,9 +1108,11 @@ def stored_global_aoi(app, query, bbox):
         anchor = datetime.fromisoformat(selected_window.get("endUtcExclusive", "").replace("Z", "+00:00"))
         available_start = datetime.fromisoformat(selected_window.get("startUtc", "").replace("Z", "+00:00"))
         current_day_end = datetime.combine(anchor.date() + timedelta(days=1), time.min, UTC)
-        if not manifest.get("snapshot") or not available_start <= lower < anchor or not lower < upper <= current_day_end:
+        # Analytical UTC days belong to immutable source partitions; the rolling
+        # presentation's first partial day is not their acquisition boundary.
+        if not manifest.get("snapshot") or not lower < upper <= current_day_end:
             return None
-        stored = global_store.canonical_store(manifest["snapshot"], "7d", bbox, {"platforms": acquisition_platforms(query)}, max_rows=MAX_CANONICAL_ACQUISITION_ROWS)
+        stored = global_store.canonical_store(manifest["snapshot"], "7d", bbox, {"platforms": acquisition_platforms(query)}, max_rows=MAX_CANONICAL_ACQUISITION_ROWS, interval=(lower, upper), geometry=query["aoi"]["geometry"])
         return stored if stored.coverage else None
     except (ValueError, TypeError, KeyError) as exc:
         if "budget" in str(exc).lower() or "canonical observations" in str(exc).lower():
@@ -1074,7 +1121,10 @@ def stored_global_aoi(app, query, bbox):
 
 
 async def firms_canonical_store(app: FastAPI, query: dict, bbox: tuple[float, float, float, float], started: asyncio.Event | None = None) -> CanonicalStore:
-    validate_acquisition_longitudes(query.get("aoi", {}).get("geometry"))
+    geometry = query.get("aoi", {}).get("geometry")
+    area_bounds = analysis_acquisition_boxes(geometry)
+    area = prepared_area(geometry)
+    lower, upper = analysis_interval(query)
     try:
         start, end = parse_utc_interval(query.get("interval"))
     except ValueError as exc:
@@ -1086,7 +1136,6 @@ async def firms_canonical_store(app: FastAPI, query: dict, bbox: tuple[float, fl
     already_covered = {(record.day, record.platform) for record in stored.coverage} if stored else set()
     missing = [(platform, start + timedelta(days=offset)) for platform in selected for offset in range((end - start).days) if (start + timedelta(days=offset), platform) not in already_covered]
     windows = await product_windows(app) if missing else {}
-    bounds = ",".join(format(Decimal(str(value)), "f") for value in bbox)
     today = datetime.now(UTC).date()
     jobs: dict[tuple[Source, date], set[str]] = {}
     unavailable = []
@@ -1102,18 +1151,56 @@ async def firms_canonical_store(app: FastAPI, query: dict, bbox: tuple[float, fl
             cursor += timedelta(days=1)
 
     async def run(product: Source, day: date, covered: set[str]):
-        try:
-            features, fetched, cached = await load_batch(app, product, bounds, day, today, started)
-            expires = fetched + batch_ttl(product, day, today)
+        features = GlobalFeatureBatch()
+        retrievals, expiries, cached_parts, states, errors = [], [], [], [], []
+        members = set()
+        complete = True
+        for bounds in area_bounds:
             try:
-                persisted_expiry = await asyncio.to_thread(app.state.cache.expires_at, app.state.cache.key(product.value, bounds, day.isoformat()), fetched)
-                if persisted_expiry is not None:
-                    expires = min(expires, persisted_expiry)
-            except (sqlite3.Error, AttributeError):
-                pass
-            return features, [Coverage(day, item, "complete") for item in covered], None, fetched, expires, cached
-        except FIRMSFailure as exc:
-            return [], [Coverage(day, item, "partial") for item in covered], str(exc), None, clock.time() + 30, False
+                batch, fetched, cached = await load_batch(app, product, bounds, day, today, started)
+                expires = fetched + batch_ttl(product, day, today)
+                if getattr(batch, "expires_at", None) is not None:
+                    expires = min(expires, batch.expires_at)
+                try:
+                    persisted_expiry = await asyncio.to_thread(app.state.cache.expires_at, app.state.cache.key(product.value, bounds, day.isoformat()), fetched)
+                    if persisted_expiry is not None:
+                        expires = min(expires, persisted_expiry)
+                except (sqlite3.Error, AttributeError):
+                    pass
+                retrievals.append(fetched)
+                expiries.append(expires)
+                cached_parts.append(cached)
+                states.extend(getattr(batch, "source_states", ()))
+                complete = complete and getattr(batch, "coverage_state", "complete") == "complete"
+                for feature in batch:
+                    try:
+                        detection = feature_to_detection(feature)
+                    except (TypeError, ValueError, KeyError):
+                        continue
+                    if detection is None or detection.platform not in selected or not lower <= detection.acquired_at < upper or not area.contains(detection.longitude, detection.latitude):
+                        continue
+                    identity = (detection.platform, detection.acquired_at, detection.longitude, detection.latitude)
+                    if identity not in members:
+                        members.add(identity)
+                        features.append(feature)
+                    if len(features) > MAX_CANONICAL_ACQUISITION_ROWS:
+                        raise RejectedQuery("This area and period exceed the 200,000 matching-observation budget. Choose a shorter period; no records were truncated.")
+            except FIRMSFailure as exc:
+                failure = str(exc)
+                key = getattr(app.state, "key", None)
+                if key:
+                    failure = failure.replace(key, "[redacted]")
+                errors.append(failure)
+                complete = False
+                cached_parts.append(False)
+                expiry = clock.time() + 30
+                expiries.append(expiry)
+                states.append({"source": product.value, "bounds": bounds, "status": "partial",
+                               "retrievedAt": None, "expiresAt": datetime.fromtimestamp(expiry, UTC).isoformat().replace("+00:00", "Z"),
+                               "failure": failure})
+        features.source_states = tuple(states)
+        features.coverage_state = "complete" if complete else "partial"
+        return features, [Coverage(day, item, features.coverage_state) for item in covered], "; ".join(errors) or None, min(retrievals) if retrievals else None, min(expiries, default=clock.time() + 30), bool(cached_parts) and all(cached_parts)
 
     workers = asyncio.Semaphore(4)
     async def bounded(product: Source, day: date, covered: set[str]):
@@ -1122,22 +1209,26 @@ async def firms_canonical_store(app: FastAPI, query: dict, bbox: tuple[float, fl
     pending = [asyncio.create_task(bounded(product, day, covered)) for (product, day), covered in jobs.items()]
     loaded = [(None, stored.coverage, None, stored.fetched_at, stored.expires_at, True)] if stored else []
     coverage = [*stored.coverage, *unavailable] if stored else list(unavailable)
+    source_states = list(stored.source_states) if stored else []
     rows = {(row.platform, row.acquired_at, row.longitude, row.latitude): row for row in stored.rows} if stored else {}
     try:
         for completed in asyncio.as_completed(pending):
             features, records, error, fetched, expires, cached = await completed
             coverage.extend(records)
             loaded.append((None, records, error, fetched, expires, cached))
+            source_states.extend(getattr(features, "source_states", ()))
+            if not getattr(features, "source_states", ()):
+                source_states.append({"source": next(iter({feature["properties"].get("source") for feature in features}), "NASA FIRMS area supplement"), "status": "partial" if error else "ok", "retrievedAt": datetime.fromtimestamp(fetched, UTC).isoformat().replace("+00:00", "Z") if fetched is not None else None, "expiresAt": datetime.fromtimestamp(expires, UTC).isoformat().replace("+00:00", "Z") if expires is not None else None, "failure": error})
             for feature in features:
                 try:
                     row = feature_to_detection(feature)
                 except (TypeError, ValueError, KeyError):
                     continue
-                if row is not None and start <= row.acquired_at.astimezone(UTC).date() < end:
+                if row is not None and row.platform in selected and lower <= row.acquired_at < upper and area.contains(row.longitude, row.latitude):
                     identity = (row.platform, row.acquired_at, row.longitude, row.latitude)
                     rows[identity] = row
                     if len(rows) > MAX_CANONICAL_ACQUISITION_ROWS:
-                        raise RejectedQuery("This bounding region exceeds the 200,000 candidate-observation acquisition budget. Select a smaller region or shorter period; no records were truncated.")
+                        raise RejectedQuery("This area and period exceed the 200,000 matching-observation budget. Choose a shorter period; no records were truncated.")
     finally:
         for task in pending:
             if not task.done():
@@ -1153,6 +1244,8 @@ async def firms_canonical_store(app: FastAPI, query: dict, bbox: tuple[float, fl
         min(fetched) if fetched else None,
         min((item[4] for item in loaded), default=clock.time() + 300),
         bool(loaded) and all(item[5] for item in loaded),
+        coverage_geometry=query.get("aoi", {}).get("geometry"),
+        source_states=tuple(source_states),
     )
 
 
@@ -1186,7 +1279,9 @@ def acquisition_platforms(query: dict) -> tuple[str, ...]:
 
 def firms_store_key(query: dict, bbox: tuple[float, float, float, float]) -> tuple:
     start, end = parse_utc_interval(query.get("interval"))
-    return tuple(float(value) for value in bbox), start, end, acquisition_platforms(query)
+    geometry = query.get("aoi", {}).get("geometry")
+    signature = hashlib.sha256(json.dumps([geometry, query.get("interval")], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return tuple(float(value) for value in bbox), start, end, acquisition_platforms(query), signature
 
 
 def retain_firms_store(key: tuple, store: CanonicalStore):
@@ -1239,6 +1334,82 @@ async def shared_firms_store(app: FastAPI, query: dict, bbox: tuple[float, float
             shared.task.cancel()
 
 
+def analysis_interval(query):
+    interval = query.get("interval", {})
+    try:
+        lower = datetime.fromisoformat(str(interval.get("start", "")).replace("Z", "+00:00"))
+        upper = datetime.fromisoformat(str(interval.get("endExclusive", "")).replace("Z", "+00:00"))
+    except (ValueError, AttributeError) as exc:
+        raise RejectedQuery("Analysis requires a UTC interval.") from exc
+    if lower.tzinfo is None or upper.tzinfo is None or upper <= lower:
+        raise RejectedQuery("Analysis requires a valid start-inclusive/end-exclusive interval.")
+    return lower, upper
+
+
+def interval_store(store, lower, upper):
+    partial_start = any((lower.hour, lower.minute, lower.second, lower.microsecond))
+    partial_end = any((upper.hour, upper.minute, upper.second, upper.microsecond))
+    if partial_start or partial_end:
+        return replace(store, rows=tuple(
+            row for row in store.rows
+            if (not partial_start or row.acquired_at.date() != lower.date() or row.acquired_at >= lower)
+            and (not partial_end or row.acquired_at.date() != upper.date() or row.acquired_at < upper)))
+    return store
+
+
+def restore_local_investigation(app, query, bbox, options):
+    expected = options.get("sourceGeneration")
+    if options.get("observationIds") and expected is None:
+        return None
+    lower, upper = analysis_interval(query)
+
+    def accept(candidate):
+        if candidate is None or not candidate.rows and not candidate.coverage:
+            return None
+        candidate = interval_store(candidate, lower, upper)
+        if expected is not None and source_generation(candidate) != expected:
+            return None
+        return remember_snapshot(query, candidate)
+
+    if isinstance(bbox, tuple):
+        entry = _FIRMS_STORES.get((id(app), *firms_store_key(query, bbox)))
+        restored = accept(entry.store if entry is not None else None)
+        if restored is not None:
+            return restored
+    restored = accept(store_from_environment(bbox))
+    if restored is not None:
+        return restored
+    global_store = getattr(app.state, "global_store", None)
+    if global_store is not None and isinstance(bbox, tuple):
+        if expected is not None:
+            try:
+                global_store.snapshot_manifest(expected, "7d")
+            except (ValueError, TypeError):
+                candidate = None
+            else:
+                try:
+                    candidate = global_store.canonical_store(expected, "7d", bbox,
+                        {"platforms": acquisition_platforms(query)}, max_rows=MAX_CANONICAL_ACQUISITION_ROWS,
+                        interval=(lower, upper), geometry=query["aoi"]["geometry"])
+                except ValueError as exc:
+                    raise RejectedQuery(str(exc)) from exc
+        else:
+            candidate = stored_global_aoi(app, query, bbox)
+        restored = accept(candidate)
+        if restored is not None:
+            return restored
+    from historical_activity import load_query_archive
+    root = global_store.path.parent / "history" if global_store is not None else None
+    manifest, candidate = load_query_archive(query, root=root)
+    first, last = parse_utc_interval(query.get("interval"))
+    days = [record.day for record in candidate.coverage] if candidate is not None else []
+    if manifest is not None and days and min(days) <= first < last <= max(days) + timedelta(days=1):
+        restored = accept(candidate)
+        if restored is not None:
+            return restored
+    return None
+
+
 async def analysis_document(request: Request, build):
     try:
         body = await request.json()
@@ -1255,28 +1426,55 @@ async def analysis_document(request: Request, build):
         if not isinstance(query, dict):
             raise RejectedQuery("Analysis query identity is required.")
         options = body.get("options") if isinstance(body.get("options"), dict) else {}
+        selected_membership = bool(options.get("selectionToken")) or bool(options.get("observationIds")) or request.url.path == "/analysis/selections"
+        source_recovery = None
         # Interaction with an already investigated source must not turn expiry
         # into a new FIRMS acquisition. Refreshing the map is explicit.
-        interaction = request.url.path in {"/analysis/observations", "/analysis/observations/export", "/analysis/method", "/analysis/recurrence"}
-        frozen_request = (bool(options.get("selectionToken"))
-            or request.url.path in {"/analysis/selections", "/analysis/observations/export", "/analysis/recurrence"}
-            or interaction and has_snapshot(query)
-            or request.url.path == "/analysis/observations" and isinstance(options.get("page"), int) and options["page"] > 1)
-        store = cached_snapshot(query, options) if frozen_request else store_from_environment(bbox)
+        interaction = request.url.path in {"/analysis/observations", "/analysis/observation", "/analysis/observations/export", "/analysis/method", "/analysis/recurrence"}
+        recovery_requested = body.get("recoverSource") is True and interaction and not selected_membership
+        frozen_request = selected_membership or bool(options.get("sourceGeneration")) or interaction
+        if frozen_request:
+            # Historical day/month navigation can legitimately change the scope
+            # while retaining its exact archive generation. This local-only
+            # reader validates registered geometry, dates and generation and
+            # never replaces an expired frozen group or acquires NASA records.
+            from scientific_routes import stored_diagnostic_snapshot
+            lookup_options = options
+            display_filters = options.get("displayFilters")
+            parent_token = display_filters.get("selectionToken") if isinstance(display_filters, dict) else None
+            if request.url.path == "/analysis/selections" and not options.get("selectionToken") and parent_token:
+                lookup_options = {**options, "selectionToken": parent_token}
+            try:
+                store = await asyncio.to_thread(stored_diagnostic_snapshot, query, lookup_options)
+            except SelectionInvalid as exc:
+                if options.get("selectionToken") or parent_token:
+                    raise
+                store = await asyncio.to_thread(restore_local_investigation, request.app, query, bbox, options)
+                if store is None:
+                    if not recovery_requested:
+                        raise SourceUnavailable("Restoring observations for the selected area and period.",
+                                                options.get("sourceGeneration"), recoverable=not selected_membership) from exc
+                    frozen_request = False
+                    store = store_from_environment(bbox)
+        else:
+            store = store_from_environment(bbox)
         global_reused = False
         if not frozen_request and not store.rows and not store.coverage and isinstance(bbox, tuple):
             stored = await asyncio.to_thread(stored_global_aoi, request.app, query, bbox)
             if stored is not None:
                 store = stored
                 global_reused = True
-        if not frozen_request and not store.rows and not store.coverage and os.environ.get("SHARP_HISTORY_PATH"):
-            from historical_activity import load_archive, supports_geometry
+        if not frozen_request and (not store.rows and not store.coverage or global_reused):
+            from historical_activity import load_query_archive
             try:
-                manifest, archived = await asyncio.to_thread(load_archive)
+                global_store = getattr(request.app.state, "global_store", None)
+                root = global_store.path.parent / "history" if global_store is not None else None
+                manifest, archived = await asyncio.to_thread(load_query_archive, query, root=root)
                 first, last = parse_utc_interval(query.get("interval"))
                 covered_days = [record.day for record in archived.coverage] if archived is not None else []
-                if manifest is not None and covered_days and supports_geometry(manifest, geometry) and min(covered_days) <= first and last <= max(covered_days) + timedelta(days=1):
+                if manifest is not None and covered_days and min(covered_days) <= first and last <= max(covered_days) + timedelta(days=1):
                     store = archived
+                    global_reused = False
             except ValueError as exc:
                 raise RejectedQuery(str(exc)) from exc
         needs_supplement = False
@@ -1287,37 +1485,28 @@ async def analysis_document(request: Request, build):
         if not frozen_request and request.app.state.key and (not store.rows and not store.coverage or needs_supplement) and isinstance(bbox, tuple):
             validate_acquisition_longitudes(geometry)
             store = await shared_firms_store(request.app, query, bbox)
-        interval = query.get("interval", {})
-        try:
-            lower = datetime.fromisoformat(str(interval.get("start", "")).replace("Z", "+00:00"))
-            upper = datetime.fromisoformat(str(interval.get("endExclusive", "")).replace("Z", "+00:00"))
-        except (ValueError, AttributeError) as exc:
-            raise RejectedQuery("Analysis requires a UTC interval.") from exc
-        if lower.tzinfo is None or upper.tzinfo is None or upper <= lower:
-            raise RejectedQuery("Analysis requires a valid start-inclusive/end-exclusive interval.")
-        partial_start = any((lower.hour, lower.minute, lower.second, lower.microsecond))
-        partial_end = any((upper.hour, upper.minute, upper.second, upper.microsecond))
-        if partial_start or partial_end:
-            store = CanonicalStore(
-                tuple(
-                    row for row in store.rows
-                    if (not partial_start or row.acquired_at.date() != lower.date() or row.acquired_at >= lower)
-                    and (not partial_end or row.acquired_at.date() != upper.date() or row.acquired_at < upper)
-                ),
-                store.coverage,
-                store.source,
-                store.fetched_at,
-                store.expires_at,
-                store.cache_hit,
-            )
+        lower, upper = analysis_interval(query)
+        store = interval_store(store, lower, upper)
+        if recovery_requested:
+            if not store.rows and not store.coverage:
+                raise SourceUnavailable("Satellite observations are unavailable for this area and period.",
+                                        options.get("sourceGeneration"), recoverable=False)
+            generation = source_generation(store)
+            if options.get("sourceGeneration") != generation:
+                source_recovery = {"previousGeneration": options.get("sourceGeneration"), "sourceGeneration": generation}
+                body = {**body, "options": {**options, "sourceGeneration": generation}}
         document = await asyncio.to_thread(build, query, store, body)
         if isinstance(document, StreamingResponse):
+            if not frozen_request:
+                remember_snapshot(query, store)
             return document
         if not frozen_request:
             remember_snapshot(query, store)
         now = clock.time()
         as_utc = lambda value: datetime.fromtimestamp(value, UTC).isoformat().replace("+00:00", "Z") if value is not None else None
         metadata = document.setdefault("meta", {})
+        if source_recovery is not None:
+            metadata["sourceRecovery"] = source_recovery
         selected_area = prepared_area(geometry)
         selected_filters = filters_from_query(query.get("filters") if isinstance(query.get("filters"), dict) else {})
         focused_day = body.get("options", {}).get("day") if isinstance(body.get("options"), dict) else None
@@ -1331,12 +1520,16 @@ async def analysis_document(request: Request, build):
             "freshness": "unknown" if store.fetched_at is None else "fresh" if store.expires_at is not None and store.expires_at > now else "stale",
             "acquisitionCacheHit": store.cache_hit,
         })
+        metadata.update(freshness_metadata(store, now))
         if store.source.startswith("Regional archive "):
             metadata["datasetVersion"] = store.source.removeprefix("Regional archive ")
             metadata["freshness"] = "archived"
         return document
     except SelectionInvalid as exc:
-        return JSONResponse({"message": str(exc), "code": "selection-invalid"}, status_code=409)
+        return JSONResponse({"message": str(exc), "code": getattr(exc, "code", "selection-invalid"),
+                             "recoverable": getattr(exc, "recoverable", False),
+                             "sourceGeneration": getattr(exc, "current_generation", None),
+                             "expectedSourceGeneration": getattr(exc, "expected_generation", None)}, status_code=409)
     except RejectedQuery as exc:
         return JSONResponse({"message": str(exc)}, status_code=422)
     except RuntimeError as exc:

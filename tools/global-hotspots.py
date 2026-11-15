@@ -19,10 +19,11 @@ def main():
     parser.add_argument("--source", choices=configured_sources())
     parser.add_argument("--start", help="Explicit reporting-extraction start UTC for import")
     parser.add_argument("--end", help="Explicit exclusive reporting-extraction end UTC for import")
+    parser.add_argument("--window", choices=["24h", "7d"], default="24h", help="Shared refresh extract; seven days requires this explicit option")
     args = parser.parse_args()
     store = GlobalStore(args.database)
     if args.command == "refresh":
-        result = asyncio.run(refresh_global(store, force=False))
+        result = asyncio.run(refresh_global(store, force=False, window=args.window))
         manifest = result.get("manifest", {})
         print(json.dumps({"state": result["state"], "snapshot": manifest.get("snapshot"), "anchorUtc": manifest.get("anchorUtc"), "status": manifest.get("status"), "sources": manifest.get("sources", []), "metrics": store.metrics()}, indent=2))
     elif args.command == "import":

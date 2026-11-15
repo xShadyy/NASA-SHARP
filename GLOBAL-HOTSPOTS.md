@@ -16,10 +16,30 @@ src/backend_api/.venv/Scripts/python.exe -m uvicorn app:app --app-dir src/backen
 
 The backend starts its independent ingestion service by default. It serves a
 durable previous publication immediately while a refresh runs; a first cold
-startup reports building/unavailable until genuine observations are imported.
+startup automatically fetches the official worldwide **24-hour** CSVs.
+Each completed satellite source becomes visible through an immutable partial
+dataset immediately, without waiting for the other satellites. The same owner
+continues refreshing only the 24-hour extracts. It never starts a seven-day
+backfill automatically. Until a genuine longer extract is explicitly stored,
+48-hour/seven-day views report loading/unavailable
+instead of relabeling 24-hour records. No manual import or publication is needed.
+Manifest responses expose `refreshing` and shared download/processing progress;
+in-progress responses are not cached. The browser polls this local status and
+never initiates provider downloads.
 `SHARP_GLOBAL_INGEST_ENABLED=0` disables ingestion for a read-only API instance.
-On Windows, `./tools/start-global-backend.ps1` supplies the same persistent defaults;
+Retained raster cache preparation remains local; set
+`SHARP_GLOBAL_RASTER_PREWARM_ENABLED=0` to disable startup/publication warming for
+strict read-only profiling. A failed warmup lease on a read-only database is
+skipped without attempting source-failure or freshness writes.
+On Windows, `./tools/start-global-backend.ps1` pins the correct application directory;
 optional `-Database`, `-BindAddress` and `-Port` arguments set the deployment location.
+Without an explicit database override, it reuses the direct Python startup default,
+`src/backend_api/data/global-hotspots.sqlite`. To use the repository-level `data`
+path shown above, set `SHARP_GLOBAL_DB_PATH` or pass `-Database` consistently.
+Stop an older backend process before restarting: a running Uvicorn process does
+not load newly added routes automatically. A 404 from `/global/manifest` means
+the wrong or outdated API is being served; an empty store returns a 200 status
+document explaining its data availability.
 `config/global.env.example` lists the server-only settings without secrets.
 At most one owner can refresh the shared SQLite store: workers use a persisted
 lease with a 30-second heartbeat and a 900-second recovery timeout. Browser
@@ -37,6 +57,7 @@ Explicit operator commands also share the lease and refresh schedule:
 
 ```powershell
 src/backend_api/.venv/Scripts/python.exe tools/global-hotspots.py refresh --database data/global-hotspots.sqlite
+src/backend_api/.venv/Scripts/python.exe tools/global-hotspots.py refresh --window 7d --database data/global-hotspots.sqlite
 src/backend_api/.venv/Scripts/python.exe tools/global-hotspots.py status --database data/global-hotspots.sqlite
 ```
 
@@ -57,11 +78,30 @@ dataset or forecast is installed.
 The implementation checked the [official active-fire download documentation](https://firms.modaps.eosdis.nasa.gov/content/active_fire/),
 [Area API](https://firms.modaps.eosdis.nasa.gov/api/area/) and
 [official API tutorial](https://firms.modaps.eosdis.nasa.gov/content/academy/data_api/firms_api_use.html).
-The three public CSV endpoints returned `text/csv` during endpoint verification:
+Startup and every scheduled refresh use the official 24-hour products:
+[MODIS 24h](https://firms.modaps.eosdis.nasa.gov/data/active_fire/modis-c6.1/csv/MODIS_C6_1_Global_24h.csv),
+[NOAA-20 24h](https://firms.modaps.eosdis.nasa.gov/data/active_fire/noaa-20-viirs-c2/csv/J1_VIIRS_C2_Global_24h.csv)
+and [NOAA-21 24h](https://firms.modaps.eosdis.nasa.gov/data/active_fire/noaa-21-viirs-c2/csv/J2_VIIRS_C2_Global_24h.csv)
+downloads. Seven-day extracts are operator-only, requested with `refresh --window 7d`:
 
 - [MODIS C6.1 global seven-day NRT CSV](https://firms.modaps.eosdis.nasa.gov/data/active_fire/modis-c6.1/csv/MODIS_C6_1_Global_7d.csv).
 - [NOAA-20 VIIRS C2 global seven-day NRT CSV](https://firms.modaps.eosdis.nasa.gov/data/active_fire/noaa-20-viirs-c2/csv/J1_VIIRS_C2_Global_7d.csv).
 - [NOAA-21 VIIRS C2 global seven-day NRT CSV](https://firms.modaps.eosdis.nasa.gov/data/active_fire/noaa-21-viirs-c2/csv/J2_VIIRS_C2_Global_7d.csv).
+
+HTTP validators are bound to each actual URL; a 24-hour file's ETag
+or modification time is never used to skip an explicitly requested seven-day download. As with the
+seven-day files, ambiguous preceding boundary coverage stays unknown even while
+the supplied records are retained within the exact selected interval.
+
+These three 24-hour URLs were checked again on 15 November 2026 and returned
+`text/csv`. Offline fixtures cover their MODIS and VIIRS column schemas, numeric
+MODIS confidence, and VIIRS `low`/`nominal`/`high` values. The existing parser also
+accepts the supported API letter encodings.
+[NASA's FIRMS training documentation](https://appliedsciences.nasa.gov/sites/default/files/2025-07/FIRMS_Part1_QA_Spanish.pdf)
+states that bulk SHP/KML/CSV files are refreshed every 60 minutes. SHARP defaults
+to an hourly check; an explicit shorter check does not imply faster observation freshness. NRT availability is
+usually within three hours of acquisition on a best-effort basis. Exact source
+retrieval and acquisition times remain separate in the stored metadata.
 
 The official page says bulk CSV currently contains NRT; RT/URT are separately
 available through services including Area API/WMS, and are removed on NRT
@@ -75,7 +115,8 @@ records remain supported by the existing archive/AOI infrastructure; no current
 SNPP bulk coverage is invented.
 
 Each publication has one stable UTC anchor derived from the most recent
-available source generation, bounded by the cadence anchor. Provider
+available source generation, bounded by the batch's retrieval anchor. Refresh
+cadence never rounds away recent supplied acquisitions. Provider
 `Last-Modified` is used when supplied; otherwise the manifest explicitly identifies
 the retrieval-anchor assumption. Every 24h/48h/7d window uses that same anchor,
 with exact start-inclusive/end-exclusive boundaries. The API never recomputes a
@@ -108,14 +149,14 @@ the last-known-good dataset and quota knowledge.
 
 Default bounds:
 
-| Setting                           | Default        | Meaning                                                   |
-| --------------------------------- | -------------- | --------------------------------------------------------- |
-| `SHARP_GLOBAL_REFRESH_SECONDS`    | 900            | Refresh cadence; minimum 300 seconds                      |
-| `SHARP_GLOBAL_STALE_SECONDS`      | 3600           | Generation/publication freshness threshold                |
-| `SHARP_GLOBAL_RETAIN_SNAPSHOTS`   | 8              | Immutable snapshots, about two hours at 15-minute cadence |
-| `SHARP_GLOBAL_RETAIN_DAYS`        | 14             | Current source/day retention; minimum eight days          |
-| `SHARP_GLOBAL_MAX_SOURCE_RECORDS` | 1500000        | Explicit per-source import bound                          |
-| Download bound                    | 128 MiB/source | Oversized responses retain last-known-good data           |
+| Setting                           | Default        | Meaning                                                           |
+| --------------------------------- | -------------- | ----------------------------------------------------------------- |
+| `SHARP_GLOBAL_REFRESH_SECONDS`    | 3600           | Bulk refresh cadence; minimum 300 seconds                         |
+| `SHARP_GLOBAL_STALE_SECONDS`      | 3600           | Generation/publication freshness threshold                        |
+| `SHARP_GLOBAL_RETAIN_SNAPSHOTS`   | 8              | Retained immutable publications, including partial source updates |
+| `SHARP_GLOBAL_RETAIN_DAYS`        | 14             | Current source/day retention; minimum eight days                  |
+| `SHARP_GLOBAL_MAX_SOURCE_RECORDS` | 1500000        | Explicit per-source import bound                                  |
+| Download bound                    | 128 MiB/source | Oversized responses retain last-known-good data                   |
 
 Snapshot ID mappings consume storage proportional to retained snapshots times
 stored observations. Eight snapshots were chosen instead of a 96-snapshot
@@ -167,6 +208,9 @@ Provider-reported usage is reconciled through one coalesced status check per
 minute, counting other applications using the same key. Availability CSV is
 cached durably for an hour and shared across workers. A stale/unavailable status
 fails closed. Concurrency semaphores do not replace transaction reservations.
+Concurrent cold requests await the same persisted status-check lease and its
+completed reconciliation before reserving acquisition transactions. A pending
+check is not permission to proceed; timeout or provider failure closes the gate.
 
 HTTP 429 honors Retry-After and opens a persistent waiting circuit. Authentication
 rejection stops retrying until the configured wait/configuration change.
@@ -183,15 +227,17 @@ leases, immutable membership, restart recovery, partial-source failure,
 RT/NRT preference, midnight boundaries, antimeridian/polar preservation and
 quota persistence. They disable real background ingestion explicitly.
 
-`tools/benchmark-global-results.json` records bounded presentation and inspection
-fixture measurements, with all synthetic inputs identified. No production data
-or scientific result is synthesized. Live ingestion could not be measured in
-the restricted implementation environment because launching the explicit Python
-refresh command was denied by its process permissions. The normal backend
-owner remains the working ingestion path after startup outside that restriction.
-Actual NASA transaction consumption, live download latency, browser memory and
-navigation frame times remain unmeasured; backend fixture requests consume zero
-upstream transactions.
+`tools/benchmark-global-results.json` contains the earlier bounded presentation
+fixture measurement. Ordinary tests now write only temporary results. The
+[presentation contract](GLOBAL-PRESENTATION.md#reproduce-the-repaired-multi-source-measurement)
+documents an explicit repaired three-source ingestion benchmark, its command and
+actual measurements. All benchmark observations are identified as synthetic;
+no production data or scientific result is synthesized. Live ingestion was not
+measured during the offline regression run.
+Those earlier fixtures do not establish actual NASA transaction consumption,
+live download latency, browser memory or navigation frame times. Backend fixture
+requests consume zero upstream transactions. See the current presentation report
+for separately identified browser measurements.
 `tools/benchmark-global-client-results.json` additionally measures Node-based
 bounded tile selection and source preparation. It is not a browser frame-rate,
 memory, GPU-rendering or visual-acceptance measurement.
@@ -203,6 +249,24 @@ or EPSG:4326 tile matrix is silently substituted for canonical global observatio
 
 ## Published tile and inspection API
 
-The [presentation contract](GLOBAL-PRESENTATION.md) documents `GET /global/manifest?window=24h|48h|7d`, immutable `GET /global/tiles/{snapshot}/{window}/{z}/{x}/{y}.json`, and `POST /global/observations` plus `/global/observations/export`. This is a gzip GeoJSON spatial protocol benchmarked with an identified fixture, not MVT or a claim of an optimal global tile format. A deterministic global hierarchy owns each record once across seams; aggregates include snapshot, window, cell and display filters in their stable membership identity. Temporary filters, grouping and global sorting precede server pagination. Exports stream every match from that retained snapshot. Pruned snapshots return HTTP 410 rather than substituting new records.
+The [presentation contract](GLOBAL-PRESENTATION.md) documents the default
+`GET /global/manifest?window=24h` and immutable
+`GET /global/raster/{snapshot}/{window}/red-pixels-1/{z}/{x}/{y}.png` display path.
+One combined native MapLibre raster source draws 512-pixel transparent PNG tiles
+with nearest-neighbor resampling. Every matching canonical record contributes its
+reported position; overlapping marks may share a screen pixel. There are no
+global JavaScript observation collections, symbol buckets or feature-query loops.
+The PNG cache is bounded to 256 entries/32 MiB per serving process. Native browser
+tile caching and immutable HTTP caching keep navigation local. Two native source
+slots exist temporarily while staging a replacement generation; the previous
+slot is removed after the replacement has rendered.
 
-Each tile contains at most 1,024 symbols; dense close zoom tiles retain exact aggregates instead of dropping records. The client retains at most 24 visible tiles and 64 cached entries within 16 MiB. The server retains at most 256 tile entries/32 MiB. Immutable URLs have compression-aware ETags and one-year caching; manifests have a separate 30-second cache policy. `GET /global/status` reports sanitized current-process tile-cache counters alongside persisted ingestion metrics. The benchmark artifact records 100 concurrent warm readers, generated tiles, cache hits, elapsed time, response sizes and traced Python allocation peak. It leaves actual live transactions, browser memory and frame times explicitly unmeasured.
+`POST /global/observations` and `/global/observations/export` inspect and export
+the same immutable canonical membership. Search, filters, grouping and global
+sorting precede pagination. The older JSON aggregate and native point endpoints
+remain compatibility adapters for analytical workflows; their symbol and
+GeoJSON cache limits do not describe the default raster map. Pruned snapshots
+return HTTP 410 rather than substituting newer records. Immutable PNG URLs use
+content-derived ETags and one-year HTTP caching, while manifests have a separate
+short cache policy. `GET /global/status` exposes `rasterTileCache` counters beside
+persisted ingestion metrics.

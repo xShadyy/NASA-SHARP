@@ -2,7 +2,16 @@ import type { JumpToOptions, Map as MapLibreMap } from 'maplibre-gl'
 
 export type MapView = 'globe' | 'map'
 
-export const GLOBE_PROJECTION = 'vertical-perspective'
+// MapLibre's public globe mode transitions to Mercator at close zoom. Keeping a
+// fixed float32 sphere at street-level zoom displaces raster marks from their
+// canonical locations; the native globe transition avoids that precision loss.
+export const GLOBE_PROJECTION = 'globe'
+
+export function globeSurfaceVisible(map: Pick<MapLibreMap, 'getProjection' | 'getZoom'>) {
+  const type = map.getProjection().type
+  if (type === 'vertical-perspective') return true
+  return (type === GLOBE_PROJECTION || Array.isArray(type)) && map.getZoom() < 12
+}
 
 export const HOME_CENTER: [number, number] = [18, 12]
 export const MIN_ZOOM = -1

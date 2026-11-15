@@ -1,7 +1,5 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { gzipSync } from 'node:zlib'
-import { writeFileSync } from 'node:fs'
 import {
   visibleGlobalTiles,
   mergeGlobalTiles,
@@ -132,27 +130,13 @@ test('nonimagery observation and glyph errors do not become a misleading imagery
     'overlay',
   )
 })
-test('measure bounded client source preparation using explicit synthetic fixture', () => {
+test('bounded client source preparation preserves every canonical record', () => {
   const tiles: GlobalTileCollection[] = Array.from({ length: 24 }, (_, tile) => ({
     type: 'FeatureCollection',
     features: Array.from({ length: 1024 }, (_, index) =>
       observation(`${tile}:${index}`, 10 + index / 10000),
     ),
   }))
-  const before = process.memoryUsage().heapUsed,
-    start = performance.now()
   const merged = mergeGlobalTiles(tiles)
-  const elapsed = performance.now() - start
-  const payload = JSON.stringify({ type: 'FeatureCollection', features: merged.observations })
-  const measurements = {
-    kind: 'synthetic Node preparation fixture, not browser memory/frame-time or live-network measurements',
-    tileCount: 24,
-    sourceFeatures: merged.observations.length,
-    prepareMs: Number(elapsed.toFixed(3)),
-    approximateNodeHeapDeltaBytes: Math.max(0, process.memoryUsage().heapUsed - before),
-    sourceJsonBytes: Buffer.byteLength(payload),
-    sourceGzipBytes: gzipSync(payload).byteLength,
-  }
-  writeFileSync('tools/benchmark-global-client-results.json', JSON.stringify(measurements, null, 2))
   assert.equal(merged.observations.length, 24576)
 })

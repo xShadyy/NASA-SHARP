@@ -146,6 +146,15 @@ class GlobalStoreTests(unittest.TestCase):
         self.store.release("ingest", "first")
         self.assertFalse(self.store.lease("ingest", "third", 10, now=112))
 
+    def test_claiming_a_lease_prunes_expired_generations_without_removing_active_owners(self):
+        self.assertTrue(self.store.lease("global-raster-prewarm:old", "first", 10, now=100))
+        self.assertTrue(self.store.lease("global-ingestion", "active", 100, now=100))
+        self.assertTrue(self.store.lease("global-raster-prewarm:new", "second", 10, now=110))
+        with closing(self.store.connect()) as db:
+            owners = dict(db.execute("SELECT name,owner FROM global_leases"))
+        self.assertEqual(owners, {"global-ingestion": "active", "global-raster-prewarm:new": "second"})
+        self.assertFalse(self.store.lease("global-ingestion", "competing", 10, now=111))
+
     def test_parser_reuses_native_metadata_unknowns_and_rejects_error_text(self):
         rows = tuple(parse_bulk(HEADER + "52,12,2026-11-15,1100,Aqua,,,D,1.2,1.1,6.1NRT\n", SOURCE))
         self.assertEqual(len(rows), 1)

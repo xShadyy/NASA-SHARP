@@ -1,5 +1,5 @@
 import type { CustomLayerInterface, Map as MapLibreMap } from 'maplibre-gl'
-import { GLOBE_PROJECTION, HOME_CENTER } from './projection'
+import { globeSurfaceVisible, HOME_CENTER } from './projection'
 
 export const SKY_BACKGROUND_LAYER_ID = 'sky-background'
 export const SKY_BACKGROUND_IMAGE = '/sky/starmap-2020-4k.webp'
@@ -113,12 +113,20 @@ export function createSkyBackgroundLayer(options: {
   const radians = Math.PI / 180
 
   function release() {
-    if (context && resources) {
+    if (context && resources && !context.isContextLost()) {
       context.deleteProgram(resources.program)
       context.deleteTexture(resources.texture)
       context.deleteVertexArray(resources.vertexArray)
     }
     resources = null
+  }
+
+  function restored() {
+    // Context restoration invalidates every GL handle. Recreate once, rather
+    // than synchronously validating programs on every navigation frame.
+    resources = null
+    uploadPending = true
+    map?.triggerRepaint()
   }
 
   function fail(error: unknown) {
@@ -155,6 +163,7 @@ export function createSkyBackgroundLayer(options: {
     onAdd(attachedMap, gl) {
       map = attachedMap
       context = gl
+      map.getCanvas().addEventListener('webglcontextrestored', restored)
       map.getContainer().dataset.skyBackgroundEnabled = String(visible)
       if (visible) load()
     },
@@ -164,13 +173,13 @@ export function createSkyBackgroundLayer(options: {
         !visible ||
         failed ||
         gl.isContextLost() ||
-        map.getProjection().type !== GLOBE_PROJECTION ||
+        !globeSurfaceVisible(map) ||
         !image?.complete ||
         !image.naturalWidth
       )
         return
       try {
-        if (!resources || !gl.isProgram(resources.program)) {
+        if (!resources) {
           release()
           resources = createResources(gl)
           uploadPending = true
@@ -262,6 +271,7 @@ export function createSkyBackgroundLayer(options: {
       map.triggerRepaint()
     },
     onRemove() {
+      map?.getCanvas().removeEventListener('webglcontextrestored', restored)
       if (image) {
         image.onload = null
         image.onerror = null
@@ -297,9 +307,5 @@ function imageWithinTextureLimit(
 
 export function skyBackgroundVisible(map: MapLibreMap) {
   const { skyBackground, skyBackgroundEnabled } = map.getContainer().dataset
-  return (
-    map.getProjection().type === GLOBE_PROJECTION &&
-    skyBackgroundEnabled !== 'false' &&
-    skyBackground === 'ready'
-  )
+  return globeSurfaceVisible(map) && skyBackgroundEnabled !== 'false' && skyBackground === 'ready'
 }

@@ -134,3 +134,14 @@
   width: 100%;
   accent-color: var(--brand-accent);
 }
+.layer-setting-row > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.layer-setting-row > div > small {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}

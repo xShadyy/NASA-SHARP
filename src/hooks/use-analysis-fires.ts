@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useEffectEvent, useMemo, useState } from 'react'
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import type { AnalysisArea } from '@/lib/analysis-area'
 import {
@@ -10,12 +10,17 @@ import {
   type AnalysisRange,
 } from '@/lib/analysis-activity'
 import type { FireFeature } from '@/lib/fire-severity'
+import type { FrozenSelection, ObservationFilters } from '@/lib/investigation'
 import {
   analysisSelectionKey,
   fetchAnalysisSelection,
   fetchAnalysisMap,
   type AnalysisSelectionData,
 } from '@/lib/analysis-api'
+import {
+  subscribeAnalysisSourceRecovery,
+  type AnalysisSourceRecovery,
+} from '@/lib/observation-client'
 
 export type AnalysisFireStatus =
   'idle' | 'loading' | 'ready' | 'partial' | 'unavailable' | 'stale' | 'error'
@@ -45,6 +50,7 @@ export function useAnalysisFires(
   area: AnalysisArea | null,
   range: AnalysisRange,
   focusedDay: string | null = null,
+  observationScope: { filters?: ObservationFilters; selection?: FrozenSelection } = {},
 ) {
   const geometry = area?.sourceGeometry ?? area?.geometry
   const client = useQueryClient()
@@ -56,7 +62,8 @@ export function useAnalysisFires(
         : ['analysis-selection', 'idle'],
     [area, geometry, range],
   )
-  const dateline = !!area && crossesDateline(area.fullBounds ?? area.bounds)
+  const dateline =
+    !!area && area.type !== 'country' && crossesDateline(area.fullBounds ?? area.bounds)
   const days = (utcMidnight(range.end) - utcMidnight(range.start)) / 86400000 + 1
   const historical = days > MAX_ANALYSIS_DAYS
   const invalidRange =
@@ -84,11 +91,52 @@ export function useAnalysisFires(
     refetchOnReconnect: false,
     refetchOnMount: false,
   })
-  const dayRange = focusRange(range, focusedDay)
+  const data = area && !dateline && !invalidRange ? (query.data ?? null) : null
+  const filters = observationScope.filters ?? {}
+  const selection = observationScope.selection?.global ? undefined : observationScope.selection
+  const mapDay = focusedDay ?? filters.day ?? null
+  const dayRange = focusRange(range, mapDay)
+  const dense = data?.meta.representation === 'bounded-display-aggregates'
+  const hasObservationFilters = Object.values(filters).some(
+    (value) =>
+      value !== undefined &&
+      value !== '' &&
+      value !== false &&
+      (!Array.isArray(value) || value.length > 0),
+  )
+  const historicalFocus = historical && !!mapDay
+  const scopedMap =
+    historicalFocus ||
+    !!selection?.selectionToken ||
+    !!selection?.observationIds?.length ||
+    (dense && (!!mapDay || hasObservationFilters))
+  const mapOptions = {
+    ...filters,
+    day: mapDay ?? undefined,
+    sourceGeneration:
+      selection?.sourceGeneration ?? (historicalFocus ? undefined : data?.meta.sourceGeneration),
+    selectionToken: selection?.selectionToken,
+    observationIds: selection?.selectionToken ? undefined : selection?.observationIds,
+  }
   const focusedMap = useQuery({
-    queryKey: ['analysis-map-focus', area?.id, geometry, dayRange],
-    queryFn: ({ signal }) => fetchAnalysisMap(area!.id, geometry!, dayRange, signal),
-    enabled: !!area && historical && !!focusedDay && !dateline && !invalidRange,
+    queryKey: [
+      'analysis-map-focus',
+      area?.id,
+      geometry,
+      historicalFocus ? dayRange : range,
+      selection?.query,
+      mapOptions,
+    ],
+    queryFn: ({ signal }) =>
+      fetchAnalysisMap(
+        area!.id,
+        geometry!,
+        historicalFocus ? dayRange : range,
+        signal,
+        mapOptions,
+        selection?.query,
+      ),
+    enabled: !!area && scopedMap && !dateline && !invalidRange,
     staleTime: 5 * 60_000,
     gcTime: 5 * 60_000,
     retry: false,
@@ -96,9 +144,29 @@ export function useAnalysisFires(
     refetchOnReconnect: false,
     refetchOnMount: false,
   })
-  const data = area && !dateline && !invalidRange ? (query.data ?? null) : null
-  const meta =
-    historical && focusedDay ? (focusedMap.data?.meta ?? data?.meta ?? null) : (data?.meta ?? null)
+  const restoreMapSource = useEffectEvent((recovery: AnalysisSourceRecovery) => {
+    if (!area || !geometry || dateline || invalidRange) return
+    const recoveredQuery = JSON.stringify(recovery.query)
+    if (recoveredQuery === key[2]) {
+      if (recovery.metadata.sourceGeneration !== query.data?.meta.sourceGeneration)
+        void query.refetch({ cancelRefetch: false })
+    } else if (
+      scopedMap &&
+      recoveredQuery ===
+        (selection?.query
+          ? JSON.stringify(selection.query)
+          : analysisSelectionKey(area.id, geometry, historicalFocus ? dayRange : range)[2]) &&
+      recovery.metadata.sourceGeneration !== focusedMap.data?.meta?.sourceGeneration
+    )
+      void focusedMap.refetch({ cancelRefetch: false })
+  })
+  useEffect(
+    () => subscribeAnalysisSourceRecovery((recovery) => restoreMapSource(recovery)),
+    [],
+  )
+  const meta = scopedMap
+    ? (focusedMap.data?.meta ?? data?.meta ?? null)
+    : (data?.meta ?? null)
   const expires = Date.parse(meta?.expiresAt ?? '')
   useEffect(() => {
     if (!Number.isFinite(expires)) return
@@ -110,8 +178,8 @@ export function useAnalysisFires(
     return () => clearTimeout(timer)
   }, [expires])
   const stale = meta?.freshness === 'stale' || (Number.isFinite(expires) && expires <= clock)
-  const focusedLoading = historical && !!focusedDay && focusedMap.isFetching
-  const focusedError = historical && !!focusedDay && focusedMap.isError
+  const focusedLoading = scopedMap && (focusedMap.isFetching || focusedMap.isPending)
+  const focusedError = scopedMap && focusedMap.isError
   const loading =
     !!area && !dateline && !invalidRange && (query.isFetching || query.isPending || focusedLoading)
   const status: AnalysisFireStatus = !area
@@ -152,20 +220,22 @@ export function useAnalysisFires(
                     : ''
   return {
     status,
-    features: historical
-      ? focusedDay
-        ? (focusedMap.data?.features ?? EMPTY_FEATURES)
-        : EMPTY_FEATURES
-      : (data?.features ?? EMPTY_FEATURES),
+    features: scopedMap
+      ? (focusedMap.data?.features ?? EMPTY_FEATURES)
+      : historical
+        ? EMPTY_FEATURES
+        : (data?.features ?? EMPTY_FEATURES),
     activity: data?.activity ?? null,
     meta: stale && meta ? { ...meta, freshness: 'stale' } : meta,
     message,
-    count: historical ? (focusedMap.data?.features.length ?? 0) : (data?.features.length ?? 0),
+    count: scopedMap
+      ? (focusedMap.data?.meta?.matchingObservations ?? focusedMap.data?.features.length ?? 0)
+      : (data?.meta.matchingObservations ?? data?.features.length ?? 0),
     appliedRange: data?.activity.range ?? range,
     appliedAreaName: data?.activity.areaName ?? area?.name ?? '',
     retry: () => {
       if (area && !dateline && !invalidRange) {
-        if (historical && focusedDay) void focusedMap.refetch()
+        if (scopedMap) void focusedMap.refetch()
         else void query.refetch()
       }
     },

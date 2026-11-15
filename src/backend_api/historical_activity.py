@@ -24,7 +24,7 @@ from harmonize import (
     AFTERNOON_IDS, CELL_SIZE_M, EARTH_RADIUS_M, METHOD_VERSION,
     CanonicalStore, Coverage, Detection, Filters, RejectedQuery, cell_id, detection_from_row,
     filters_from_query, geometry_bbox, harmonized_daily_activity,
-    load_coverage_csv, observation_kept, parse_utc_interval, prepared_area, _row_kept,
+    load_coverage_csv, observation_kept, parse_utc_interval, prepared_area, _row_kept, geometry_supports_area,
 )
 
 SCHEMA_VERSION = 1
@@ -96,23 +96,29 @@ def load_archive(path: Path | None = None):
     if not configured or not Path(configured).is_file():
         return None, None
     file = Path(configured)
-    key = (str(file.resolve()), file.stat().st_mtime_ns, file.stat().st_size)
-    with _LOCK:
-        if key in _CACHE:
-            _CACHE.move_to_end(key)
-            return _CACHE[key]
     with closing(sqlite3.connect(f"file:{file.as_posix()}?mode=ro", uri=True)) as db:
+        # Pin metadata, detections and coverage to one SQLite snapshot even if
+        # an importer commits a replacement while the reader is iterating.
+        db.execute("BEGIN")
         manifest = json.loads(db.execute("SELECT payload FROM metadata WHERE id=1").fetchone()[0])
         if manifest.get("methodVersion") != METHOD_VERSION:
             raise ValueError("Historical archive method version is incompatible.")
+        key = (str(file.resolve()), manifest["generation"])
+        with _LOCK:
+            if key in _CACHE:
+                _CACHE.move_to_end(key)
+                return manifest, _CACHE[key][1]
         rows = []
         for payload, in db.execute("SELECT payload FROM detections ORDER BY acquired,id"):
             item = json.loads(payload)
             item["acquired_at"] = datetime.fromisoformat(item["acquired_at"])
             rows.append(Detection(**item))
         coverage = tuple(Coverage(date.fromisoformat(d), p, s) for d, p, s in db.execute("SELECT day,platform,state FROM coverage"))
-    result = manifest, CanonicalStore(tuple(rows), coverage, f"Regional archive {manifest['datasetVersion']}")
+    result = manifest, CanonicalStore(tuple(rows), coverage, f"Regional archive {manifest['datasetVersion']}", coverage_geometry=manifest["geometry"], generation=manifest["generation"])
     with _LOCK:
+        for previous in list(_CACHE):
+            if previous[0] == key[0] and previous != key:
+                del _CACHE[previous]
         _CACHE[key] = result
         while len(_CACHE) > 2:
             _CACHE.popitem(last=False)
@@ -120,18 +126,30 @@ def load_archive(path: Path | None = None):
 
 
 def supports_geometry(manifest, geometry):
-    if geometry_key(manifest["geometry"]) == geometry_key(geometry):
-        return True
-    # A rectangular import domain can safely provide coverage to any contained AOI.
-    bounds = geometry_bbox(manifest["geometry"])
-    rings = manifest["geometry"].get("coordinates", [])
-    if manifest["geometry"].get("type") != "Polygon" or len(rings) != 1:
-        return False
-    corners = {(bounds[0], bounds[1]), (bounds[0], bounds[3]), (bounds[2], bounds[1]), (bounds[2], bounds[3])}
-    if set(tuple(p) for p in rings[0]) != corners:
-        return False
-    selected = geometry_bbox(geometry)
-    return selected is not None and bounds[0] <= selected[0] <= selected[2] <= bounds[2] and bounds[1] <= selected[1] <= selected[3] <= bounds[3]
+    return geometry_supports_area(manifest["geometry"], geometry)
+
+
+def automatic_archive_path(query, root=None):
+    configured = os.environ.get("SHARP_HISTORY_CACHE_DIR", "").strip()
+    base = Path(configured) if configured else Path(root) if root else Path(os.environ.get("SHARP_GLOBAL_DB_PATH", Path(__file__).parent / "data" / "global-hotspots.sqlite")).parent / "history"
+    return base / (geometry_key(query["aoi"]["geometry"]) + ".sqlite")
+
+
+def load_query_archive(query, root=None):
+    imported, existing = load_archive()
+    if imported is not None and supports_geometry(imported, query["aoi"]["geometry"]):
+        first, last = parse_utc_interval(query["interval"])
+        complete = {record.day for record in existing.coverage if record.state == "complete" and record.platform in AFTERNOON_IDS}
+        if all(day in complete for day in day_range(first, last)):
+            return imported, existing
+    automatic = automatic_archive_path(query, root)
+    if automatic.is_file():
+        manifest, store = load_archive(automatic)
+        if manifest is not None and supports_geometry(manifest, query["aoi"]["geometry"]):
+            return manifest, store
+    if imported is not None and supports_geometry(imported, query["aoi"]["geometry"]):
+        return imported, existing
+    return None, None
 
 
 def quantile(values, fraction):
@@ -144,10 +162,12 @@ def quantile(values, fraction):
 
 
 def method_evidence(query, store):
+    if store.calibration and store.calibration.get("evidence"):
+        return {**store.calibration["evidence"], "queryId": query.get("id")}
     start, end = parse_utc_interval(query.get("interval"))
     filters = filters_from_query(query.get("filters", {}))
     geometry = query["aoi"]["geometry"]
-    activity = harmonized_daily_activity(store.rows, geometry, start, end, store.coverage, filters)
+    activity = harmonized_daily_activity(store.rows, geometry, start, end, store.coverage, filters, store.coverage_geometry, store.calibration)
     area = prepared_area(geometry)
     cells = defaultdict(lambda: {"aqua": set(), "viirs": set()})
     for row in store.rows:
@@ -182,7 +202,7 @@ def history_document(query, options=None, now=None, archive=None):
     manifest, store = archive if archive is not None else load_archive()
     empty = {"queryId": query.get("id"), "methodVersion": METHOD_VERSION, "status": "unavailable", "unit": "active-cell-days", "months": [], "daily": [], "baseline": None, "comparison": None}
     if store is None:
-        return {**empty, "reason": "No regional historical reporting dataset has been loaded."}
+        return {**empty, "reason": "Historical comparison is unavailable because past-year reporting data has not been imported for this area."}
     geometry = query["aoi"]["geometry"]
     if not supports_geometry(manifest, geometry):
         return {**empty, "reason": "Historical coverage is unavailable for this region. Choose the imported region or an area inside its rectangular coverage domain.", "datasetVersion": manifest["datasetVersion"]}
@@ -194,7 +214,7 @@ def history_document(query, options=None, now=None, archive=None):
     full_start = date(min(first.year, start.year), 1, 1)
     full_end = min(date(max(last.year, end.year - int(end.month == 1 and end.day == 1)) + 1, 1, 1), now.date() + timedelta(days=1))
     filters = filters_from_query(query.get("filters", {}))
-    result = harmonized_daily_activity(store.rows, geometry, full_start, full_end, store.coverage, filters)
+    result = harmonized_daily_activity(store.rows, geometry, full_start, full_end, store.coverage, filters, manifest["geometry"])
     daily = {d.day: {"date": d.day.isoformat(), "value": d.count, "state": "partial" if d.day == now.date() and d.state == "complete" else d.state, "coverage": d.coverage} for d in result.days}
     grouped = defaultdict(list)
     for day, value in daily.items():
@@ -303,4 +323,6 @@ def recurrence_document(query, store):
                                         "selectedDays": (end - start).days}})
     return {"queryId": query.get("id"), "type": "FeatureCollection", "features": features,
             "gridSizeM": CELL_SIZE_M, "unit": "distinct UTC dates with reported detections",
+            "representation": "occupied-cells-only",
+            "emptyCellMeaning": "No reported detections or unavailable reporting support. Blank areas do not establish absence of fire.",
             "coverage": "Reporting-window completeness does not establish cell observation or continuous burning."}

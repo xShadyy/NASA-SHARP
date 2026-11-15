@@ -975,3 +975,121 @@ input:focus-visible {
   color: var(--text);
   font-size: 12px;
 }
+.explorer-stage[data-investigation-layout='split'] {
+  display: grid;
+  grid-template-columns:
+    minmax(400px, 1fr) 8px
+    minmax(320px, min(var(--map-share, 45%), calc(100% - 408px)));
+}
+.explorer-stage[data-investigation-layout='split'] > .map-workspace {
+  position: relative;
+  inset: auto;
+  grid-column: 3;
+  grid-row: 1;
+  min-width: 0;
+  height: 100%;
+}
+.analytics-workspace {
+  position: relative;
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+.analytics-workspace[hidden] {
+  display: none;
+}
+.investigation-divider {
+  grid-column: 2;
+  grid-row: 1;
+  background: var(--border);
+  cursor: col-resize;
+  touch-action: none;
+  z-index: 9;
+}
+.investigation-divider:is(:hover, :focus-visible) {
+  background: var(--map-accent);
+  outline: none;
+}
+.investigation-mobile-tabs {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 42px;
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  align-items: center;
+  z-index: 12;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.investigation-mobile-tabs .ui-button {
+  height: 30px;
+}
+.investigation-mobile-tabs [aria-selected='true'] {
+  background: var(--contrast);
+  color: var(--contrast-foreground);
+}
+.explorer-stage[data-investigation-layout='mobile'] > .map-workspace,
+.explorer-stage[data-investigation-layout='mobile'] > .analytics-workspace {
+  position: absolute;
+  inset: 42px 0 0;
+  height: auto;
+}
+.explorer-stage[data-investigation-layout='mobile'][data-investigation-tab='analytics']
+  > .map-workspace {
+  visibility: hidden;
+  pointer-events: none;
+}
+@media print {
+  .investigation-divider,
+  .investigation-mobile-tabs {
+    display: none !important;
+  }
+  .analytics-workspace {
+    position: absolute !important;
+    inset: 0 !important;
+    width: 100% !important;
+    overflow: visible !important;
+  }
+}
+
+.app-shell[data-startup-pending] {
+  visibility: hidden;
+}
+.startup-loading {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  padding: 28px;
+  color: var(--text);
+  background: var(--surface);
+  text-align: center;
+}
+.startup-loading img {
+  width: 120px;
+  height: 64px;
+  object-fit: contain;
+}
+.startup-loading p {
+  max-width: 460px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+.startup-spinner {
+  width: 32px;
+  height: 32px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .startup-spinner {
+    animation-duration: 2s;
+  }
+}

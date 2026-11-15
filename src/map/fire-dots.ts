@@ -1,3 +1,4 @@
+import { apiUrl } from '@/lib/api-config'
 import type { Feature, FeatureCollection, Polygon } from 'geojson'
 import {
   Popup,
@@ -19,6 +20,8 @@ import { FIRE_LAYER_BEFORE_ID } from '@/map/geography'
 import { matchesObservationFilters } from '@/lib/observation-selection'
 import { createObservationPopup, type FrozenObservationSelection } from './observation-popup'
 import { createDraggablePopup } from './draggable-popup'
+import { appendObservationScience } from './popup-presentation'
+import type { InvestigationScope } from '@/lib/investigation'
 import {
   FIRE_POINT_SOURCE,
   FIRE_FOOTPRINT_SOURCE,
@@ -34,15 +37,18 @@ import {
 export type FireDisplay = {
   endUtcExclusive?: string
   focusedDay?: string | null
-  query?: unknown
+  query?: InvestigationScope['query']
   sourceGeneration?: string
   queryIdentity?: string
   observationFilters?: Record<string, unknown>
   selectedObservationId?: string | null
   selectedObservationIds?: string[]
   disableClustering?: boolean
+  disableFootprints?: boolean
 }
 export type FireInvestigationSelection = {
+  query?: InvestigationScope['query']
+  global?: import('@/lib/investigation').GlobalSelection
   selectionToken?: string
   observationIds?: string[]
   sourceGeneration?: string
@@ -86,9 +92,10 @@ export function createFireDotController(map: MapLibreMap, options: FireControlle
   let footprintKey = ''
   let clusterEnabled = false
   let clusteringAllowed = true
-  let activeCluster: MapGeoJSONFeature | null = null
+  let footprintsAllowed = true
+  let activeCluster: MapGeoJSONFeature | FireFeature | null = null
   let groupView: ReturnType<typeof createObservationPopup> | null = null
-  let investigationQuery: unknown
+  let investigationQuery: InvestigationScope['query'] | undefined
   let sourceGeneration: string | undefined
   let queryIdentity: string | undefined
   let selectionAbort: AbortController | null = null
@@ -110,7 +117,7 @@ export function createFireDotController(map: MapLibreMap, options: FireControlle
     new Popup({
       closeButton: true,
       closeOnClick: false,
-      maxWidth: '460px',
+      maxWidth: '320px',
       className: 'fire-popup-wrap',
     })
   const popupDragging = createDraggablePopup(popup, map)
@@ -146,6 +153,7 @@ export function createFireDotController(map: MapLibreMap, options: FireControlle
         clusterRadius: 22,
         clusterMaxZoom: 11,
         clusterProperties: {
+          detectionCount: ['+', ['coalesce', ['get', 'detectionCount'], 1]],
           maxFrp: ['max', ['coalesce', ['get', 'frpMw'], -1]],
           latestEpoch: ['max', ['get', 'acquiredEpoch']],
           earliestEpoch: ['min', ['get', 'acquiredEpoch']],
@@ -164,7 +172,9 @@ export function createFireDotController(map: MapLibreMap, options: FireControlle
       })
     for (const layer of fireLayerSpecifications()) {
       if (map.getLayer(layer.id)) continue
-      layer.filter = displayFilter(layer.id, layer.filter)
+      const filter = displayFilter(layer.id, layer.filter)
+      if (filter) layer.filter = filter
+      else delete layer.filter
       map.addLayer(layer, map.getLayer(FIRE_LAYER_BEFORE_ID) ? FIRE_LAYER_BEFORE_ID : undefined)
     }
   }
@@ -186,7 +196,12 @@ export function createFireDotController(map: MapLibreMap, options: FireControlle
       return ['==', ['get', 'utcDay'], '__no-clusters-during-focus__']
     if (!focusedDay && !filteredIds) return base
     const conditions: unknown[] = ['all', ['!', ['has', 'point_count']]]
-    if (focusedDay) conditions.push(['==', ['get', 'utcDay'], focusedDay])
+    if (focusedDay)
+      conditions.push([
+        'any',
+        ['==', ['get', 'displayFiltersApplied'], true],
+        ['==', ['get', 'utcDay'], focusedDay],
+      ])
     if (filteredIds) conditions.push(['in', ['get', 'id'], ['literal', filteredIds]])
     return conditions as FilterSpecification
   }
@@ -207,8 +222,9 @@ export function createFireDotController(map: MapLibreMap, options: FireControlle
         ? data
             .filter(
               (feature) =>
-                (!group || group.has(feature.properties.id)) &&
-                matchesObservationFilters(feature, observationFilters),
+                feature.properties.displayFiltersApplied === true ||
+                ((!group || group.has(feature.properties.id)) &&
+                  matchesObservationFilters(feature, observationFilters)),
             )
             .map((feature) => feature.properties.id)
         : null
@@ -251,7 +267,7 @@ export function createFireDotController(map: MapLibreMap, options: FireControlle
 
   function refreshFootprints() {
     if (disposed) return
-    if (map.getZoom() < FOOTPRINT_MIN_ZOOM) {
+    if (!footprintsAllowed || map.getZoom() < FOOTPRINT_MIN_ZOOM) {
       clearFootprints({
         state: 'hidden',
         count: 0,
@@ -266,6 +282,7 @@ export function createFireDotController(map: MapLibreMap, options: FireControlle
       north = bounds.getNorth()
     const visible: FireFeature[] = []
     for (const feature of data) {
+      if (displayCell(feature)) continue
       if (focusedDay && feature.properties.utcDay !== focusedDay) continue
       if (filteredIdSet && !filteredIdSet.has(feature.properties.id)) continue
       if (!firePixelDimensions(feature)) continue
@@ -407,15 +424,30 @@ export function createFireDotController(map: MapLibreMap, options: FireControlle
   }
 
   function mountPopup(anchor: [number, number], root: HTMLElement) {
+    const compact = root.classList.contains('fire-popup-compact')
+    popup.setMaxWidth(compact ? '240px' : '320px')
     popup.setLngLat(anchor).setDOMContent(root)
     if (!popup.isOpen()) popup.addTo(map)
+    popup.getElement()?.classList.toggle('fire-popup-compact-wrap', compact)
+    popup.getElement()?.classList.toggle('fire-popup-individual-wrap', !compact)
     popupDragging.refresh()
   }
 
+  function displayCell(feature: FireFeature | MapGeoJSONFeature) {
+    const properties = feature.properties
+    return properties?.displayAggregate === true && typeof properties.displayCell === 'string'
+      ? properties.displayCell
+      : null
+  }
+
   function show(feature: FireFeature, detailed: boolean) {
+    if (displayCell(feature)) {
+      void showCluster(feature, !detailed)
+      return
+    }
     const properties = feature.properties
     const root = document.createElement('div')
-    root.className = 'fire-popup'
+    root.className = 'fire-popup fire-popup-individual'
     root.style.maxHeight = '65vh'
     root.style.overflowY = 'auto'
     const title = document.createElement('strong')
@@ -433,6 +465,7 @@ export function createFireDotController(map: MapLibreMap, options: FireControlle
       [properties.sensor, firePlatformLabel(properties.platform)].filter(Boolean).join(' / '),
     )
     if (detailed) {
+      appendObservationScience(root, properties)
       const ageNow = (Date.now() - Date.parse(properties.acquiredAt)) / 3600000
       field(
         root,
@@ -512,26 +545,34 @@ export function createFireDotController(map: MapLibreMap, options: FireControlle
         })
         root.append(back)
       }
+      if (options.onOpenAnalytics) {
+        const analytics = document.createElement('button')
+        analytics.type = 'button'
+        analytics.textContent = 'Open in Area Analytics'
+        analytics.addEventListener('click', () =>
+          options.onOpenAnalytics?.({
+            filters: { observationId: properties.id },
+            query: investigationQuery,
+            sourceGeneration,
+            queryIdentity,
+          }),
+        )
+        root.append(analytics)
+      }
     }
     mountPopup(feature.geometry.coordinates as [number, number], root)
   }
 
-  async function showCluster(feature: MapGeoJSONFeature, preview = false) {
+  async function showCluster(feature: MapGeoJSONFeature | FireFeature, preview = false) {
     if (feature.geometry.type !== 'Point') return
     const anchor = feature.geometry.coordinates as [number, number]
     const properties = feature.properties ?? {}
     if (preview) {
       const root = document.createElement('div')
-      root.className = 'fire-popup'
+      root.className = 'fire-popup fire-popup-compact'
       const title = document.createElement('strong')
-      title.textContent = 'Aggregated satellite hotspots'
+      title.textContent = 'Satellite hotspots'
       root.append(title)
-      field(root, 'Observations', String(properties.point_count))
-      field(
-        root,
-        'Maximum FRP',
-        Number(properties.maxFrp) >= 0 ? Number(properties.maxFrp).toFixed(1) + ' MW' : 'Unknown',
-      )
       mountPopup(anchor, root)
       return
     }
@@ -584,33 +625,61 @@ export function createFireDotController(map: MapLibreMap, options: FireControlle
     groupView.render('Resolving selected observation membership…')
     mountPopup(anchor, groupView.root)
     try {
-      const source = map.getSource(FIRE_POINT_SOURCE) as GeoJSONSource | undefined
-      if (!source) throw new Error('The observation source is unavailable.')
       const seen = new Set<string>()
-      const count = Number(properties.point_count)
-      for (let offset = 0; offset < count; offset += 500) {
-        const leaves = await source.getClusterLeaves(
-          Number(properties.cluster_id),
-          Math.min(500, count - offset),
-          offset,
-        )
-        if (disposed || signal.aborted || current !== popupRevision || !popupPinned) return
-        for (const leaf of leaves) {
-          const id = String(leaf.properties?.id ?? leaf.id ?? '')
-          const original = byId.get(id)
-          if (original && !seen.has(id)) {
-            seen.add(id)
-            selection.members.push(original)
+      const cell = displayCell(feature)
+      const count = cell ? 1 : Number(properties.point_count)
+      if (cell) {
+        const original = byId.get(String(properties.id ?? feature.id ?? ''))
+        if (original) selection.members.push(original)
+      } else {
+        const source = map.getSource(FIRE_POINT_SOURCE) as GeoJSONSource | undefined
+        if (!source) throw new Error('The observation source is unavailable.')
+        for (let offset = 0; offset < count; offset += 500) {
+          const leaves = await source.getClusterLeaves(
+            Number(properties.cluster_id),
+            Math.min(500, count - offset),
+            offset,
+          )
+          if (disposed || signal.aborted || current !== popupRevision || !popupPinned) return
+          for (const leaf of leaves) {
+            const id = String(leaf.properties?.id ?? leaf.id ?? '')
+            const original = byId.get(id)
+            if (original && !seen.has(id)) {
+              seen.add(id)
+              selection.members.push(original)
+            }
           }
+          await new Promise<void>((resolve) => setTimeout(resolve, 0))
         }
-        await new Promise<void>((resolve) => setTimeout(resolve, 0))
       }
       if (selection.members.length !== count)
         throw new Error('The observation source changed. Select the group again.')
+      if (!investigationQuery && selection.members.some((member) => displayCell(member)))
+        throw new Error('This observation group needs its original investigation scope.')
       groupView.render(investigationQuery ? 'Saving selected membership…' : '')
       if (investigationQuery) {
         for (let offset = 0; offset < selection.members.length; offset += 1000) {
-          const response = await fetch('/firms-api/analysis/selections', {
+          const members = selection.members.slice(offset, offset + 1000)
+          const observationIds = members
+            .filter((member) => !displayCell(member))
+            .map((member) => member.properties.id)
+          const displayCells = members.flatMap((member) => {
+            const key = displayCell(member)
+            return key ? [key] : []
+          })
+          let displayFilters: Record<string, unknown> | undefined
+          if (displayCells.length) {
+            const aggregate = members.find((member) => displayCell(member))!
+            const value = aggregate.properties.displayFilters
+            const parsed = typeof value === 'string' ? JSON.parse(value) : value
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
+              displayFilters = parsed as Record<string, unknown>
+            else if (aggregate.properties.displayFiltersApplied === true)
+              throw new Error(
+                'The observation group filters are unavailable. Select the group again.',
+              )
+          }
+          const response = await fetch(apiUrl('/analysis/selections'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             signal,
@@ -619,9 +688,9 @@ export function createFireDotController(map: MapLibreMap, options: FireControlle
               options: {
                 selectionToken: selection.selectionToken,
                 sourceGeneration,
-                observationIds: selection.members
-                  .slice(offset, offset + 1000)
-                  .map((member) => member.properties.id),
+                ...(observationIds.length ? { observationIds } : {}),
+                ...(displayCells.length ? { displayCells } : {}),
+                ...(displayFilters ? { displayFilters } : {}),
               },
             }),
           })
@@ -690,8 +759,14 @@ export function createFireDotController(map: MapLibreMap, options: FireControlle
       leave()
       return
     }
+    if (displayCell(found[0])) {
+      state(selected, 'selected', false)
+      selected = null
+      void showCluster(found[0])
+      return
+    }
     state(selected, 'selected', false)
-    overlaps = found
+    overlaps = found.filter((feature) => !displayCell(feature))
     activeCluster = null
     overlapIndex = 0
     selected = found[0].properties.id
@@ -714,8 +789,20 @@ export function createFireDotController(map: MapLibreMap, options: FireControlle
     ensure()
     state(hovered, 'hover', true)
     state(selected, 'selected', true)
+    reconcileRequestedObservation()
+  }
+  function reconcileRequestedObservation() {
+    if (!requestedObservationId) return
+    const next = byId.has(requestedObservationId) ? requestedObservationId : null
+    if (selected !== next) state(selected, 'selected', false)
+    selected = next
+    state(selected, 'selected', true)
+  }
+  function onSourceData(event: { sourceId?: string }) {
+    if (event.sourceId === FIRE_POINT_SOURCE) reconcileRequestedObservation()
   }
   map.on('style.load', onStyleLoad)
+  map.on('sourcedata', onSourceData)
   map.on('mousemove', onMove)
   map.on('click', onClick)
   map.on('moveend', refreshFootprints)
@@ -743,10 +830,13 @@ export function createFireDotController(map: MapLibreMap, options: FireControlle
       ensure()
       applyDisplayFilters()
       sourceData(FIRE_POINT_SOURCE, pointCollection)
+      reconcileRequestedObservation()
       updateClustering()
       refreshFootprints()
     },
     setDisplay(display: FireDisplay) {
+      const footprintsChanged = footprintsAllowed !== !display.disableFootprints
+      footprintsAllowed = !display.disableFootprints
       const clusteringChanged = clusteringAllowed !== !display.disableClustering
       clusteringAllowed = !display.disableClustering
       investigationQuery = display.query
@@ -772,7 +862,7 @@ export function createFireDotController(map: MapLibreMap, options: FireControlle
       }
       if (display.endUtcExclusive) referenceTime = display.endUtcExclusive
       const day = display.focusedDay ?? null
-      if (day === focusedDay && !filtersChanged && !clusteringChanged) return
+      if (day === focusedDay && !filtersChanged && !clusteringChanged && !footprintsChanged) return
       focusedDay = day
       applyDisplayFilters()
       updateClustering()
@@ -803,6 +893,7 @@ export function createFireDotController(map: MapLibreMap, options: FireControlle
       disposed = true
       if (frame) cancelAnimationFrame(frame)
       map.off('style.load', onStyleLoad)
+      map.off('sourcedata', onSourceData)
       map.off('mousemove', onMove)
       map.off('click', onClick)
       map.off('moveend', refreshFootprints)

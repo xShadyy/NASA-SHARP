@@ -67,7 +67,7 @@ export function queryObservationSelection(
   features: readonly FireFeature[],
   filters: ObservationSelectionFilters,
 ) {
-  const search = filters.search.trim().toLowerCase()
+  const search = filters.search.trim().toLowerCase().replaceAll('-', ' ')
   const start = filters.start ? Date.parse(filters.start + 'Z') : -Infinity
   const end = filters.end ? Date.parse(filters.end + 'Z') : Infinity
   const minimum = filters.frpMin === '' ? -Infinity : Number(filters.frpMin)
@@ -88,6 +88,7 @@ export function queryObservationSelection(
       ]
         .join(' ')
         .toLowerCase()
+        .replaceAll('-', ' ')
         .includes(search)
     )
       return false
@@ -129,6 +130,11 @@ export function queryObservationSelection(
 }
 
 export function matchesObservationFilters(feature: FireFeature, filters: Record<string, unknown>) {
+  if (
+    typeof filters.acquisitionHour === 'number' &&
+    new Date(feature.properties.acquiredAt).getUTCHours() !== filters.acquisitionHour
+  )
+    return false
   const local = emptyObservationFilters()
   for (const key of ['search', 'platform', 'sensor', 'dayNight'] as const)
     if (typeof filters[key] === 'string') local[key] = filters[key] as string

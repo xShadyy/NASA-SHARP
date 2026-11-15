@@ -160,12 +160,22 @@
   border-radius: 6px;
   background: var(--surface);
   color: var(--text);
-  width: min(460px, calc(100vw - 32px));
+  width: fit-content;
+  max-width: min(320px, calc(100vw - 32px));
   box-sizing: border-box;
   user-select: text;
   -webkit-user-select: text;
   cursor: auto;
   font-family: 'Fira Sans', sans-serif;
+}
+.fire-popup-wrap .fire-popup:not(.fire-popup-compact) {
+  min-width: 0;
+  max-width: min(288px, calc(100vw - 64px));
+  overflow-wrap: anywhere;
+}
+.fire-popup-compact-wrap .maplibregl-popup-content,
+.fire-popup-wrap .maplibregl-popup-content:has(> .fire-popup-compact) {
+  width: min(240px, calc(100vw - 32px));
 }
 .fire-popup-wrap .maplibregl-popup-close-button {
   display: grid;
@@ -403,6 +413,23 @@
   text-align: center;
   padding: 6px 8px;
 }
+.fire-popup-compact {
+  gap: 10px;
+}
+.fire-popup-compact > .fire-popup-drag-handle {
+  position: static;
+  padding-right: 30px;
+  padding-block: 2px 0;
+}
+.fire-popup-compact-actions {
+  padding: 2px 0;
+}
+.fire-popup-compact-actions button {
+  width: 100%;
+}
+.fire-popup-error {
+  overflow-wrap: anywhere;
+}
 .fire-popup-control input:focus,
 .fire-popup-control select:focus {
   outline: none;
@@ -418,62 +445,6 @@
 @media (max-width: 480px) {
   .fire-popup-export-row {
     grid-template-columns: 1fr;
-  }
-}
-.global-hotspot-status {
-  position: absolute;
-  z-index: 3;
-  left: 18px;
-  bottom: 72px;
-  width: min(480px, calc(100% - 36px));
-  padding: 9px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  color: var(--text);
-  background: var(--surface);
-  font-size: 11px;
-  line-height: 1.4;
-}
-.global-hotspot-status p {
-  margin: 5px 0 0;
-  overflow-wrap: anywhere;
-}
-.global-hotspot-heading {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.global-hotspot-heading strong {
-  font-size: 12px;
-}
-.global-hotspot-heading select {
-  min-height: 30px;
-  padding: 3px 7px;
-  border: 1px solid var(--border-strong);
-  border-radius: 4px;
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-}
-.global-frp-legend {
-  display: flex;
-  gap: 5px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-.global-frp-legend > span {
-  width: 8px;
-  height: 8px;
-  display: inline-block;
-}
-@media (max-width: 767px) {
-  .global-hotspot-status {
-    bottom: 120px;
-    left: 12px;
-    width: min(480px, calc(100% - 24px));
-    font-size: 10px;
   }
 }
 .fire-popup-wrap .fire-popup {

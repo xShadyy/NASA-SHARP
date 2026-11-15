@@ -2,7 +2,7 @@ import type { FeatureCollection } from 'geojson'
 import type { ExpressionSpecification, GeoJSONSource, Map as MapLibreMap } from 'maplibre-gl'
 import { FIRE_MAP_LAYERS } from './fire-map-style'
 
-export const DIAGNOSTIC_LAYERS = ['sharp-recurrence', 'sharp-outlook'] as const
+export const DIAGNOSTIC_LAYERS = ['sharp-recurrence'] as const
 const EMPTY: FeatureCollection = { type: 'FeatureCollection', features: [] }
 const RECURRENCE_COLOR: ExpressionSpecification = [
   'interpolate',
@@ -15,45 +15,16 @@ const RECURRENCE_COLOR: ExpressionSpecification = [
   31,
   '#31256b',
 ]
-const PROBABILITY_COLOR: ExpressionSpecification = [
-  'interpolate',
-  ['linear'],
-  ['get', 'probability'],
-  0,
-  '#d2f2ef',
-  0.5,
-  '#388d9c',
-  1,
-  '#123f68',
-]
-const HISTORY_COLOR: ExpressionSpecification = [
-  'interpolate',
-  ['linear'],
-  ['get', 'historicalReportedDates'],
-  1,
-  '#d2f2ef',
-  20,
-  '#388d9c',
-  100,
-  '#123f68',
-]
-
 type DiagnosticData = {
   recurrence: FeatureCollection | null
-  outlook: FeatureCollection | null
   recurrenceEnabled: boolean
-  outlookEnabled: boolean
-  forecastValidated: boolean
 }
 
 /** Retains unchanged source objects; camera and opacity updates do no GeoJSON preparation. */
 export function createInvestigationLayerController(map: MapLibreMap) {
   let data: DiagnosticData = {
     recurrence: null,
-    outlook: null,
     recurrenceEnabled: false,
-    outlookEnabled: false,
-    forecastValidated: false,
   }
   let opacity = 0.55
   let destroyed = false
@@ -93,11 +64,9 @@ export function createInvestigationLayerController(map: MapLibreMap) {
     // These do not prevent updating an already initialized style's local sources.
     if (destroyed || !map.getStyle()) return
     const before = firstObservationLayer()
-    for (const [index, id] of DIAGNOSTIC_LAYERS.entries()) {
-      const collection = (index === 0 ? data.recurrence : data.outlook) ?? EMPTY
-      const enabled = index === 0 ? data.recurrenceEnabled : data.outlookEnabled
-      const color =
-        index === 0 ? RECURRENCE_COLOR : data.forecastValidated ? PROBABILITY_COLOR : HISTORY_COLOR
+    for (const id of DIAGNOSTIC_LAYERS) {
+      const collection = data.recurrence ?? EMPTY
+      const enabled = data.recurrenceEnabled
       let source = map.getSource(id) as GeoJSONSource | undefined
       if (!source) {
         map.addSource(id, { type: 'geojson', data: collection })
@@ -113,13 +82,13 @@ export function createInvestigationLayerController(map: MapLibreMap) {
             type: 'fill',
             source: id,
             layout: { visibility: enabled ? 'visible' : 'none' },
-            paint: { 'fill-opacity': opacity, 'fill-color': color },
+            paint: { 'fill-opacity': opacity, 'fill-color': RECURRENCE_COLOR },
           },
           before,
         )
       } else {
         map.setLayoutProperty(id, 'visibility', enabled ? 'visible' : 'none')
-        map.setPaintProperty(id, 'fill-color', color)
+        map.setPaintProperty(id, 'fill-color', RECURRENCE_COLOR)
       }
     }
     if (!before) orderAfterListeners()

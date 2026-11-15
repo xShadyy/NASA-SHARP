@@ -122,7 +122,9 @@ class ObservationExplorerTest(unittest.TestCase):
         second = freeze_document(QUERY, self.store, {"options": {"selectionToken": token, "observationIds": ids[5:]}})
         self.assertEqual(second["data"]["total"], 10)
         changed_camera = {**QUERY, "camera": {"zoom": 3}, "id": "new-client-query-id"}
-        self.assertIs(cached_snapshot(changed_camera, {"selectionToken": token}), self.store)
+        retained = cached_snapshot(changed_camera, {"selectionToken": token})
+        self.assertEqual({detection_id(row) for row in retained.rows}, {detection_id(row) for row in self.store.rows})
+        self.assertEqual(source_generation(retained), source_generation(self.store))
         data = self.query({"selectionToken": token, "pageSize": 25})["data"]
         self.assertEqual({row["id"] for row in data["rows"]}, set(ids))
         replacement = replace(self.store, rows=(replace(self.store.rows[0], product_version="v2"), *self.store.rows[1:]))

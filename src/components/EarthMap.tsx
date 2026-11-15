@@ -1,4 +1,12 @@
-import { useEffect, useEffectEvent, useImperativeHandle, useRef, useState, type Ref } from 'react'
+import {
+  useEffect,
+  useEffectEvent,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  type Ref,
+} from 'react'
 import {
   Map as MapLibreMap,
   setWorkerUrl,
@@ -26,14 +34,32 @@ import { createScaleBar } from '@/map/scale-bar'
 import { createReferenceTileCache } from '@/map/reference-tile-cache'
 import { createAnalysisController, type AnalysisController } from '@/map/analysis-controller'
 import { createFireDotController } from '@/map/fire-dots'
-import { createGlobalFireController, type GlobalDisplayStatus } from '@/map/global-fire-controller'
-import { useGlobalFires, type GlobalWindow } from '@/hooks/use-global-fires'
+import { FIRE_POINT_SOURCE } from '@/map/fire-map-style'
+import {
+  createGlobalRasterController,
+  type GlobalRasterDisplayStatus,
+} from '@/map/global-raster-controller'
+import type { GlobalStartupState } from '@/lib/global-startup'
+export type { GlobalStartupState } from '@/lib/global-startup'
+import { useGlobalFires } from '@/hooks/use-global-fires'
 import { classifyMapResourceError } from '@/map/map-resource-errors'
 import type { FireFeature } from '@/lib/fire-severity'
-import { addUtcDays, type AnalysisRange } from '@/lib/analysis-activity'
+import {
+  addUtcDays,
+  focusRange,
+  MAX_ANALYSIS_DAYS,
+  type AnalysisRange,
+} from '@/lib/analysis-activity'
 import type { AnalysisState } from '@/lib/analysis-state'
 import type { AnalysisArea, AreaGeometry } from '@/lib/analysis-area'
-import type { FrozenSelection, InvestigationScope } from '@/lib/investigation'
+import {
+  createGlobalInvestigation,
+  createInvestigation,
+  type FrozenSelection,
+  type InvestigationScope,
+} from '@/lib/investigation'
+import { apiUrl } from '@/lib/api-config'
+import { canonicalGlobalFeature } from '@/lib/global-tiles'
 import { useInvestigationLayers } from './InvestigationLayers'
 import {
   createMeasurementController,
@@ -99,6 +125,7 @@ export type EarthMapHandle = {
     settings: CaptureSettings,
     region?: CaptureRegion,
   ) => Promise<CaptureResult>
+  captureInvestigation: (scope: InvestigationScope) => Promise<CaptureResult | null>
 }
 
 type EarthMapProps = {
@@ -127,10 +154,16 @@ type EarthMapProps = {
   focusedFireDay: string | null
   fireRange: AnalysisRange
   fireQuery: InvestigationScope['query'] | null
+  diagnosticQuery?: InvestigationScope['query'] | null
   fireSourceGeneration?: string
   fireFilters: InvestigationScope['filters']
   selectedObservationIds?: string[]
   onOpenAnalytics: (selection?: FrozenSelection, cellGeometry?: AreaGeometry) => void
+  globalInvestigation?: InvestigationScope | null
+  highlightInvestigation?: InvestigationScope | null
+  onGlobalInvestigation?: (scope: InvestigationScope) => void
+  onResetGlobalInvestigation?: () => void
+  onStartupChange?: (state: GlobalStartupState) => void
   measurementMode: 'orbit' | MeasurementMode
   measurementUnit: MeasurementUnit
   measurementColors: MeasurementColors
@@ -154,6 +187,7 @@ const NASA_TILE_NOTICE = 'Some NASA tiles could not load. Base map detail fills 
 const REFERENCE_TILE_NOTICE =
   'Some base-map tiles are unavailable. Available imagery and observations remain visible.'
 const LABEL_NOTICE = 'Some map labels are unavailable. Geographic observations remain visible.'
+const NO_GLOBAL_GEOJSON: FireFeature[] = []
 type NasaTileRetry = { attempts: number; timer?: ReturnType<typeof setTimeout> }
 function cameraState(map: MapLibreMap, view: MapView): MapCameraState {
   const center = map.getCenter().wrap()
@@ -202,10 +236,15 @@ export function EarthMap({
   focusedFireDay,
   fireRange,
   fireQuery,
+  diagnosticQuery,
   fireSourceGeneration,
   fireFilters,
   selectedObservationIds,
   onOpenAnalytics,
+  globalInvestigation,
+  highlightInvestigation,
+  onGlobalInvestigation,
+  onStartupChange,
   referenceLayers,
   showSpace,
   onSpaceChange,
@@ -235,17 +274,88 @@ export function EarthMap({
   const measurementsRef = useRef<MeasurementController | null>(null)
   const analysisRef = useRef<AnalysisController | null>(null)
   const firesRef = useRef<ReturnType<typeof createFireDotController> | null>(null)
-  const globalFiresRef = useRef<ReturnType<typeof createGlobalFireController> | null>(null)
+  const globalFiresRef = useRef<ReturnType<typeof createGlobalRasterController> | null>(null)
   const global = useGlobalFires()
-  const [globalObservations, setGlobalObservations] = useState<FireFeature[]>([])
-  const [globalDisplay, setGlobalDisplay] = useState<GlobalDisplayStatus>({
+  const [globalDisplay, setGlobalDisplay] = useState<GlobalRasterDisplayStatus>({
     loading: false,
     error: '',
     visibleTiles: 0,
     displayFeatures: 0,
     decodedBytes: 0,
+    displayedManifest: null,
   })
   const globalEnabled = !analysis.confirmed
+  const effectiveGlobalScope =
+    globalEnabled && highlightInvestigation?.selection?.global
+      ? highlightInvestigation
+      : globalInvestigation
+  const frozenGlobal = effectiveGlobalScope?.selection?.global
+  const globalDisplayFilters = useMemo(
+    () =>
+      effectiveGlobalScope
+        ? {
+            ...effectiveGlobalScope.filters,
+            day: effectiveGlobalScope.focusedDay ?? effectiveGlobalScope.filters.day,
+          }
+        : {},
+    [effectiveGlobalScope],
+  )
+  const displayedGlobalManifest = useMemo(() => {
+    if (!frozenGlobal) return global.manifest
+    const metadata = effectiveGlobalScope?.metadata
+    return {
+      snapshotId: frozenGlobal.snapshotId,
+      window: frozenGlobal.window,
+      interval: frozenGlobal.interval,
+      status:
+        metadata?.freshness === 'stale' || metadata?.freshness === 'mixed'
+          ? ('stale' as const)
+          : metadata?.completeness === 'complete'
+            ? ('ready' as const)
+            : ('partial' as const),
+      completeness: metadata?.completeness,
+      retrievedAt: metadata?.fetchedAt,
+      latestAcquisition: metadata?.newestObservationAt ?? undefined,
+      reason: 'Selected observations',
+      tiles: `/firms-api/global/tiles/${frozenGlobal.snapshotId}/${frozenGlobal.window}/{z}/{x}/{y}.json`,
+      pointTiles: `/firms-api/global/point-tiles/${frozenGlobal.snapshotId}/${frozenGlobal.window}/{z}/{x}/{y}.pbf`,
+      pointSourceLayer: 'observations',
+      pointMaxZoom: 18,
+      rasterTiles: `/firms-api/global/raster/${frozenGlobal.snapshotId}/${frozenGlobal.window}/red-pixels-3/{z}/{x}/{y}.png`,
+      rasterTileSize: 512,
+      rasterMaxZoom: 18,
+      rasterStyle: 'red-pixels-3',
+    }
+  }, [frozenGlobal, effectiveGlobalScope?.metadata, global.manifest])
+  const reportGlobalInvestigation = useEffectEvent((scope: InvestigationScope) =>
+    onGlobalInvestigation?.(scope),
+  )
+  useEffect(() => {
+    const shown = globalDisplay.visibleTiles ? globalDisplay.displayedManifest : global.manifest
+    if (!shown?.snapshotId || !shown.interval) return
+    reportGlobalInvestigation(
+      createGlobalInvestigation(
+        {
+          snapshotId: shown.snapshotId,
+          window: shown.window,
+          interval: shown.interval,
+        },
+        {},
+        {
+          sourceGeneration: shown.snapshotId,
+          completeness: shown.completeness,
+          fetchedAt: shown.retrievedAt,
+          generatedAt: shown.publishedAt,
+        },
+      ),
+    )
+  }, [global.manifest, globalDisplay.visibleTiles, globalDisplay.displayedManifest])
+  const compatibleHighlight =
+    highlightInvestigation &&
+    highlightInvestigation.area.id === analysis.confirmed?.id &&
+    JSON.stringify(highlightInvestigation.range) === JSON.stringify(fireRange)
+      ? highlightInvestigation
+      : null
   const analysisFitRef = useRef(-1)
   const analysisUnitsRef = useRef({ distance: analysisDistanceUnit, area: analysisAreaUnit })
   const reportAnalysisChange = useEffectEvent(onAnalysisChange)
@@ -253,6 +363,18 @@ export function EarthMap({
   const reportAnalysisCancel = useEffectEvent(onAnalysisCancel)
   const reportCountryPick = useEffectEvent(onCountryPick)
   const reportOpenAnalytics = useEffectEvent(onOpenAnalytics)
+  const reportObservationAnalytics = useEffectEvent((selection: FrozenSelection) => {
+    if (globalEnabled && displayedGlobalManifest?.snapshotId && displayedGlobalManifest.interval) {
+      reportOpenAnalytics({
+        ...selection,
+        global: {
+          snapshotId: displayedGlobalManifest.snapshotId,
+          window: displayedGlobalManifest.window,
+          interval: displayedGlobalManifest.interval,
+        },
+      })
+    } else reportOpenAnalytics(selection)
+  })
   const skyRef = useRef<ReturnType<typeof createSkyBackgroundLayer> | null>(null)
   const graticuleRef = useRef<ReturnType<typeof createGraticuleController> | null>(null)
   const coordinatesRef = useRef<HTMLOutputElement>(null)
@@ -296,7 +418,7 @@ export function EarthMap({
   const [mapInstance, setMapInstance] = useState<MapLibreMap | null>(null)
   const investigationLayers = useInvestigationLayers({
     map: mapInstance,
-    query: fireQuery,
+    query: diagnosticQuery ?? fireQuery,
     sourceGeneration: fireSourceGeneration,
     interactive: analysis.phase !== 'drawing' && analysis.phase !== 'editing',
     onInspect: (filters, geometry) => onOpenAnalytics({ filters }, geometry),
@@ -304,6 +426,14 @@ export function EarthMap({
   const [loading, setLoading] = useState(true)
   const [notice, setNotice] = useState('')
   const [fatal, setFatal] = useState(false)
+  const startupFinished = useRef(false)
+  const startupSignature = useRef('')
+  const reportStartup = useEffectEvent((state: GlobalStartupState) => {
+    const signature = JSON.stringify(state)
+    if (startupSignature.current === signature) return
+    startupSignature.current = signature
+    onStartupChange?.(state)
+  })
 
   useEffect(() => {
     if (!mapInstance) return
@@ -328,27 +458,26 @@ export function EarthMap({
   }, [mapInstance])
 
   useEffect(() => {
-    if (!mapInstance) return
+    if (!mapInstance || globalEnabled) return
     const controller = createFireDotController(mapInstance, {
-      onOpenAnalytics: (selection) => reportOpenAnalytics(selection),
+      onOpenAnalytics: (selection) => reportObservationAnalytics(selection),
     })
     firesRef.current = controller
     return () => {
       controller.destroy()
       firesRef.current = null
     }
-  }, [mapInstance])
+  }, [mapInstance, globalEnabled])
 
   useEffect(() => {
     const controller = firesRef.current
     if (!controller) return
-    controller.setData(globalEnabled ? globalObservations : fires)
-  }, [fires, globalObservations, globalEnabled, mapInstance])
+    controller.setData(globalEnabled ? NO_GLOBAL_GEOJSON : fires)
+  }, [fires, globalEnabled, mapInstance])
 
   useEffect(() => {
     if (!mapInstance) return
-    const controller = createGlobalFireController(mapInstance, {
-      onObservations: setGlobalObservations,
+    const controller = createGlobalRasterController(mapInstance, {
       onStatus: setGlobalDisplay,
     })
     globalFiresRef.current = controller
@@ -358,33 +487,85 @@ export function EarthMap({
     }
   }, [mapInstance])
   useEffect(() => {
-    globalFiresRef.current?.setManifest(global.manifest)
-  }, [global.manifest, mapInstance])
+    globalFiresRef.current?.setManifest(displayedGlobalManifest)
+    globalFiresRef.current?.setInvestigation(globalDisplayFilters, frozenGlobal?.aggregateId)
+  }, [displayedGlobalManifest, globalDisplayFilters, frozenGlobal?.aggregateId, mapInstance])
   useEffect(() => {
     globalFiresRef.current?.setEnabled(globalEnabled)
   }, [globalEnabled, mapInstance])
+  useEffect(() => {
+    if (!globalEnabled) {
+      globalFiresRef.current?.setHighlight(null)
+      return
+    }
+    const scope = highlightInvestigation ?? globalInvestigation
+    const observationId = scope?.filters.observationId
+    if (!scope || !observationId) {
+      globalFiresRef.current?.setHighlight(null)
+      return
+    }
+    const controller = new AbortController()
+    const globalSelection = scope.selection?.global
+    const url = globalSelection ? apiUrl('/global/observations') : apiUrl('/analysis/observations')
+    const options = {
+      ...scope.filters,
+      page: 1,
+      pageSize: 1,
+      selectionToken: scope.selection?.selectionToken,
+      sourceGeneration: scope.selection?.sourceGeneration ?? scope.metadata?.sourceGeneration,
+    }
+    const body = globalSelection
+      ? { ...globalSelection, options }
+      : { query: scope.selection?.query ?? scope.query, options }
+    void fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) return
+        const result = await response.json()
+        const row = result.data?.rows?.[0]
+        if (!row || controller.signal.aborted) return
+        globalFiresRef.current?.setHighlight(
+          canonicalGlobalFeature({
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: [row.longitude, row.latitude] },
+            properties: { ...row, kind: 'observation' },
+          }),
+        )
+      })
+      .catch(() => undefined)
+    return () => controller.abort()
+  }, [highlightInvestigation, globalInvestigation, globalEnabled, mapInstance])
 
   useEffect(() => {
-    firesRef.current?.setInteractive(analysis.phase !== 'drawing' && analysis.phase !== 'editing')
-    globalFiresRef.current?.setInteractive(
-      analysis.phase !== 'drawing' && analysis.phase !== 'editing',
+    firesRef.current?.setInteractive(
+      !globalEnabled && analysis.phase !== 'drawing' && analysis.phase !== 'editing',
     )
-  }, [analysis.phase, mapInstance])
+    globalFiresRef.current?.setInteractive(false)
+  }, [analysis.phase, globalEnabled, mapInstance])
 
   useEffect(() => {
     firesRef.current?.setDisplay({
-      focusedDay: globalEnabled ? null : focusedFireDay,
+      focusedDay: globalEnabled ? null : (compatibleHighlight?.focusedDay ?? focusedFireDay),
       endUtcExclusive: globalEnabled
-        ? global.manifest?.interval?.endExclusive
+        ? displayedGlobalManifest?.interval?.endExclusive
         : (fireRange.endAt ?? `${addUtcDays(fireRange.end, 1)}T00:00:00.000Z`),
-      query: globalEnabled ? undefined : fireQuery,
-      queryIdentity: globalEnabled ? global.manifest?.snapshotId : fireQuery?.id,
-      sourceGeneration: globalEnabled ? global.manifest?.snapshotId : fireSourceGeneration,
-      observationFilters: globalEnabled ? {} : fireFilters,
+      query: globalEnabled ? undefined : (fireQuery ?? undefined),
+      queryIdentity: globalEnabled ? displayedGlobalManifest?.snapshotId : fireQuery?.id,
+      sourceGeneration: globalEnabled ? displayedGlobalManifest?.snapshotId : fireSourceGeneration,
+      observationFilters: globalEnabled
+        ? globalDisplayFilters
+        : (compatibleHighlight?.filters ?? fireFilters),
       disableClustering: globalEnabled,
+      disableFootprints: globalEnabled,
       selectedObservationId:
-        !globalEnabled && typeof fireFilters.observationId === 'string'
-          ? fireFilters.observationId
+        typeof (compatibleHighlight?.filters ?? effectiveGlobalScope?.filters ?? fireFilters)
+          .observationId === 'string'
+          ? (compatibleHighlight?.filters ?? effectiveGlobalScope?.filters ?? fireFilters)
+              .observationId
           : null,
       selectedObservationIds: globalEnabled ? undefined : selectedObservationIds,
     })
@@ -399,7 +580,46 @@ export function EarthMap({
     mapInstance,
     globalEnabled,
     global.manifest,
+    displayedGlobalManifest,
+    effectiveGlobalScope,
+    globalDisplayFilters,
+    compatibleHighlight,
   ])
+
+  useEffect(() => {
+    if (startupFinished.current) return
+    const manifest = global.manifest
+    const error = fatal
+      ? notice || 'The globe could not load.'
+      : !globalDisplay.visibleTiles &&
+        (global.error ||
+          globalDisplay.error ||
+          (manifest?.status === 'unavailable' && manifest.refresh?.phase === 'failed'
+            ? manifest.reason || 'The last 24 hours of hotspots could not load.'
+            : ''))
+    if (error) {
+      reportStartup({ ready: false, phase: 'fetching', error })
+      return
+    }
+    if (!manifest?.snapshotId && !globalDisplay.visibleTiles) {
+      reportStartup({ ready: false, phase: 'fetching', error: '' })
+      return
+    }
+    reportStartup({ ready: false, phase: 'rendering', error: '' })
+    if (
+      !ready ||
+      !mapInstance ||
+      globalDisplay.loading ||
+      !globalDisplay.visibleTiles ||
+      !globalDisplay.sourceId ||
+      !mapInstance.getSource(globalDisplay.sourceId)
+    )
+      return
+    // The controller reports a completed native raster viewport render.
+    // Optional imagery and subsequent background publications never gate entry.
+    reportStartup({ ready: true, phase: 'rendering', error: '' })
+    startupFinished.current = true
+  }, [global.manifest, global.error, globalDisplay, ready, mapInstance, fatal, notice])
 
   useEffect(() => {
     analysisUnitsRef.current = { distance: analysisDistanceUnit, area: analysisAreaUnit }
@@ -503,6 +723,64 @@ export function EarthMap({
       if (!map) throw new Error('The map is not ready yet.')
       return captureMapImage(map, settings, region)
     },
+    async captureInvestigation(scope) {
+      const map = mapRef.current
+      if (!map) return null
+      const filterKey = (filters: Record<string, unknown>) =>
+        JSON.stringify(
+          Object.entries(filters)
+            .filter(([, value]) => value !== undefined)
+            .sort(([a], [b]) => a.localeCompare(b)),
+        )
+      const selection = scope.selection?.global
+      if (selection) {
+        if (
+          !globalEnabled ||
+          displayedGlobalManifest?.snapshotId !== selection.snapshotId ||
+          displayedGlobalManifest?.window !== selection.window ||
+          frozenGlobal?.aggregateId !== selection.aggregateId ||
+          globalDisplay.loading ||
+          globalDisplay.updating ||
+          globalDisplay.error ||
+          !globalDisplay.visibleTiles
+        )
+          return null
+        if (
+          filterKey(globalDisplayFilters) !==
+          filterKey({ ...scope.filters, day: scope.focusedDay ?? scope.filters.day })
+        )
+          return null
+      } else {
+        const days = (Date.parse(scope.range.end) - Date.parse(scope.range.start)) / 86400000 + 1
+        if (days > MAX_ANALYSIS_DAYS && !scope.focusedDay) return null
+        const expectedQuery =
+          days > MAX_ANALYSIS_DAYS
+            ? createInvestigation(scope.area, focusRange(scope.range, scope.focusedDay)).query
+            : scope.query
+        if (
+          expectedQuery.id !== fireQuery?.id ||
+          !fireSourceGeneration ||
+          (scope.metadata?.sourceGeneration &&
+            scope.metadata.sourceGeneration !== fireSourceGeneration)
+        )
+          return null
+        if (scope.selection?.selectionToken && !scope.selection.observationIds) return null
+        if (
+          JSON.stringify([...(scope.selection?.observationIds ?? [])].sort()) !==
+          JSON.stringify([...(selectedObservationIds ?? [])].sort())
+        )
+          return null
+        if (
+          focusedFireDay !== scope.focusedDay ||
+          filterKey(fireFilters) !== filterKey(scope.filters)
+        )
+          return null
+        if (!map.getSource(FIRE_POINT_SOURCE) || !map.isSourceLoaded(FIRE_POINT_SOURCE)) return null
+      }
+      // Wait for the exact applied investigation's local worker sources to finish.
+      if (!map.isStyleLoaded()) return null
+      return captureMapImage(map, { format: 'png', header: true, timestamp: true, scalebar: true })
+    },
   }))
 
   useEffect(() => {
@@ -538,8 +816,8 @@ export function EarthMap({
           minZoom: MIN_ZOOM,
           maxZoom: maximumZoomForView(initialView),
           maxPitch: 0,
-          maxTileCacheZoomLevels: 8,
-          maxTileCacheSize: 256,
+          maxTileCacheZoomLevels: 3,
+          maxTileCacheSize: 64,
           fadeDuration: 0,
           transformRequest: referenceTiles.transformRequest,
           keyboard: false,
@@ -1008,6 +1286,7 @@ export function EarthMap({
     }
     skyRef.current?.retry()
     overlaysRef.current?.retry()
+    globalFiresRef.current?.retry()
     applyLayerVisibility(map, { ...referenceLayers, view, background })
     Object.entries(map.getStyle().sources).forEach(([id, config]) => {
       const source = map.getSource(id)
@@ -1038,81 +1317,6 @@ export function EarthMap({
           window.getSelection()?.removeAllRanges()
         }}
       />
-      {globalEnabled && (
-        <aside className="global-hotspot-status" aria-label="Worldwide satellite observations">
-          <div className="global-hotspot-heading">
-            <strong>Worldwide satellite hotspots</strong>
-            <select
-              aria-label="Global observation interval"
-              value={global.window}
-              onChange={(event) => global.setWindow(event.target.value as GlobalWindow)}
-            >
-              <option value="24h">Last 24 hours</option>
-              <option value="48h">Last 48 hours</option>
-              <option value="7d">Last 7 days</option>
-            </select>
-          </div>
-          {global.loading ? (
-            <p role="status">Loading published observations…</p>
-          ) : (
-            <p>
-              {global.manifest?.snapshotId
-                ? `${(global.manifest.count ?? 0).toLocaleString()} observations · ${global.manifest.status}`
-                : (global.manifest?.reason ?? global.error ?? 'The global dataset is unavailable.')}
-            </p>
-          )}
-          {global.manifest?.interval && (
-            <p>
-              {global.manifest.interval.start.replace('T', ' ').replace(/(?:\.\d+)?Z$/, '')} →{' '}
-              {global.manifest.interval.endExclusive.replace('T', ' ').replace(/(?:\.\d+)?Z$/, '')}{' '}
-              UTC
-            </p>
-          )}
-          <p className="global-frp-legend">
-            <span style={{ background: '#f5c518' }} />
-            &lt;10 <span style={{ background: '#f97316' }} />
-            10–&lt;50 <span style={{ background: '#dc2626' }} />
-            ≥50 <span style={{ background: '#9ca3af' }} />
-            Unknown · MW · aggregate maximum
-          </p>
-          {!!global.manifest?.polarCount && (
-            <p>
-              {global.manifest.polarCount.toLocaleString()} observations beyond ±85.051° are
-              retained in the dataset; this Mercator display does not render them.
-            </p>
-          )}
-          {global.manifest?.reason && global.manifest.snapshotId && <p>{global.manifest.reason}</p>}
-          {global.manifest?.snapshotId && (
-            <details className="global-dataset-timing">
-              <summary>Dataset timing</summary>
-              <p>Latest satellite acquisition: {global.manifest.latestAcquisition ?? 'Unknown'}</p>
-              <p>Retrieved from provider: {global.manifest.retrievedAt ?? 'Unknown'}</p>
-              <p>Published snapshot: {global.manifest.publishedAt ?? 'Unknown'}</p>
-              <p>
-                Freshness: {global.manifest.status}. Refresh cadence does not describe observation
-                age.
-              </p>
-            </details>
-          )}
-          {(globalDisplay.error || global.error) && (
-            <p role="status">
-              {globalDisplay.error || global.error}{' '}
-              {global.manifest?.snapshotId ? 'The last published snapshot remains selected.' : ''}{' '}
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  global.refresh()
-                  globalFiresRef.current?.retry()
-                }}
-              >
-                Retry
-              </Button>
-            </p>
-          )}
-          {globalDisplay.loading && <p role="status">Loading stored tiles…</p>}
-        </aside>
-      )}
       <MapContextMenu
         triggerRef={contextTriggerRef}
         coordinates={contextCoordinates}
@@ -1152,6 +1356,78 @@ export function EarthMap({
       </div>
       <div className="map-background-control">
         <MapLayersControl
+          globalStatus={
+            globalEnabled && (
+              <fieldset>
+                <legend>Satellite hotspots · {frozenGlobal ? 'selected interval' : 'last 24 hours'}</legend>
+                <div className="layer-setting-row">
+                  <div>
+                    <span>
+                      {globalDisplay.displayedManifest?.status ??
+                        global.manifest?.status ??
+                        'Loading'}
+                    </span>
+                    <small>Red pixels show reported satellite hotspots.</small>
+                    <small>Display marks are not sensor footprints or fire perimeters.</small>
+                    {(globalDisplay.displayedManifest ?? global.manifest)?.interval && (
+                      <small>
+                        {(globalDisplay.displayedManifest ?? global.manifest)?.interval?.start
+                          .replace('T', ' ')
+                          .replace('Z', '')}
+                        {' – '}
+                        {(
+                          globalDisplay.displayedManifest ?? global.manifest
+                        )?.interval?.endExclusive
+                          .replace('T', ' ')
+                          .replace('Z', '')}{' '}
+                        UTC
+                      </small>
+                    )}
+                    {(globalDisplay.displayedManifest ?? global.manifest)?.retrievedAt && (
+                      <small>
+                        Retrieved:{' '}
+                        {(globalDisplay.displayedManifest ?? global.manifest)?.retrievedAt
+                          ?.replace('T', ' ')
+                          .replace('Z', ' UTC')}
+                      </small>
+                    )}
+                    {(globalDisplay.displayedManifest ?? global.manifest)?.latestAcquisition && (
+                      <small>
+                        Latest acquisition:{' '}
+                        {(globalDisplay.displayedManifest ?? global.manifest)?.latestAcquisition
+                          ?.replace('T', ' ')
+                          .replace('Z', ' UTC')}
+                      </small>
+                    )}
+                    <small>
+                      Display extent: 85.05°S–85.05°N. Polar records remain in analytics.
+                    </small>
+                    {(globalDisplay.error ||
+                      global.error ||
+                      (globalDisplay.displayedManifest ?? global.manifest)?.reason) && (
+                      <small role="status">
+                        {globalDisplay.error ||
+                          global.error ||
+                          (globalDisplay.displayedManifest ?? global.manifest)?.reason}
+                      </small>
+                    )}
+                  </div>
+                </div>
+                {(globalDisplay.error || global.error) && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      global.refresh()
+                      globalFiresRef.current?.retry()
+                    }}
+                  >
+                    Retry hotspot tiles
+                  </Button>
+                )}
+              </fieldset>
+            )
+          }
           investigationLayers={investigationLayers}
           overlayStatus={overlayStatus}
           onOverlayRetry={() => overlaysRef.current?.retry()}

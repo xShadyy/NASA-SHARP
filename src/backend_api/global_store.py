@@ -17,7 +17,7 @@ from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from harmonize import CanonicalStore, Coverage, Detection, detection_id
+from harmonize import CanonicalStore, Coverage, Detection, detection_id, prepared_area
 
 WINDOWS = {"24h": 24, "48h": 48, "7d": 168}
 
@@ -86,6 +86,7 @@ class GlobalStore:
         now = time.time() if now is None else now
         with closing(self.connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
+            db.execute("DELETE FROM global_leases WHERE expires<=?", (now,))
             existing = db.execute("SELECT owner,expires FROM global_leases WHERE name=?", (name,)).fetchone()
             if existing and existing["expires"] > now and existing["owner"] != owner:
                 return False
@@ -95,6 +96,24 @@ class GlobalStore:
     def release(self, name, owner):
         with closing(self.connect()) as db, db:
             db.execute("DELETE FROM global_leases WHERE name=? AND owner=?", (name, owner))
+
+    def update_ingestion_status(self, owner, **state):
+        """Only the shared acquisition owner can publish operational progress."""
+        with closing(self.connect()) as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            lease = db.execute("SELECT owner,expires FROM global_leases WHERE name='global-ingestion'").fetchone()
+            if lease is None or lease["owner"] != owner or lease["expires"] <= time.time():
+                return
+            payload = {**state, "updatedAt": utc(time.time())}
+            db.execute("INSERT OR REPLACE INTO global_metadata VALUES('ingestion_status',?)", (json.dumps(payload),))
+
+    def ingestion_status(self):
+        with closing(self.connect()) as db:
+            lease = db.execute("SELECT expires FROM global_leases WHERE name='global-ingestion'").fetchone()
+            row = db.execute("SELECT value FROM global_metadata WHERE key='ingestion_status'").fetchone()
+        state = json.loads(row[0]) if row else {}
+        active = lease is not None and lease["expires"] > time.time()
+        return {**state, "active": active}
 
     def source_state(self, source):
         with closing(self.connect()) as db:
@@ -156,7 +175,7 @@ class GlobalStore:
                 if old and old["start"] < lower.timestamp() and old["end"] >= upper.timestamp():
                     continue
                 db.execute("INSERT OR REPLACE INTO global_current_partitions VALUES(?,?,?)", (source, day, digest))
-            state = {"source": source, "status": "ok", "retrievedAt": utc(retrieved), "coverageStart": utc(start), "coverageEndExclusive": utc(end), "latestAcquisition": max((utc(row.acquired_at) for rows in grouped.values() for row in rows.values()), default=None), **(metadata or {})}
+            state = {"source": source, "status": "ok", "retrievedAt": utc(retrieved), "extractionStart": utc(start), "extractionEndExclusive": utc(end), "coverageStart": utc(start), "coverageEndExclusive": utc(end), "latestAcquisition": max((utc(row.acquired_at) for rows in grouped.values() for row in rows.values()), default=None), **(metadata or {})}
             db.execute("INSERT OR REPLACE INTO global_sources VALUES(?,?)", (source, json.dumps(state, separators=(",", ":"))))
         return versions
 
@@ -188,7 +207,24 @@ class GlobalStore:
                     if state.get("status") != "ok" or cursor < anchor.timestamp():
                         complete = False
                 available = any(p["end"] > start.timestamp() for p in partitions)
-                windows[label] = {"startUtc": utc(start), "endUtcExclusive": utc(anchor), "status": "ready" if complete else "partial" if available else "unavailable", "hours": hours}
+                # A 24h bootstrap must not masquerade as a partial seven-day
+                # extract. A genuine longer download or accumulated extraction
+                # span is required before displaying that interval.
+                supported = False
+                for state in states:
+                    target_hours = state.get("downloadWindowHours")
+                    if target_hours is None:
+                        if str(state.get("providerUrl", "")).endswith("_7d.csv"):
+                            target_hours = 168
+                        elif state.get("extractionStart") and state.get("extractionEndExclusive"):
+                            target_hours = (instant(state["extractionEndExclusive"]) - instant(state["extractionStart"])).total_seconds() / 3600
+                        elif state.get("coverageStart") and state.get("coverageEndExclusive"):
+                            target_hours = (instant(state["coverageEndExclusive"]) - instant(state["coverageStart"])).total_seconds() / 3600
+                    earliest = min((p["start"] for p in partitions if p["source"] == state["source"]), default=anchor.timestamp())
+                    if (target_hours or 0) >= hours or earliest <= start.timestamp():
+                        supported = True
+                status = "ready" if complete else "partial" if available and supported else "building" if available else "unavailable"
+                windows[label] = {"startUtc": utc(start), "endUtcExclusive": utc(anchor), "status": status, "hours": hours}
             identity = {"anchorUtc": utc(anchor), "partitions": [{"source": p["source"], "day": p["day"], "generation": p["version"]} for p in partitions], "sources": states, "windows": windows}
             snapshot = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:24]
             status = windows["24h"]["status"]
@@ -235,28 +271,50 @@ class GlobalStore:
         with closing(self.connect()) as db:
             row = db.execute("SELECT value FROM global_metadata WHERE key='current_snapshot'").fetchone()
         if not row:
-            return {"status": "unavailable", "snapshot": None, "window": window, "reason": "Global observations have not been published. The designated ingestion worker must complete its first refresh.", "windows": {}, "sources": []}
+            progress = self.ingestion_status()
+            return {"status": "building" if progress["active"] else "unavailable", "snapshot": None, "window": window,
+                    "reason": "Fetching satellite observations for the last 24 hours." if progress["active"] else "Satellite hotspot data has not loaded yet.",
+                    "refreshing": progress["active"], "refresh": progress, "windows": {}, "sources": []}
         return self.snapshot_manifest(row[0], window)
 
-    def iter_observations(self, snapshot_id, window="24h", bbox=None, filters=None):
+    def iter_observations(self, snapshot_id, window="24h", bbox=None, filters=None, interval=None, partition_version=None):
         manifest = self.snapshot_manifest(snapshot_id, window)
-        start, end = (instant(manifest["interval"][key]).timestamp() for key in ("startUtc", "endUtcExclusive"))
+        start, end = (instant(value).timestamp() for value in interval) if interval is not None else (instant(manifest["interval"][key]).timestamp() for key in ("startUtc", "endUtcExclusive"))
         params = [snapshot_id, start, end]
         where = ["s.snapshot=?", "o.acquired>=?", "o.acquired<?"]
+        if partition_version is not None:
+            # Analytical source/day ownership is immutable and independent of the
+            # rolling presentation interval and cross-product revision selection.
+            where[0] = "o.version=?"
+            params[0] = partition_version
+        filters = filters or {}
+        if filters.get("platforms"):
+            platforms = list(filters["platforms"])
+            where.append("o.platform IN (" + ",".join("?" for _ in platforms) + ")")
+            params.extend(platforms)
+        if filters.get("source"):
+            where.append("json_extract(o.payload,'$.source_product')=?")
+            params.append(filters["source"])
         if bbox:
             west, south, east, north = bbox
             if west <= east:
-                where += ["o.longitude>=?", "o.longitude<=?"]
-                params += [west, east]
+                where += ["r.max_lon>=?", "r.min_lon<=?", "o.longitude>=?", "o.longitude<=?"]
+                params += [west, east, west, east]
             else:
-                where += ["(o.longitude>=? OR o.longitude<=?)"]
-                params += [west, east]
-            where += ["o.latitude>=?", "o.latitude<=?"]
+                where += ["(r.max_lon>=? OR r.min_lon<=?)", "(o.longitude>=? OR o.longitude<=?)"]
+                params += [west, east, west, east]
+            where += ["r.max_lat>=?", "r.min_lat<=?", "o.latitude>=?", "o.latitude<=?"]
+            params += [south, north]
             params += [south, north]
         with closing(self.connect()) as db:
             # Snapshot partitions are disjoint source/day windows; ID tie collapse
             # prevents exact cross-product duplicates while preserving platforms.
-            cursor = db.execute("SELECT o.observation_id,o.payload FROM global_observations o JOIN global_snapshot_observations s ON s.row_id=o.id WHERE " + " AND ".join(where) + " ORDER BY o.observation_id", params)
+            source = "global_observations o"
+            if partition_version is None:
+                source += " JOIN global_snapshot_observations s ON s.row_id=o.id"
+            if bbox:
+                source += " JOIN global_spatial r ON r.id=o.id"
+            cursor = db.execute("SELECT o.observation_id,o.payload FROM " + source + " WHERE " + " AND ".join(where) + " ORDER BY o.observation_id", params)
             previous = None
             for row in cursor:
                 if row[0] == previous:
@@ -274,12 +332,23 @@ class GlobalStore:
                     if filters.get("frpMax") is not None and (detection.frp_mw is None or detection.frp_mw > float(filters["frpMax"])): continue
                 yield detection
 
-    def canonical_store(self, snapshot_id=None, window="24h", bbox=None, filters=None, max_rows=None):
+    def canonical_store(self, snapshot_id=None, window="24h", bbox=None, filters=None, max_rows=None, interval=None, geometry=None):
         snapshot_id = snapshot_id or self.current_manifest(window).get("snapshot")
         if not snapshot_id:
             return CanonicalStore((), (), "Global observations unavailable")
         manifest = self.snapshot_manifest(snapshot_id, window)
-        records = self.iter_observations(snapshot_id, window, bbox, filters)
+        records = self.iter_observations(snapshot_id, window, bbox, filters, interval=interval)
+        if geometry is not None:
+            area = prepared_area(geometry)
+            candidates = records
+            def exact_members():
+                try:
+                    for row in candidates:
+                        if area.contains(row.longitude, row.latitude):
+                            yield row
+                finally:
+                    candidates.close()
+            records = exact_members()
         rows = tuple(islice(records, max_rows + 1)) if max_rows is not None else tuple(records)
         if max_rows is not None and len(rows) > max_rows:
             records.close()
@@ -287,8 +356,23 @@ class GlobalStore:
         with closing(self.connect()) as db:
             coverage = []
             for p in db.execute("SELECT p.* FROM global_partition_versions p JOIN global_snapshot_partitions s ON s.version=p.version WHERE s.snapshot=?", (snapshot_id,)):
+                if interval is not None and (p["end"] <= instant(interval[0]).timestamp() or p["start"] >= instant(interval[1]).timestamp()):
+                    continue
                 platforms = {row.platform for row in rows if row.source_product == p["source"]}
                 # Explicit source identity supplies coverage even for valid zeroes.
                 platforms.update({"MODIS_NRT": {"terra", "aqua"}, "VIIRS_NOAA20_NRT": {"noaa-20"}, "VIIRS_NOAA21_NRT": {"noaa-21"}, "VIIRS_SNPP_NRT": {"suomi-npp"}}.get(p["source"], set()))
                 coverage.extend(Coverage(datetime.fromisoformat(p["day"]).date(), platform, p["coverage"]) for platform in platforms)
-        return CanonicalStore(rows, tuple(coverage), "Published global snapshot " + snapshot_id, instant(manifest["retrievedAt"]).timestamp() if manifest.get("retrievedAt") else None, instant(manifest["publishedAt"]).timestamp() + 3600, True)
+        selected_sources = {row.source_product for row in rows}
+        if filters and filters.get("platforms"):
+            source_platforms = {"MODIS_NRT": {"aqua", "terra"}, "VIIRS_NOAA20_NRT": {"noaa-20"}, "VIIRS_NOAA21_NRT": {"noaa-21"}, "VIIRS_SNPP_NRT": {"suomi-npp"}}
+            selected_sources.update(source for source, platforms in source_platforms.items() if platforms & set(filters["platforms"]))
+        states = tuple(state for state in manifest["sources"] if not selected_sources or state["source"] in selected_sources)
+        retrievals = [instant(state["retrievedAt"]).timestamp() for state in states if state.get("retrievedAt")]
+        freshness_seconds = int(os.environ.get("SHARP_GLOBAL_STALE_SECONDS", "3600"))
+        fetched = min(retrievals) if retrievals else None
+        expires = min((value + freshness_seconds for value in retrievals), default=None)
+        if any(state.get("status") != "ok" for state in states):
+            expires = min(expires or time.time(), time.time())
+        return CanonicalStore(rows, tuple(coverage), "Published global snapshot " + snapshot_id, fetched, expires, True,
+                              coverage_geometry={"type": "Polygon", "coordinates": [[[-180,-90],[180,-90],[180,90],[-180,90],[-180,-90]]]},
+                              generation=snapshot_id, source_states=states)

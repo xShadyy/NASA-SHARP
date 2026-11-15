@@ -1,4 +1,5 @@
 import asyncio
+import argparse
 import json
 import sys
 import tempfile
@@ -111,15 +112,62 @@ async def benchmark(label, days, observations_per_day):
         }
 
 
-async def main():
+async def main(output=None):
     results = []
     for label, days, count in (("small-region-day", 1, 500), ("dense-country-week", 7, 3000), ("large-region-31-days", 31, 1000)):
         result = await benchmark(label, days, count)
         results.append(result)
         print(json.dumps(result), flush=True)
-    target = ROOT / "tools" / "benchmark-analysis-acquisition-results.json"
+    target = output or ROOT / ".cache" / "benchmark-analysis-acquisition-results.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps({"recorded_at": datetime.now(UTC).isoformat(), "results": results}, indent=2) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description="Explicit offline acquisition and serving measurements")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--global-schema", action="store_true", help="Benchmark all configured bulk schemas and local global serving")
+    modes.add_argument("--global-points", action="store_true", help="Read-only native point-tile benchmark using the existing stored global snapshot")
+    modes.add_argument("--global-raster", action="store_true", help="Read-only transparent PNG benchmark using the existing stored global snapshot")
+    modes.add_argument("--scientific", action="store_true", help="Benchmark the five-year synthetic summary, offline training and serving fixtures")
+    parser.add_argument("--records-per-source", type=int, default=5000)
+    parser.add_argument("--database", type=Path, help="Existing global SQLite database for --global-points; read-only")
+    parser.add_argument("--window", choices=("24h", "48h", "7d"), default="24h")
+    parser.add_argument("--viewers", type=int, default=100)
+    parser.add_argument("--output", type=Path, help="Output file; AOI/scientific modes default to .cache and global mode defaults to stdout")
+    arguments = parser.parse_args()
+    if arguments.global_points or arguments.global_raster:
+        import os
+        if arguments.global_raster:
+            from global_raster_benchmark import run
+        else:
+            from global_point_benchmark import run
+        if not 1 <= arguments.viewers <= 1000:
+            parser.error("--viewers must be from 1 to 1000")
+        database = arguments.database or Path(os.environ.get("SHARP_GLOBAL_DB_PATH", str(ROOT / "src/backend_api/data/global-hotspots.sqlite")))
+        result = run(database, arguments.window, arguments.viewers)
+        encoded = json.dumps(result, indent=2) + "\n"
+        if arguments.output:
+            arguments.output.parent.mkdir(parents=True, exist_ok=True)
+            arguments.output.write_text(encoded, encoding="utf-8")
+        print(encoded)
+    elif arguments.global_schema:
+        from global_benchmark import benchmark_global
+        if not 100 <= arguments.records_per_source <= 100000:
+            parser.error("--records-per-source must be from 100 to 100000")
+        result = asyncio.run(benchmark_global(arguments.records_per_source))
+        encoded = json.dumps(result, indent=2) + "\n"
+        if arguments.output:
+            arguments.output.parent.mkdir(parents=True, exist_ok=True)
+            arguments.output.write_text(encoded, encoding="utf-8")
+        print(encoded)
+    elif arguments.scientific:
+        from scientific_benchmark import benchmark_scientific
+        result = benchmark_scientific()
+        encoded = json.dumps(result, indent=2) + "\n"
+        target = arguments.output or ROOT / ".cache" / "benchmark-scientific-results.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(encoded, encoding="utf-8")
+        print(encoded)
+    else:
+        asyncio.run(main(arguments.output))

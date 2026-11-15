@@ -1,6 +1,8 @@
+import { apiUrl } from '@/lib/api-config'
 import { Popup, type GeoJSONSource, type Map as MapLibreMap, type MapMouseEvent } from 'maplibre-gl'
 import type { FeatureCollection } from 'geojson'
 import type { GlobalManifest } from '@/hooks/use-global-fires'
+import type { FrozenSelection, ObservationFilters } from '@/lib/investigation'
 import type { FireFeature } from '@/lib/fire-severity'
 import { mergeGlobalTiles, visibleGlobalTiles, type GlobalTileCollection } from '@/lib/global-tiles'
 import { FIRE_COLOR_EXPRESSION, FIRE_SQUARE_IMAGE, fireSquareSprite } from './fire-map-style'
@@ -14,6 +16,7 @@ const SELECTED_SOURCE = 'global-hotspot-selected',
   SELECTED_LAYER = 'global-hotspot-selected-square'
 const EMPTY: FeatureCollection = { type: 'FeatureCollection', features: [] }
 export type GlobalDisplayStatus = {
+  snapshotId?: string
   loading: boolean
   error: string
   visibleTiles: number
@@ -28,6 +31,10 @@ export function createGlobalFireController(
     onStatus: (status: GlobalDisplayStatus) => void
     fetch?: typeof fetch
     createPopup?: () => Popup
+    onOpenAnalytics?: (selection: FrozenSelection) => void
+    onRefreshSnapshot?: () => void
+    /** Context pixels only; inspection remains available in analytical scopes. */
+    displayOnly?: boolean
   },
 ) {
   let manifest: GlobalManifest | null = null,
@@ -38,6 +45,8 @@ export function createGlobalFireController(
     selected: FeatureCollection = EMPTY
   let observationKey = '',
     aggregateKey = ''
+  let displayFilters: ObservationFilters = {}
+  let parentAggregate: string | undefined
   let retainedObservations: FireFeature[] = []
   let request: AbortController | null = null,
     revision = 0,
@@ -81,11 +90,15 @@ export function createGlobalFireController(
           source: GLOBAL_AGGREGATE_SOURCE,
           layout: {
             'icon-image': FIRE_SQUARE_IMAGE,
-            'icon-size': ['interpolate', ['linear'], ['zoom'], 0, 0.85, 10, 1.2, 18, 1.5],
+            'icon-size': options.displayOnly
+              ? ['interpolate', ['linear'], ['zoom'], 0, 0.375, 8, 0.51, 14, 0.63]
+              : ['interpolate', ['linear'], ['zoom'], 0, 0.85, 10, 1.2, 18, 1.5],
             'icon-allow-overlap': true,
             'icon-ignore-placement': true,
             'icon-padding': 0,
-            'text-field': ['case', ['>', ['get', 'count'], 1], ['to-string', ['get', 'count']], ''],
+            'text-field': options.displayOnly
+              ? ''
+              : ['case', ['>', ['get', 'count'], 1], ['to-string', ['get', 'count']], ''],
             'text-size': 9,
             'text-font': ['Fira Sans'],
             'text-allow-overlap': true,
@@ -127,7 +140,11 @@ export function createGlobalFireController(
         before,
       )
     map.setLayoutProperty(GLOBAL_AGGREGATE_LAYER, 'visibility', enabled ? 'visible' : 'none')
-    map.setLayoutProperty(SELECTED_LAYER, 'visibility', enabled ? 'visible' : 'none')
+    map.setLayoutProperty(
+      SELECTED_LAYER,
+      'visibility',
+      enabled || selected.features.length ? 'visible' : 'none',
+    )
   }
   function clearPopup() {
     popupView?.destroy()
@@ -137,6 +154,7 @@ export function createGlobalFireController(
   function onClick(event: MapMouseEvent) {
     if (
       !enabled ||
+      options.displayOnly ||
       !interactive ||
       disposed ||
       !manifest?.snapshotId ||
@@ -155,6 +173,12 @@ export function createGlobalFireController(
       snapshotId: manifest.snapshotId,
       window: manifest.window,
       aggregateId: id,
+      interval: manifest.interval!,
+      onOpenAnalytics: (selection) => options.onOpenAnalytics?.(selection),
+      onRefreshSnapshot: () => {
+        popup.remove()
+        options.onRefreshSnapshot?.()
+      },
       onSelect: (feature) => {
         selected = feature ? { type: 'FeatureCollection', features: [feature] } : EMPTY
         if (!disposed) ensure()
@@ -184,7 +208,7 @@ export function createGlobalFireController(
           })
       },
     })
-    popup.setLngLat(event.lngLat).setDOMContent(popupView.root).addTo(map)
+    popup.setMaxWidth('240px').setLngLat(event.lngLat).setDOMContent(popupView.root).addTo(map)
     dragging.refresh()
   }
   const fetchTile = options.fetch ?? fetch
@@ -222,6 +246,7 @@ export function createGlobalFireController(
     const activeSnapshot = manifest.snapshotId,
       activeWindow = manifest.window
     options.onStatus({
+      snapshotId: activeSnapshot,
       loading: true,
       error: '',
       visibleTiles: tiles.length,
@@ -233,19 +258,21 @@ export function createGlobalFireController(
       for (let start = 0; start < tiles.length; start += 4) {
         const batch = await Promise.all(
           tiles.slice(start, start + 4).map(async (tile) => {
-            const url = template
+            let url = template
               .replace('{snapshotId}', encodeURIComponent(activeSnapshot))
               .replace('{window}', activeWindow)
               .replace('{z}', String(tile.z))
               .replace('{x}', String(tile.x))
               .replace('{y}', String(tile.y))
+            if (Object.keys(displayFilters).length || parentAggregate)
+              url += `${url.includes('?') ? '&' : '?'}filters=${encodeURIComponent(JSON.stringify(displayFilters))}${parentAggregate ? `&aggregateId=${encodeURIComponent(parentAggregate)}` : ''}`
             const existing = cache.get(url)
             if (existing) {
               cache.delete(url)
               cache.set(url, existing)
               return existing
             }
-            const response = await fetchTile(url, { signal: controller.signal })
+            const response = await fetchTile(apiUrl(url), { signal: controller.signal })
             if (!response.ok) {
               const body = await response.json().catch(() => ({}))
               throw new Error(
@@ -305,6 +332,7 @@ export function createGlobalFireController(
         }
       }
       options.onStatus({
+        snapshotId: activeSnapshot,
         loading: false,
         error: '',
         visibleTiles: tiles.length,
@@ -314,6 +342,7 @@ export function createGlobalFireController(
     } catch (error) {
       if (!disposed && !controller.signal.aborted && current === revision)
         options.onStatus({
+          snapshotId: activeSnapshot,
           loading: false,
           error: error instanceof Error ? error.message : 'Global tiles could not load.',
           visibleTiles: tiles.length,
@@ -329,7 +358,7 @@ export function createGlobalFireController(
   const navigate = () => void refresh()
   map.on('moveend', navigate)
   map.on('style.load', styleLoad)
-  map.on('click', onClick)
+  if (!options.displayOnly) map.on('click', onClick)
   const outside = (event: PointerEvent) => {
     if (
       popup.isOpen() &&
@@ -340,6 +369,24 @@ export function createGlobalFireController(
   }
   if (typeof document !== 'undefined') document.addEventListener('pointerdown', outside)
   return {
+    setHighlight(feature: FireFeature | null) {
+      selected = feature ? { type: 'FeatureCollection', features: [feature] } : EMPTY
+      ensure()
+    },
+    setInvestigation(filters: ObservationFilters = {}, aggregateId?: string) {
+      if (
+        JSON.stringify(filters) === JSON.stringify(displayFilters) &&
+        parentAggregate === aggregateId
+      )
+        return
+      displayFilters = filters
+      parentAggregate = aggregateId
+      displayKey = ''
+      request?.abort()
+      revision++
+      popup.remove()
+      void refresh()
+    },
     setManifest(next: GlobalManifest | null) {
       const changed = next?.snapshotId !== manifest?.snapshotId || next?.window !== manifest?.window
       manifest = next
@@ -375,8 +422,8 @@ export function createGlobalFireController(
       if (next) void refresh()
     },
     setInteractive(next: boolean) {
-      interactive = next
-      if (!next) popup.remove()
+      interactive = !options.displayOnly && next
+      if (!interactive) popup.remove()
     },
     retry() {
       displayKey = ''

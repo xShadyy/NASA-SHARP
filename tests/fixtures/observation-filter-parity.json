@@ -1,0 +1,319 @@
+﻿{
+  "sortCases": [
+    {
+      "expectedIds": [
+        "aqua:cfa0d378b9cae3822ad1f416",
+        "aqua:e6e49eb1a006b45d986213ae",
+        "noaa-20:a7cbf25b8575fd0c55ebc76e",
+        "noaa-21:27438104023e59cd76ce60c6",
+        "aqua:692104032eea06291e38b40b",
+        "noaa-20:af855c9252720bc365d1f10a",
+        "terra:9a808f015e3e273874f9acba",
+        "aqua:04afe2012d4b8e48b4475ae3"
+      ],
+      "name": "newest global stable ties",
+      "options": {
+        "sort": "newest"
+      }
+    },
+    {
+      "expectedIds": [
+        "aqua:04afe2012d4b8e48b4475ae3",
+        "aqua:692104032eea06291e38b40b",
+        "noaa-20:af855c9252720bc365d1f10a",
+        "terra:9a808f015e3e273874f9acba",
+        "noaa-21:27438104023e59cd76ce60c6",
+        "aqua:cfa0d378b9cae3822ad1f416",
+        "aqua:e6e49eb1a006b45d986213ae",
+        "noaa-20:a7cbf25b8575fd0c55ebc76e"
+      ],
+      "name": "oldest global stable ties",
+      "options": {
+        "sort": "oldest"
+      }
+    },
+    {
+      "expectedIds": [
+        "noaa-21:27438104023e59cd76ce60c6",
+        "aqua:cfa0d378b9cae3822ad1f416",
+        "aqua:e6e49eb1a006b45d986213ae",
+        "noaa-20:af855c9252720bc365d1f10a",
+        "terra:9a808f015e3e273874f9acba",
+        "aqua:692104032eea06291e38b40b",
+        "aqua:04afe2012d4b8e48b4475ae3",
+        "noaa-20:a7cbf25b8575fd0c55ebc76e"
+      ],
+      "name": "frp global stable ties",
+      "options": {
+        "sort": "frp"
+      }
+    }
+  ],
+  "description": "Shared offline canonical observation filter and ordering contract. No real observations or NASA requests.",
+  "observations": [
+    {
+      "id": "aqua:04afe2012d4b8e48b4475ae3",
+      "platform": "aqua",
+      "latitude": 10,
+      "confidence": {
+        "kind": "numeric",
+        "value": null
+      },
+      "sourceProduct": "MODIS_NRT",
+      "dayNight": "unknown",
+      "acquiredAt": "2026-11-14T23:59:00Z",
+      "frpMw": null,
+      "sensor": "MODIS",
+      "longitude": 10
+    },
+    {
+      "id": "aqua:692104032eea06291e38b40b",
+      "platform": "aqua",
+      "latitude": 10,
+      "confidence": {
+        "kind": "numeric",
+        "value": 0
+      },
+      "sourceProduct": "MODIS_NRT",
+      "dayNight": "day",
+      "acquiredAt": "2026-11-15T00:00:00Z",
+      "frpMw": 0,
+      "sensor": "MODIS",
+      "longitude": 11
+    },
+    {
+      "id": "terra:9a808f015e3e273874f9acba",
+      "platform": "terra",
+      "latitude": 10,
+      "confidence": {
+        "kind": "numeric",
+        "value": 80
+      },
+      "sourceProduct": "MODIS_NRT",
+      "dayNight": "night",
+      "acquiredAt": "2026-11-15T00:00:00Z",
+      "frpMw": 10,
+      "sensor": "MODIS",
+      "longitude": 12
+    },
+    {
+      "id": "noaa-20:af855c9252720bc365d1f10a",
+      "platform": "noaa-20",
+      "latitude": 10,
+      "confidence": {
+        "kind": "categorical",
+        "value": "nominal"
+      },
+      "sourceProduct": "VIIRS_NOAA20_NRT",
+      "dayNight": "day",
+      "acquiredAt": "2026-11-15T00:00:00Z",
+      "frpMw": 50,
+      "sensor": "VIIRS",
+      "longitude": 13
+    },
+    {
+      "id": "noaa-21:27438104023e59cd76ce60c6",
+      "platform": "noaa-21",
+      "latitude": 10,
+      "confidence": {
+        "kind": "categorical",
+        "value": "high"
+      },
+      "sourceProduct": "VIIRS_NOAA21_NRT",
+      "dayNight": "night",
+      "acquiredAt": "2026-11-15T01:00:00Z",
+      "frpMw": 100,
+      "sensor": "VIIRS",
+      "longitude": 14
+    },
+    {
+      "id": "noaa-20:a7cbf25b8575fd0c55ebc76e",
+      "platform": "noaa-20",
+      "latitude": 10,
+      "confidence": {
+        "kind": "categorical",
+        "value": null
+      },
+      "sourceProduct": "VIIRS_NOAA20_NRT",
+      "dayNight": "unknown",
+      "acquiredAt": "2026-11-15T12:30:00Z",
+      "frpMw": null,
+      "sensor": "VIIRS",
+      "longitude": 15
+    },
+    {
+      "id": "aqua:cfa0d378b9cae3822ad1f416",
+      "platform": "aqua",
+      "latitude": 10,
+      "confidence": {
+        "kind": "numeric",
+        "value": 80
+      },
+      "sourceProduct": "MODIS_NRT",
+      "dayNight": "day",
+      "acquiredAt": "2026-11-15T12:30:00Z",
+      "frpMw": 50,
+      "sensor": "MODIS",
+      "longitude": 16
+    },
+    {
+      "id": "aqua:e6e49eb1a006b45d986213ae",
+      "platform": "aqua",
+      "latitude": 10,
+      "confidence": {
+        "kind": "numeric",
+        "value": 80
+      },
+      "sourceProduct": "MODIS_NRT",
+      "dayNight": "day",
+      "acquiredAt": "2026-11-15T12:30:00Z",
+      "frpMw": 50,
+      "sensor": "MODIS",
+      "longitude": 17
+    }
+  ],
+  "cases": [
+    {
+      "expectedIds": [
+        "aqua:692104032eea06291e38b40b",
+        "noaa-20:af855c9252720bc365d1f10a",
+        "terra:9a808f015e3e273874f9acba"
+      ],
+      "name": "UTC midnight inclusive start and exclusive end",
+      "options": {
+        "acquiredStart": "2026-11-15T00:00:00Z",
+        "acquiredEndExclusive": "2026-11-15T01:00:00Z"
+      }
+    },
+    {
+      "expectedIds": [
+        "aqua:cfa0d378b9cae3822ad1f416",
+        "aqua:e6e49eb1a006b45d986213ae",
+        "noaa-20:a7cbf25b8575fd0c55ebc76e"
+      ],
+      "name": "UTC hour across dates",
+      "options": {
+        "acquisitionHour": 12
+      }
+    },
+    {
+      "expectedIds": ["aqua:04afe2012d4b8e48b4475ae3", "noaa-20:a7cbf25b8575fd0c55ebc76e"],
+      "name": "unknown FRP",
+      "options": {
+        "frpUnknown": true
+      }
+    },
+    {
+      "expectedIds": ["aqua:692104032eea06291e38b40b"],
+      "name": "zero and half open FRP bucket",
+      "options": {
+        "frpMaxExclusive": 10,
+        "frpMin": 0
+      }
+    },
+    {
+      "expectedIds": ["aqua:04afe2012d4b8e48b4475ae3"],
+      "name": "native MODIS unknown",
+      "options": {
+        "modisConfidenceUnknown": true
+      }
+    },
+    {
+      "expectedIds": ["aqua:692104032eea06291e38b40b"],
+      "name": "native MODIS zero",
+      "options": {
+        "modisConfidenceMax": 0,
+        "modisConfidenceMin": 0
+      }
+    },
+    {
+      "expectedIds": ["noaa-20:a7cbf25b8575fd0c55ebc76e"],
+      "name": "native VIIRS unknown",
+      "options": {
+        "viirsConfidence": ["unknown"]
+      }
+    },
+    {
+      "expectedIds": ["noaa-20:af855c9252720bc365d1f10a"],
+      "name": "native VIIRS nominal",
+      "options": {
+        "viirsConfidence": ["nominal"]
+      }
+    },
+    {
+      "expectedIds": ["aqua:04afe2012d4b8e48b4475ae3", "noaa-20:a7cbf25b8575fd0c55ebc76e"],
+      "name": "unknown day night",
+      "options": {
+        "dayNight": "unknown"
+      }
+    },
+    {
+      "expectedIds": ["noaa-20:a7cbf25b8575fd0c55ebc76e", "noaa-20:af855c9252720bc365d1f10a"],
+      "name": "platform search punctuation and case",
+      "options": {
+        "search": "NOAA-20"
+      }
+    },
+    {
+      "expectedIds": ["noaa-21:27438104023e59cd76ce60c6"],
+      "name": "source search",
+      "options": {
+        "search": "VIIRS_NOAA21"
+      }
+    },
+    {
+      "expectedIds": [
+        "aqua:04afe2012d4b8e48b4475ae3",
+        "aqua:692104032eea06291e38b40b",
+        "aqua:cfa0d378b9cae3822ad1f416",
+        "aqua:e6e49eb1a006b45d986213ae",
+        "terra:9a808f015e3e273874f9acba"
+      ],
+      "name": "sensor search",
+      "options": {
+        "search": "modis"
+      }
+    },
+    {
+      "expectedIds": ["aqua:cfa0d378b9cae3822ad1f416"],
+      "name": "canonical ID search",
+      "options": {
+        "search": "aqua:cfa0d378b9cae3822ad1f416"
+      }
+    },
+    {
+      "expectedIds": ["aqua:e6e49eb1a006b45d986213ae"],
+      "name": "canonical observation ID condition",
+      "options": {
+        "observationId": "aqua:e6e49eb1a006b45d986213ae"
+      }
+    },
+    {
+      "expectedIds": ["noaa-20:a7cbf25b8575fd0c55ebc76e"],
+      "name": "source and unknown condition",
+      "options": {
+        "dayNight": "unknown",
+        "source": "VIIRS_NOAA20_NRT"
+      }
+    },
+    {
+      "expectedIds": [
+        "aqua:692104032eea06291e38b40b",
+        "aqua:cfa0d378b9cae3822ad1f416",
+        "aqua:e6e49eb1a006b45d986213ae"
+      ],
+      "name": "MODIS and day",
+      "options": {
+        "sensor": "MODIS",
+        "dayNight": "day"
+      }
+    },
+    {
+      "expectedIds": ["terra:9a808f015e3e273874f9acba"],
+      "name": "platform",
+      "options": {
+        "platform": "terra"
+      }
+    }
+  ]
+}

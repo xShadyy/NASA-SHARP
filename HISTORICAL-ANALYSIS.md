@@ -10,9 +10,9 @@ observations are never added to construct this metric. Terra is excluded.
 
 No production historical archive ships with this checkout. Historical summaries
 therefore require an imported archive. Tests use explicitly synthetic fixtures;
-no fixture is served as production history. When no forecast is supported, the
-outlook control may display real cached selected-interval recurrence as a clearly
-labeled historical activity diagnostic, with no probabilities or forecast horizon.
+no fixture is served as production history. An unsupported forecast remains
+unavailable. The separate, explicitly selected Historical activity mode can
+display cached selected-interval reports with no probabilities or forecast horizon.
 
 The Burning Activity Calendar accepts custom intervals longer than 31 days in
 the same panel. These use stored daily summaries, with month navigation; selecting
@@ -75,9 +75,13 @@ processing generation. Example schema (replace these values with your data):
 ```
 
 The rectangle is only a schema example, not an assertion of supplied
-coverage. A nonrectangular manifest is served only for that exact AOI;
-a rectangular domain can serve any fully contained AOI. This avoids
-extending regional coverage to unsupported countries or boundary cells.
+coverage. Analytical coverage follows this registered geometry and its
+platform/day records, never the bounding box of positive detections. A wholly
+contained AOI with complete reporting and no detections can therefore return
+a reported zero; unsupported or unknown coverage remains unavailable. Geometry
+admission is conservative for concave boundaries and holes: the whole selected
+geometry must be supported. Boundary-touching cells can be excluded rather than
+claiming unsupported coverage.
 `forecastPlatforms` fixes the reporting configuration used for training and
 labels; every configured platform must have complete coverage on a target
 or feature day. Changes require retraining.
@@ -91,8 +95,10 @@ $env:SHARP_HISTORY_PATH = (Resolve-Path data/region-history.sqlite).Path
 
 Import validates region membership and coverage, preserves provenance and
 replaces the registered dataset in one SQLite transaction. Generation hashes
-include records, coverage and manifest identity. The reader maintains a
-bounded two-generation cache invalidated by file change. The path is local
+include records, coverage and manifest identity. The reader reads the manifest,
+records and coverage in one SQLite read transaction and maintains a bounded
+cache keyed by the actual generation read. Concurrent imports cannot mix old
+metadata with new observations. The path is local
 and server-side. No global or multidecade download occurs.
 
 ## Historical contract and baseline
@@ -134,7 +140,9 @@ accuracy.
 the fixed existing 2 km equal-area grid. It returns distinct detection UTC
 dates, first/latest reported acquisition, record count and reporting-day
 coverage per occupied cell. It rejects more than 20,000 occupied cells
-explicitly. Repeated reports do not establish continuous burning, fire
+explicitly. Only occupied cells are emitted: blank areas can mean no reported
+detections or unavailable reporting support, never confirmed absence of fire.
+Repeated reports do not establish continuous burning, fire
 duration, spread, incident identity or burned area.
 
 ## Train and evaluate offline
@@ -148,7 +156,12 @@ Training never runs during API requests or map interaction. It needs at least
 120 complete reporting days and both classes in training and calibration.
 The initial bounded pure-Python implementation permits at most 5,000
 candidate 10 km cells and 300,000 cell/day examples; choose a smaller genuine
-regional extract when the explicit limits are exceeded. No new backend
+regional extract when the explicit limits are exceeded. Training and serving
+use the same whole-cell support policy: the full 10 km equal-area cell must lie
+inside the registered domain, including its holes and concave boundaries.
+Artifacts record `whole-10km-cells-contained-in-registered-domain-v1`; earlier
+center-only artifacts require offline retraining before probability mode.
+No new backend
 dependency, negative sampling, class weighting or imputation is used.
 
 The target is **probability of at least one reported satellite hotspot
@@ -208,9 +221,15 @@ windows, unsupported regions and stale reporting are masked/unavailable.
 `POST /analysis/outlook` serves the current 24-hour issue only for a map
 interval containing the current UTC date. Historical dates have no current
 forecast. Its bounded cache keys include model, issue, input generation and
-query identity. A configured artifact must match method, dataset, domain and
-platform configuration; new inputs invalidate cached results without
-retraining. No forward forecast is served inside its final test period.
+query identity, the actual artifact contents and support policy. Results expire
+at their exclusive `validEnd`; the client removes expired probabilities and
+refreshes only stored diagnostics. A configured artifact must match method,
+dataset, domain and platform configuration; new inputs invalidate cached results
+without retraining. No forward forecast is served inside its final test period.
+The endpoint's default `options.mode` is `forecast`. Explicit
+`options.mode: "historical-activity"` requests cached selected-interval reports;
+the forecast path never silently substitutes that diagnostic. Refreshing either
+mode does not reacquire FIRMS observations.
 
 ## Official fire-weather context
 
@@ -240,9 +259,42 @@ Run the backend suite from the root:
 src/backend_api/.venv/Scripts/python.exe -m unittest discover -s src/backend_api/tests
 ```
 
-The scientific performance fixture test records actual local timings in
-`tools/benchmark-scientific-results.json`: a five-year 73,920-observation
-summary, offline training/evaluation, first serving and repeated cached
-serving. These are synthetic CPU-path measurements and exclude genuine
-archive import scale, remote acquisition latency and browser rendering.
+The scientific performance fixture test exercises a five-year 73,920-observation
+summary, offline training/evaluation, first serving and repeated cached serving.
+Its report is written only to a temporary directory; ordinary unit tests leave
+the checkout unchanged. These synthetic CPU-path checks exclude genuine archive
+import scale, remote acquisition latency and browser rendering. Previously
+recorded benchmark artifacts are not evidence of the current environment.
 No production historical coverage or forecast accuracy is claimed.
+
+For browser integration only, start the real API with isolated synthetic data:
+
+```powershell
+src/backend_api/.venv/Scripts/python.exe tools/browser-fixture-server.py --port 8000
+```
+
+This command seeds temporary SQLite stores, disables ingestion and keys, blocks
+outbound backend HTTP, and deletes the stores on shutdown. It exposes fixture
+identities and sanitized request counters at `/test-fixture`; the explicit
+`/test-fixture/expire-snapshot` action exercises expired membership. These test
+routes are registered only by this command and are absent from production startup.
+`POST /test-fixture/shutdown` stops the local test server gracefully and removes
+its temporary stores.
+
+The browser suite starts its own fixture API on port 8001 and Vite on port 5174.
+It requires a local Chromium executable and uses temporary browser profiles:
+
+```powershell
+$env:SHARP_BROWSER_TEST = '1'
+# Set SHARP_TEST_CHROME if Chrome is installed elsewhere.
+npm run test
+Remove-Item Env:SHARP_BROWSER_TEST
+```
+
+Ordinary frontend tests skip this browser case. The explicit run writes results,
+a screenshot and a PDF brief under ignored `.cache/browser-tests/`. Its map
+images are local substitutes; the record endpoints, map interactions, SQLite
+archives, downloads and print renderer are real. Browser fixtures and their
+scientific values are synthetic test data, not operational validation.
+`SHARP_API_PROXY_TARGET` configures Vite's server-side proxy target independently
+of `VITE_FIRMS_API_BASE_URL`; its default remains `http://127.0.0.1:8000`.

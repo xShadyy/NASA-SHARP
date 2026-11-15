@@ -68,6 +68,7 @@ class Detection:
     source_product: str | None = None
     product_version: str | None = None
     processing_tier: str | None = None
+    confidence_native: str | int | None = None
 
 
 @dataclass(frozen=True)
@@ -95,6 +96,10 @@ class CanonicalStore:
     fetched_at: float | None = None
     expires_at: float | None = None
     cache_hit: bool | None = None
+    coverage_geometry: dict | None = None
+    generation: str | None = None
+    source_states: tuple[dict, ...] = ()
+    calibration: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -281,6 +286,47 @@ def _boxes_overlap(left: tuple[float, float, float, float], right: tuple[float, 
     return not (left[2] < right[0] or right[2] < left[0] or left[3] < right[1] or right[3] < left[1])
 
 
+def geometry_supports_area(support: dict, selected: dict) -> bool:
+    """Conservative whole-geometry support; never infer coverage from detections.
+
+    Exact registered geometries and contained rectangles are fast paths. For
+    irregular domains, crossing boundaries or an enclosed hole exclude support.
+    Boundary-touching irregular candidates may be excluded conservatively.
+    """
+    if support == selected:
+        return True
+    domain_box, selected_box = geometry_bbox(support), geometry_bbox(selected)
+    if domain_box is None or selected_box is None or not (
+        domain_box[0] <= selected_box[0] <= selected_box[2] <= domain_box[2]
+        and domain_box[1] <= selected_box[1] <= selected_box[3] <= domain_box[3]
+    ):
+        return False
+    polygons = support.get("coordinates", []) if support.get("type") == "MultiPolygon" else [support.get("coordinates", [])]
+    if len(polygons) == 1 and len(polygons[0]) == 1:
+        corners = {(domain_box[0], domain_box[1]), (domain_box[0], domain_box[3]), (domain_box[2], domain_box[1]), (domain_box[2], domain_box[3])}
+        if {tuple(p[:2]) for p in polygons[0][0]} == corners:
+            return True
+    candidates = selected.get("coordinates", []) if selected.get("type") == "MultiPolygon" else [selected.get("coordinates", [])]
+    area = prepared_area(support)
+    selected_area = prepared_area(selected)
+    candidate_edges = [(a, b) for polygon in candidates for ring in polygon for a, b in zip(ring, ring[1:])]
+    if not candidate_edges or any(not area.contains(*point[:2]) for polygon in candidates for ring in polygon for point in ring):
+        return False
+    def orientation(a, b, c):
+        return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+    for polygon in polygons:
+        for ring in polygon:
+            for a, b in zip(ring, ring[1:]):
+                if max(a[0], b[0]) < selected_box[0] or min(a[0], b[0]) > selected_box[2] or max(a[1], b[1]) < selected_box[1] or min(a[1], b[1]) > selected_box[3]:
+                    continue
+                if selected_box[0] < a[0] < selected_box[2] and selected_box[1] < a[1] < selected_box[3] and selected_area.contains(*a[:2]):
+                    return False
+                for c, d in candidate_edges:
+                    if orientation(a, b, c) * orientation(a, b, d) < 0 and orientation(c, d, a) * orientation(c, d, b) < 0:
+                        return False
+    return True
+
+
 def _parse_acquired(value: str) -> datetime:
     parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
     if parsed.tzinfo is None:
@@ -337,6 +383,7 @@ def detection_from_row(row: dict[str, str | None]) -> Detection:
         (row.get("source_product") or "").strip() or None,
         (row.get("product_version") or "").strip() or None,
         (row.get("processing_tier") or "").strip() or None,
+        row.get("confidence_native") or None,
     )
 
 
@@ -545,22 +592,15 @@ def harmonized_daily_activity(
     end_exclusive: date,
     coverage: tuple[Coverage, ...] | list[Coverage],
     filters: Filters,
+    coverage_geometry: dict | None = None,
+    calibration: dict | None = None,
 ) -> ActivityResult:
     if end_exclusive <= start:
         raise ValueError("The activity interval must end after it starts.")
     area_box = geometry_bbox(geometry)
     if area_box is None:
         raise ValueError("Analysis geometry has no coordinates.")
-    store_points = [(row.longitude, row.latitude) for row in rows]
-    store_box = None
-    if store_points:
-        store_box = (
-            min(point[0] for point in store_points),
-            min(point[1] for point in store_points),
-            max(point[0] for point in store_points),
-            max(point[1] for point in store_points),
-        )
-    outside_extract = store_box is not None and not _boxes_overlap(area_box, store_box)
+    outside_extract = coverage_geometry is not None and not geometry_supports_area(coverage_geometry, geometry)
     selected_viirs = filters.platforms & VIIRS_IDS
     index = _coverage_index(tuple(coverage))
     aqua_cells: dict[date, set[tuple[int, int]]] = defaultdict(set)
@@ -608,11 +648,17 @@ def harmonized_daily_activity(
             raw_gaps.append(viirs_count - aqua_pixels.get(day, 0))
     scaled_error = _mean_absolute(scaled_gaps) if scaled_gaps else None
     raw_error = _mean_absolute(raw_gaps) if raw_gaps else None
+    overlap_count = len(ratios)
+    if calibration is not None:
+        scale = calibration.get("scale")
+        overlap_count = calibration.get("overlap_days", overlap_count)
+        scaled_error = calibration.get("scaled_error")
+        raw_error = calibration.get("raw_error")
 
     scale_note = (
-        f"The overlap scale is {scale:.3f} VIIRS cells per Aqua cell, from {len(ratios)} stored days."
+        f"The overlap scale is {scale:.3f} VIIRS cells per Aqua cell, from {overlap_count} stored days."
         if scale is not None
-        else f"The stored overlap has {len(ratios)} days with both Aqua and VIIRS active cells. At least {MIN_OVERLAP_DAYS} are required before Aqua-era days can be scaled."
+        else f"The stored overlap has {overlap_count} days with both Aqua and VIIRS active cells. At least {MIN_OVERLAP_DAYS} are required before Aqua-era days can be scaled."
     )
     days: list[ActivityDay] = []
     cursor = start
@@ -621,10 +667,7 @@ def harmonized_daily_activity(
         aqua_state = index.get((cursor, "aqua")) if "aqua" in filters.platforms else None
         viirs_era = epoch is not None and cursor >= epoch
         if outside_extract:
-            if viirs_state is not None or aqua_state is not None:
-                count, state, text = 0, "partial", "The selected area is outside the bounding box of the stored detections."
-            else:
-                count, state, text = None, "unavailable", "No stored coverage for this UTC day, and the area is outside the stored detections."
+            count, state, text = None, "unavailable", "The selected area is not fully supported by the registered reporting-coverage geometry."
         elif viirs_era:
             count, state, text = _viirs_day(viirs_state, len(viirs_cells.get(cursor, ())))
         elif scale is None:
@@ -642,12 +685,12 @@ def harmonized_daily_activity(
         "Terra is excluded. Its morning orbit has no VIIRS match across the whole record.",
         "VIIRS-era days use the union of Suomi NPP, NOAA-20, and NOAA-21 cells selected in the query. Aqua cells on those days are not added.",
         "A regional extract does not prove what was observed outside the days and places that were stored.",
-        "This area does not intersect the stored detections, so covered days are partial rather than a measured zero." if outside_extract else scale_note,
+        "The selected geometry extends beyond registered reporting coverage; values remain unavailable." if outside_extract else scale_note,
     ]
     if scaled_error is not None and raw_error is not None:
         comparison = "closer to" if scaled_error < raw_error else "not closer to"
         notes.append(
-            f"On {len(ratios)} overlap days, scaled Aqua cells are {comparison} VIIRS cells "
+            f"On {overlap_count} overlap days, scaled Aqua cells are {comparison} VIIRS cells "
             f"than raw Aqua pixel counts (mean absolute difference {scaled_error:.3f} versus {raw_error:.3f})."
         )
     covered = [day.day.isoformat() for day in days if day.state != "unavailable"]
@@ -655,7 +698,7 @@ def harmonized_daily_activity(
         coverage_text = f"{store_from_label(coverage)} Covered result days run from {covered[0]} to {covered[-1]}."
     else:
         coverage_text = "No stored afternoon coverage produced a harmonized value for this request."
-    return ActivityResult(tuple(days), _overall([day.state for day in days]), coverage_text, tuple(notes), scale, len(ratios), scaled_error, raw_error)
+    return ActivityResult(tuple(days), _overall([day.state for day in days]), coverage_text, tuple(notes), scale, overlap_count, scaled_error, raw_error)
 
 
 def store_from_label(coverage: tuple[Coverage, ...] | list[Coverage]) -> str:
@@ -723,7 +766,7 @@ def evaluate_query(query: dict, store: CanonicalStore, updated_at: datetime | No
     try:
         start, end = parse_utc_interval(query.get("interval"))
         filters = filters_from_query(query.get("filters") if isinstance(query.get("filters"), dict) else {})
-        result = harmonized_daily_activity(store.rows, geometry, start, end, store.coverage, filters)
+        result = harmonized_daily_activity(store.rows, geometry, start, end, store.coverage, filters, store.coverage_geometry, store.calibration)
     except ValueError as exc:
         raise RejectedQuery(str(exc)) from exc
     updated = (updated_at or datetime.now(UTC)).astimezone(UTC).isoformat().replace("+00:00", "Z")
@@ -853,9 +896,9 @@ def observation_record(row: Detection, store: CanonicalStore) -> dict:
         "latitude": row.latitude,
         "dayNight": "day" if row.day_night == "D" else "night" if row.day_night == "N" else "unknown",
         "confidence": (
-            {"kind": "numeric", "value": row.confidence_pct, "unit": "native MODIS confidence (0-100)"}
+            {"kind": "numeric", "value": row.confidence_pct, "unit": "native MODIS confidence (0-100)", **({"nativeValue": row.confidence_native} if row.confidence_native is not None else {})}
             if modis
-            else {"kind": "categorical", "value": row.confidence_class}
+            else {"kind": "categorical", "value": row.confidence_class, **({"nativeValue": row.confidence_native} if row.confidence_native is not None else {})}
         ),
         "frpMw": row.frp_mw,
         "scanKm": row.scan_km,
@@ -868,8 +911,10 @@ def observation_record(row: Detection, store: CanonicalStore) -> dict:
     }
 
 
-def observation_coverage_states(store: CanonicalStore, filters: Filters, start: date, end: date) -> dict[date, str]:
+def observation_coverage_states(store: CanonicalStore, filters: Filters, start: date, end: date, geometry: dict | None = None) -> dict[date, str]:
     coverage_index = _coverage_index(store.coverage)
+    if geometry is not None and store.coverage_geometry is not None and not geometry_supports_area(store.coverage_geometry, geometry):
+        return {start + timedelta(days=index): "unavailable" for index in range((end - start).days)}
     return {
         start + timedelta(days=index): _overall([
             coverage_index.get((start + timedelta(days=index), platform), "unavailable")
@@ -881,7 +926,7 @@ def observation_coverage_states(store: CanonicalStore, filters: Filters, start: 
 def overview_document(query: dict, store: CanonicalStore, updated_at: datetime | None = None) -> dict:
     result, filters, start, end, updated = evaluate_query(query, store, updated_at)
     rows = kept_detections(query, store, filters, start, end)
-    states_by_day = observation_coverage_states(store, filters, start, end)
+    states_by_day = observation_coverage_states(store, filters, start, end, query["aoi"]["geometry"])
     availability = _overall(list(states_by_day.values()))
     blank = availability == "unavailable" and not rows
     by_day: dict[date, int] = defaultdict(int)
@@ -986,23 +1031,64 @@ def observation_document(query: dict, store: CanonicalStore, body: dict | None =
     }
 
 
+def display_cell_key(row: Detection, factor: int) -> str:
+    x, y = cell_id(row.longitude, row.latitude)
+    return f"{factor}:{x // factor}:{y // factor}"
+
+
 def map_source_document(query: dict, store: CanonicalStore, body: dict | None = None, updated_at: datetime | None = None) -> dict:
     result, filters, start, end, updated = evaluate_query(query, store, updated_at)
     focused = _focused_day(_options(body), start, end)
-    rows = kept_detections(query, store, filters, start, end, focused)
-    if len(rows) > 100_000:
-        raise RejectedQuery("This selection contains more than 100,000 satellite hotspot detections. Select a smaller region or shorter period; no records were truncated.")
+    rows = kept_detections(query, store, filters, start, end)
+    options = _options(body)
+    if options:
+        from observation_explorer import _matching, observation_membership
+        rows = observation_membership(query, store, rows, options)
+        if focused is not None:
+            rows = [row for row in rows if row.acquired_at.astimezone(UTC).date() == focused]
+        rows = _matching(rows, store, options)
+    display_filters = json.dumps({key: value for key, value in options.items() if key not in {"sourceGeneration", "page", "pageSize", "sort", "groupBy"}}, sort_keys=True, separators=(",", ":"))
     features = []
-    for row in rows:
-        record = observation_record(row, store)
-        features.append({
-            "type": "Feature",
-            "id": record["id"],
-            "geometry": {"type": "Point", "coordinates": [row.longitude, row.latitude]},
-            "properties": {**record, "observationId": record["id"], "queryId": query["id"]},
-        })
+    aggregated = len(rows) > 100_000
+    factor = 1
+    if aggregated:
+        while True:
+            groups = defaultdict(list)
+            for row in rows:
+                groups[display_cell_key(row, factor)].append(row)
+            if len(groups) <= 25_000:
+                break
+            factor *= 2
+        for key, members in sorted(groups.items()):
+            if len(members) == 1:
+                row = members[0]
+                record = observation_record(row, store)
+                features.append({"type": "Feature", "id": record["id"],
+                    "geometry": {"type": "Point", "coordinates": [row.longitude, row.latitude]},
+                    "properties": {**record, "observationId": record["id"], "queryId": query["id"]}})
+                continue
+            latest = max(members, key=lambda row: (row.acquired_at, detection_id(row)))
+            reported_frp = [row.frp_mw for row in members if row.frp_mw is not None and math.isfinite(row.frp_mw) and row.frp_mw >= 0]
+            identifier = f"display:{query['id']}:{key}"
+            features.append({"type": "Feature", "id": identifier,
+                "geometry": {"type": "Point", "coordinates": [latest.longitude, latest.latitude]},
+                "properties": {"id": identifier, "queryId": query["id"], "displayCell": key,
+                    "displayAggregate": True, "detectionCount": len(members),
+                    "displayFilters": display_filters, "displayFiltersApplied": True,
+                    "frpMw": max(reported_frp, default=None),
+                    "acquiredAt": latest.acquired_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+                    "platform": "aggregate", "sensor": ""}})
+    else:
+        for row in rows:
+            record = observation_record(row, store)
+            features.append({
+                "type": "Feature",
+                "id": record["id"],
+                "geometry": {"type": "Point", "coordinates": [row.longitude, row.latitude]},
+                "properties": {**record, "observationId": record["id"], "queryId": query["id"]},
+            })
     coverage = result.coverage if focused is None else f"{focused.isoformat()} UTC. {result.coverage}"
-    raw_states = observation_coverage_states(store, filters, start, end)
+    raw_states = observation_coverage_states(store, filters, start, end, query["aoi"]["geometry"])
     completeness = raw_states.get(focused, "unavailable") if focused is not None else _overall(list(raw_states.values()))
     return {
         "data": {
@@ -1012,7 +1098,11 @@ def map_source_document(query: dict, store: CanonicalStore, body: dict | None = 
         },
         "meta": {
             **_meta(query["id"], result, updated, {"count": "returned detections", "time": "UTC"}, completeness, coverage, (COMPANION_NOTE,)),
-            "representation": "individual-detections",
+            "representation": "bounded-display-aggregates" if aggregated else "individual-detections",
+            "matchingObservations": len(rows),
+            "displayFeatures": len(features),
+            "displayGridSizeM": CELL_SIZE_M * factor if aggregated else None,
+            "aggregateColor": "maximum valid reported FRP, MW" if aggregated else None,
             "processingTier": "firms-active-fire",
         },
     }

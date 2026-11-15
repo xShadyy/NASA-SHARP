@@ -10,11 +10,12 @@ import hashlib
 import io
 import json
 import math
+import os
 import secrets
 import threading
 import time
 from collections import OrderedDict, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
 from fastapi.responses import StreamingResponse
@@ -22,11 +23,11 @@ from fastapi.responses import StreamingResponse
 from harmonize import (
     CanonicalStore, Detection, RejectedQuery, DATASET_VERSION, METHOD_VERSION,
     COMPANION_NOTE, _focused_day, _meta, _options, _page,
-    detection_id, evaluate_query, kept_detections, observation_record,
+    detection_id, display_cell_key, evaluate_query, kept_detections, observation_record,
     observation_coverage_states, _overall,
 )
 
-MAX_SELECTION_IDS = 100_000
+MAX_SELECTION_IDS = 200_000
 MAX_SELECTION_BATCH = 2_000
 MAX_SELECTIONS = 16
 MAX_RETAINED_MEMBERS = 200_000
@@ -41,6 +42,40 @@ class SelectionInvalid(RejectedQuery):
     """A frozen investigation needs an explicit refresh from the map."""
 
 
+class SourceUnavailable(SelectionInvalid):
+    def __init__(self, message, expected=None, current=None, recoverable=True):
+        super().__init__(message)
+        self.code = "analysis-source-unavailable"
+        self.expected_generation = expected
+        self.current_generation = current
+        self.recoverable = recoverable
+
+
+def freshness_metadata(store: CanonicalStore, now: float | None = None) -> dict:
+    """Publication cannot reset the retrieval age of a failed source."""
+    now = time.time() if now is None else now
+    states = []
+    for state in store.source_states:
+        retrieved = state.get("retrievedAt")
+        expiry = state.get("expiresAt")
+        try:
+            fetched = datetime.fromisoformat(retrieved.replace("Z", "+00:00")).timestamp() if retrieved else None
+            expires = datetime.fromisoformat(expiry.replace("Z", "+00:00")).timestamp() if isinstance(expiry, str) else expiry
+        except (ValueError, TypeError):
+            fetched, expires = None, None
+        if expires is None and fetched is not None:
+            expires = fetched + int(os.environ.get("SHARP_GLOBAL_STALE_SECONDS", "3600"))
+        freshness = "unknown" if fetched is None else "fresh" if state.get("status") in {"ok", "complete"} and expires is not None and expires > now else "stale"
+        states.append({**state, "freshness": freshness})
+    freshness = "unknown" if store.fetched_at is None else "fresh" if store.expires_at is not None and store.expires_at > now else "stale"
+    if states:
+        values = {state["freshness"] for state in states}
+        freshness = next(iter(values)) if len(values) == 1 else "mixed"
+    if store.source.startswith("Regional archive "):
+        freshness = "archived"
+    return {"freshness": freshness, "sourceStates": states}
+
+
 def scope_key(query: dict) -> str:
     return hashlib.sha256(json.dumps({key: query.get(key) for key in
         ("aoi", "interval", "filters", "processingMode")}, sort_keys=True,
@@ -49,6 +84,8 @@ def scope_key(query: dict) -> str:
 
 def source_generation(store: CanonicalStore) -> str:
     """Changes include canonical metadata and coverage, but not cache-read time."""
+    if store.generation:
+        return store.generation
     key = (id(store.rows), id(store.coverage), store.source)
     with _lock:
         remembered = _generations.get(key)
@@ -63,14 +100,16 @@ def source_generation(store: CanonicalStore) -> str:
     generation = digest.hexdigest()
     with _lock:
         # Retaining tuples prevents Python object ID reuse.
-        _generations[key] = (generation, store.rows, store.coverage)
+        if len(store.rows) <= MAX_RETAINED_MEMBERS:
+            _generations[key] = (generation, store.rows, store.coverage)
         while len(_generations) > 4:
             _generations.popitem(last=False)
     return generation
 
 
-def remember_snapshot(query: dict, store: CanonicalStore) -> None:
+def remember_snapshot(query: dict, store: CanonicalStore) -> CanonicalStore:
     """Map/summary work makes its existing source available without acquisition."""
+    store = scoped_snapshot(query, store)
     generation = source_generation(store)
     with _lock:
         key = scope_key(query)
@@ -78,6 +117,22 @@ def remember_snapshot(query: dict, store: CanonicalStore) -> None:
         _snapshots.move_to_end(key)
         while len(_snapshots) > 4 or sum(len(item[1].rows) for item in _snapshots.values()) > 200_000:
             _snapshots.popitem(last=False)
+    return store
+
+
+def scoped_snapshot(query: dict, store: CanonicalStore) -> CanonicalStore:
+    """Retain query members and fitted calibration, never unrelated archive rows."""
+    result, filters, start, end, _updated = evaluate_query(query, store)
+    rows = tuple(kept_detections(query, store, filters, start, end))
+    if len(rows) > MAX_RETAINED_MEMBERS:
+        raise RejectedQuery("Investigation exceeds the 200,000 matching-observation retention budget. Narrow the area or interval.")
+    coverage = tuple(record for record in store.coverage if start <= record.day < end)
+    calibration = store.calibration
+    if calibration is None:
+        from historical_activity import method_evidence
+        calibration = {"scale": result.scale, "overlap_days": result.overlap_days, "scaled_error": result.scaled_error, "raw_error": result.raw_pixel_error,
+                       "evidence": method_evidence(query, store)}
+    return replace(store, rows=rows, coverage=coverage, generation=source_generation(store), calibration=calibration)
 
 
 def has_snapshot(query: dict) -> bool:
@@ -92,14 +147,17 @@ def cached_snapshot(query: dict, options: dict) -> CanonicalStore:
         token = options.get("selectionToken")
         selection = _selection(query, token) if token else None
         if selection is not None:
-            if snapshot is not None and snapshot[0] != selection.generation:
-                raise SelectionInvalid("The observation source changed. Refresh the selected group from the map.")
+            if options.get("sourceGeneration") not in (None, selection.generation):
+                raise SelectionInvalid("The selected group's source generation does not match this investigation.")
             return selection.store
-        if snapshot is None or time.monotonic() - snapshot[2] > SELECTION_TTL:
-            raise SelectionInvalid("The map observation source is no longer cached. Refresh the map before selecting this group.")
+        if snapshot is None:
+            raise SourceUnavailable("Restoring observations for the selected area and period.",
+                                    options.get("sourceGeneration"), recoverable=not bool(options.get("observationIds")))
         expected = options.get("sourceGeneration")
         if expected is not None and expected != snapshot[0]:
-            raise SelectionInvalid("The observation source changed. Refresh the selected group from the map.")
+            raise SourceUnavailable("The stored observation source changed. Restoring this investigation.",
+                                    expected, snapshot[0], not bool(options.get("observationIds")))
+        _snapshots.move_to_end(scope_key(query))
         return snapshot[1]
 
 
@@ -122,19 +180,54 @@ def _selection(query: dict, token: str) -> FrozenSelection:
             raise SelectionInvalid("The selected group expired. Select it again on the map.")
         if selection.scope != scope_key(query):
             raise SelectionInvalid("This selected group belongs to a different region or interval. Return to the whole area or select the group again.")
+        selection.created = time.monotonic()
         _selections.move_to_end(token)
         return selection
 
 
 def freeze_document(query: dict, store: CanonicalStore, body: dict) -> dict:
+    store = scoped_snapshot(query, store)
     options = _options(body)
-    ids = options.get("observationIds")
-    if not isinstance(ids, list) or not ids or len(ids) > MAX_SELECTION_BATCH or any(not isinstance(value, str) or len(value) > 128 for value in ids):
-        raise RejectedQuery(f"Send 1–{MAX_SELECTION_BATCH:,} canonical observation IDs per membership batch.")
+    ids = options.get("observationIds", [])
+    cells = options.get("displayCells", [])
+    if (not isinstance(ids, list) or not isinstance(cells, list) or not ids and not cells
+            or len(ids) + len(cells) > MAX_SELECTION_BATCH
+            or any(not isinstance(value, str) or len(value) > 128 for value in ids)
+            or any(not isinstance(value, str) or len(value) > 64 for value in cells)):
+        raise RejectedQuery(f"Send 1–{MAX_SELECTION_BATCH:,} canonical observation IDs or display cells per membership batch.")
+    requested_cells = defaultdict(set)
+    for value in cells:
+        try:
+            factor, x, y = map(int, value.split(":"))
+        except (ValueError, TypeError) as exc:
+            raise RejectedQuery("The observation display cell is invalid.") from exc
+        if factor < 1 or factor > 1_048_576 or factor & (factor - 1) or abs(x) > 100_000 or abs(y) > 100_000 or value != f"{factor}:{x}:{y}":
+            raise RejectedQuery("The observation display cell is invalid.")
+        requested_cells[factor].add(value)
     result, filters, start, end, updated = evaluate_query(query, store)
-    available = {detection_id(row) for row in kept_detections(query, store, filters, start, end)}
+    rows = kept_detections(query, store, filters, start, end)
+    available = {detection_id(row) for row in rows}
     if not set(ids) <= available:
         raise SelectionInvalid("Some selected observations are absent from this source. Refresh the selected group.")
+    display_filters = options.get("displayFilters", {})
+    if not isinstance(display_filters, dict):
+        raise RejectedQuery("Display-cell filters must be an object.")
+    if requested_cells:
+        focused = _focused_day(display_filters, start, end)
+        rows = observation_membership(query, store, rows, display_filters)
+        if focused is not None:
+            rows = [row for row in rows if row.acquired_at.astimezone(UTC).date() == focused]
+        rows = _matching(rows, store, display_filters)
+    resolved_cells = set()
+    selected_ids = set(ids)
+    for row in rows:
+        for factor, keys in requested_cells.items():
+            key = display_cell_key(row, factor)
+            if key in keys:
+                resolved_cells.add(key)
+                selected_ids.add(detection_id(row))
+    if resolved_cells != set(cells):
+        raise SelectionInvalid("Some selected display cells are absent from this source. Select the group again.")
     generation = source_generation(store)
     if options.get("sourceGeneration") not in (None, generation):
         raise SelectionInvalid("The observation source changed. Refresh the selected group from the map.")
@@ -143,7 +236,7 @@ def freeze_document(query: dict, store: CanonicalStore, body: dict) -> dict:
         old = _selection(query, token) if options.get("selectionToken") else None
         if old is not None and old.generation != generation:
             raise SelectionInvalid("The observation source changed. Refresh the selected group from the map.")
-        members = frozenset(ids) | (old.ids if old else frozenset())
+        members = frozenset(selected_ids) | (old.ids if old else frozenset())
         if len(members) > MAX_SELECTION_IDS:
             raise RejectedQuery(f"Frozen groups support at most {MAX_SELECTION_IDS:,} observations; no records were truncated.")
         _selections[token] = FrozenSelection(scope_key(query), generation, members, store, time.monotonic())
@@ -206,9 +299,14 @@ def _matching(rows: list[Detection], store: CanonicalStore, options: dict) -> li
     sensor = options.get("sensor")
     if sensor not in {None, "", "all", "MODIS", "VIIRS"}:
         raise RejectedQuery("Select MODIS or VIIRS.")
+    hour = options.get("acquisitionHour")
+    if hour is not None and (type(hour) is not int or not 0 <= hour <= 23):
+        raise RejectedQuery("Acquisition hour must be an integer from 0 to 23 UTC.")
     matched = []
     for row in rows:
         if options.get("observationId") and options["observationId"] != detection_id(row):
+            continue
+        if hour is not None and row.acquired_at.astimezone(UTC).hour != hour:
             continue
         modis = row.platform in {"terra", "aqua"}
         if options.get("platform") not in (None, "", "all", row.platform):
@@ -300,18 +398,34 @@ def _group(row: Detection, grouping: str) -> tuple[str, str]:
     return "all", "All observations"
 
 
-def query_rows(query: dict, store: CanonicalStore, body: dict | None = None):
-    result, filters, start, end, updated = evaluate_query(query, store)
-    options = _options(body)
-    focused = _focused_day(options, start, end)
-    rows = kept_detections(query, store, filters, start, end)
-    whole_count = len(rows)
+def observation_membership(query: dict, store: CanonicalStore, rows: list[Detection], options: dict) -> list[Detection]:
+    if options.get("sourceGeneration") not in (None, source_generation(store)):
+        raise SelectionInvalid("The observation source changed. Refresh the investigation explicitly.")
+    members = options.get("observationIds")
+    if members is not None:
+        if not isinstance(members, list) or not members or len(members) > MAX_SELECTION_IDS or any(not isinstance(value, str) or len(value) > 128 for value in members):
+            raise RejectedQuery("A bounded list of canonical observation IDs is required.")
+        selected_ids = frozenset(members)
+        if not selected_ids <= {detection_id(row) for row in rows}:
+            raise SelectionInvalid("The selected observations are unavailable in this source generation.")
+        rows = [row for row in rows if detection_id(row) in selected_ids]
     token = options.get("selectionToken")
     if token:
         selected = _selection(query, token)
         if selected.generation != source_generation(store):
             raise SelectionInvalid("The observation source changed. Refresh the selected group from the map.")
         rows = [row for row in rows if detection_id(row) in selected.ids]
+    return rows
+
+
+def query_rows(query: dict, store: CanonicalStore, body: dict | None = None):
+    result, filters, start, end, updated = evaluate_query(query, store)
+    options = _options(body)
+    focused = _focused_day(options, start, end)
+    rows = kept_detections(query, store, filters, start, end)
+    whole_count = len(rows)
+    rows = observation_membership(query, store, rows, options)
+    token = options.get("selectionToken")
     selected_count = len(rows)
     if focused is not None:
         rows = [row for row in rows if row.acquired_at.astimezone(UTC).date() == focused]
@@ -343,7 +457,16 @@ def query_rows(query: dict, store: CanonicalStore, body: dict | None = None):
         "latestAcquisition": max(times).isoformat().replace("+00:00", "Z") if times else None,
         "platforms": sorted({row.platform for row in rows}), "maxFrpMw": max(powers) if powers else None,
         "facets": _facets(rows)}
-    reporting = observation_coverage_states(store, filters, start, end)
+    reporting = observation_coverage_states(store, filters, start, end, query.get("aoi", {}).get("geometry"))
+    powers_sorted = sorted(powers)
+    cells = defaultdict(int)
+    for row in rows:
+        cells[(math.floor(row.longitude / 2) * 2, math.floor(row.latitude / 2) * 2)] += 1
+    summary["dailyCoverage"] = {day.isoformat(): state for day, state in reporting.items()}
+    summary["statistics"] = {"medianFrp": ((powers_sorted[(len(powers_sorted)-1)//2] + powers_sorted[len(powers_sorted)//2]) / 2) if powers_sorted else None,
+        "frpReported": len(powers), "latest": observation_record(max(rows, key=lambda row: (row.acquired_at, detection_id(row))), store) if rows else None,
+        "highestFrp": observation_record(max((row for row in rows if row.frp_mw is not None), key=lambda row: (row.frp_mw, detection_id(row))), store) if powers else None,
+        "topCells": [{"label": f"{lon}–{lon+2}°, {lat}–{lat+2}°", "longitude": lon+1, "latitude": lat+1, "count": count} for (lon, lat), count in sorted(cells.items(), key=lambda item: (-item[1], item[0]))[:10]]}
     meta = {**_meta(query["id"], result, updated, {"count": "satellite observations", "frp": "MW", "time": "UTC"},
         completeness=reporting.get(focused, "unavailable") if focused else _overall(list(reporting.values())), extra_notes=(COMPANION_NOTE,)),
         "sourceGeneration": source_generation(store), "source": store.source,
@@ -352,6 +475,7 @@ def query_rows(query: dict, store: CanonicalStore, body: dict | None = None):
         "generatedAt": updated, "newestObservationAt": summary["latestAcquisition"],
         "expiresAt": datetime.fromtimestamp(store.expires_at, UTC).isoformat().replace("+00:00", "Z") if store.expires_at else None,
         "freshness": "archived" if store.source.startswith("Regional archive ") else "unknown" if store.fetched_at is None else "fresh" if store.expires_at is not None and store.expires_at > time.time() else "stale"}
+    meta.update(freshness_metadata(store))
     if store.source.startswith("Regional archive "):
         meta["datasetVersion"] = store.source.removeprefix("Regional archive ")
     return rows, summary, group_summary, meta
@@ -381,13 +505,15 @@ def export_document(query: dict, store: CanonicalStore, body: dict) -> Streaming
         "processingTiers": sorted({row.processing_tier for row in rows if row.processing_tier})}
     investigation = body.get("investigation")
     if isinstance(investigation, dict):
+        selection = investigation.get("selection")
+        reproducibility["investigation"] = {**investigation, "selection": {key: value for key, value in selection.items() if key != "observationIds"} if isinstance(selection, dict) else selection}
         area = investigation.get("area")
         reproducibility["area"] = {"id": area.get("id"), "name": area.get("name"), "geometry": query["aoi"]["geometry"]} if isinstance(area, dict) else {"geometry": query["aoi"]["geometry"]}
         reproducibility["metric"] = "harmonizedActiveCells"
         reproducibility["selectionScope"] = "frozen-observation-group" if _options(body).get("selectionToken") else "whole-area"
     def stream():
         if format_name == "csv":
-            fields = ["id", "acquiredAt", "sensor", "platform", "longitude", "latitude", "dayNight", "confidenceKind", "confidenceValue", "confidenceUnit", "frpMw", "scanKm", "trackKm", "nominalResolutionM", "sourceProduct", "provenance", "productVersion", "processingTier", "queryId", "sourceGeneration", "areaId", "areaName", "queryStartUtc", "queryEndExclusiveUtc", "methodVersion", "selectionToken", "observationFiltersJson", "completeness", "fetchedAt"]
+            fields = ["id", "acquiredAt", "sensor", "platform", "longitude", "latitude", "dayNight", "confidenceKind", "confidenceValue", "confidenceNativeValue", "confidenceUnit", "frpMw", "scanKm", "trackKm", "nominalResolutionM", "sourceProduct", "provenance", "productVersion", "processingTier", "queryId", "sourceGeneration", "areaId", "areaName", "queryStartUtc", "queryEndExclusiveUtc", "methodVersion", "selectionToken", "observationFiltersJson", "completeness", "fetchedAt"]
             buffer = io.StringIO(newline="")
             writer = csv.DictWriter(buffer, fieldnames=fields, extrasaction="ignore")
             writer.writeheader()
@@ -395,7 +521,7 @@ def export_document(query: dict, store: CanonicalStore, body: dict) -> Streaming
             for row in rows:
                 record = observation_record(row, store)
                 confidence = record["confidence"]
-                record.update(confidenceKind=confidence["kind"], confidenceValue=confidence["value"], confidenceUnit=confidence.get("unit"), queryId=query["id"], sourceGeneration=meta["sourceGeneration"])
+                record.update(confidenceKind=confidence["kind"], confidenceValue=confidence["value"], confidenceNativeValue=confidence.get("nativeValue"), confidenceUnit=confidence.get("unit"), queryId=query["id"], sourceGeneration=meta["sourceGeneration"])
                 record.update(areaId=reproducibility.get("area", {}).get("id"), areaName=reproducibility.get("area", {}).get("name"), queryStartUtc=query["interval"]["start"], queryEndExclusiveUtc=query["interval"]["endExclusive"], methodVersion=METHOD_VERSION, selectionToken=_options(body).get("selectionToken"), observationFiltersJson=json.dumps(_options(body), separators=(",", ":")), completeness=meta.get("completeness"), fetchedAt=meta.get("fetchedAt"))
                 # Prevent a source/product string from becoming a spreadsheet formula.
                 for key, value in record.items():

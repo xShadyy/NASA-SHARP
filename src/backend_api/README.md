@@ -54,6 +54,32 @@ should return `{"status":"ok"}`. Do not paste the key into the frontend, source
 code, or a `VITE_` environment variable. If you already created a virtual
 environment, you can skip the `py -m venv .venv` command.
 
+If `/global/manifest?window=24h` returns **404**, an older backend process or
+another `app` module is running. `/health` returning `ok` alone does not establish
+that the worldwide routes are loaded. Stop the existing backend with Ctrl+C,
+then start the current application from the repository root:
+
+```powershell
+.\tools\start-global-backend.ps1
+```
+
+The launcher pins the backend directory and uses the same default durable store
+as direct Python startup: `src/backend_api/data/global-hotspots.sqlite`. An
+explicit `SHARP_GLOBAL_DB_PATH` or `-Database` overrides it. Verify the global
+route with `Invoke-RestMethod 'http://127.0.0.1:8000/global/manifest?window=24h'`
+and ingestion with `Invoke-RestMethod 'http://127.0.0.1:8000/global/status'`.
+An empty store returns HTTP 200 with an unavailable status until the first
+shared bulk import publishes real observations. Public NRT bulk ingestion needs
+no MAP_KEY. See [Global hotspots](../../GLOBAL-HOTSPOTS.md) for deployment settings.
+
+The shared owner fetches only the official 24-hour MODIS and NOAA-20/21 VIIRS
+bulk CSVs by default. `SHARP_GLOBAL_REFRESH_SECONDS` defaults to 3600 seconds to
+match the documented hourly bulk-file cadence; an explicit value such as 900 is
+honored. Seven-day acquisition requires the operator's explicit
+`tools/global-hotspots.py refresh --window 7d` command. Native 512-pixel PNG
+presentation and retained-snapshot startup warmup read the local canonical store
+and never initiate provider requests.
+
 The Vite development server proxies Area Analytics `/api` requests to
 `http://127.0.0.1:8000`. Start the frontend from the repository root with
 `npm run dev` in a separate terminal. For a deployment, configure the web

@@ -5,3 +5,11 @@ public/map-data
 public/map-previews
 public/brand/fonts
 public/sky
+
+# Runtime environments, test artifacts, and imported/generated source data.
+.cache
+test-results
+src/backend_api/.venv
+public/boundaries
+tools/benchmark-*-results.json
+hackathon-problem-statement.md

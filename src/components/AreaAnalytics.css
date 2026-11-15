@@ -1,4 +1,5 @@
 .area-analytics {
+  container-type: inline-size;
   position: absolute;
   z-index: 8;
   inset: 0;
@@ -9,6 +10,355 @@
   overflow: hidden;
   color: var(--text);
   background: var(--surface);
+}
+
+.analytics-header-actions,
+.analytics-tabs,
+.analytics-filter-chips,
+.analytics-record-pagination,
+.analytics-record-exports {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.analytics-header-actions {
+  justify-content: flex-end;
+}
+.analytics-tabs {
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.analytics-tabs button {
+  padding: 10px 12px;
+  color: var(--muted);
+  font-size: 12px;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+.analytics-tabs button[aria-pressed='true'] {
+  color: var(--text);
+  border-color: var(--text);
+}
+.analytics-filter-chips {
+  padding: 12px 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+.analytics-overview-section[hidden],
+.analytics-records[hidden] {
+  display: none;
+}
+.analytics-record-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 12px 0;
+}
+.analytics-record-controls label,
+.analytics-record-pagination label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--muted);
+  min-width: 0;
+}
+.analytics-record-search {
+  grid-column: 1 / -1;
+}
+.analytics-record-controls .analytics-checkbox-filter {
+  flex-direction: row;
+  align-items: center;
+}
+.analytics-record-controls .analytics-checkbox-filter input {
+  width: 16px;
+  min-height: 16px;
+}
+.analytics-record-controls input,
+.analytics-record-controls select,
+.analytics-record-pagination select {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text);
+  background: var(--surface);
+}
+.analytics-record-controls :focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+.analytics-record-link {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  text-align: left;
+}
+.analytics-records td small {
+  display: block;
+  max-width: 170px;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 9px;
+}
+.analytics-records tr[aria-selected='true'] {
+  background: color-mix(in srgb, var(--text) 8%, var(--surface));
+}
+.analytics-record-group th {
+  background: var(--surface);
+  text-align: left;
+}
+.analytics-record-pagination,
+.analytics-record-exports {
+  margin-top: 16px;
+  font-size: 11px;
+}
+.analytics-record-pagination label {
+  max-width: 90px;
+  margin-left: auto;
+}
+.analytics-record-detail {
+  margin-top: 18px;
+  border-top: 1px solid var(--border);
+  padding-top: 18px;
+  user-select: text;
+}
+.analytics-record-detail dl {
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+}
+.analytics-record-detail dl > div {
+  display: grid;
+  grid-template-columns: minmax(100px, 0.65fr) minmax(0, 1fr);
+  gap: 10px;
+}
+.analytics-record-detail dt {
+  color: var(--muted);
+}
+.analytics-record-detail dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.analytics-record-detail details {
+  margin: 14px 0;
+  font-size: 12px;
+}
+.analytics-breakdown-button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+.area-analytics-bar.is-unavailable {
+  background: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 3px,
+    var(--border) 3px,
+    var(--border) 4px
+  );
+}
+.area-analytics-bar.is-focused {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+.history-heatmap,
+.investigation-table {
+  overflow-x: auto;
+}
+.history-season-chart {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin: 18px 0;
+}
+.history-season-chart text {
+  fill: var(--text);
+  font-size: 10px;
+}
+.history-season-chart > div {
+  flex: 1;
+  min-width: 20px;
+}
+.history-season-chart button {
+  cursor: pointer;
+}
+.history-daily {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 5px;
+}
+.history-daily button {
+  padding: 8px 4px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+.investigation-evidence {
+  display: grid;
+  gap: 10px;
+}
+.investigation-evidence > div {
+  display: grid;
+  grid-template-columns: minmax(100px, 0.6fr) minmax(0, 1fr);
+  gap: 10px;
+}
+.investigation-evidence dt {
+  color: var(--muted);
+}
+.investigation-evidence dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.investigation-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.analytics-brief {
+  margin-top: 18px;
+}
+.analytics-brief-print {
+  display: none;
+}
+.investigation-section {
+  margin-top: 16px;
+  font-size: 12px;
+}
+.investigation-section h2 {
+  font-size: 16px;
+}
+.investigation-section h3 {
+  margin: 16px 0 8px;
+  font-size: 13px;
+}
+.investigation-section p {
+  color: var(--muted);
+}
+.investigation-section select,
+.investigation-section input {
+  color: var(--text);
+  background: var(--surface);
+  padding: 5px;
+  border: 1px solid var(--border);
+  margin: 5px;
+}
+.investigation-section table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.investigation-section th,
+.investigation-section td {
+  padding: 6px;
+  border: 1px solid var(--border);
+}
+.investigation-section .history-cell {
+  width: 100%;
+  min-width: 25px;
+  padding: 6px;
+  cursor: pointer;
+}
+.investigation-section .history-years {
+  overflow-x: auto;
+}
+.investigation-section pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 10px;
+}
+@container (max-width: 760px) {
+  .area-analytics-controls,
+  .area-analytics-glance,
+  .area-analytics-analysis-grid {
+    grid-template-columns: 1fr;
+  }
+  .area-analytics-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .area-analytics-glance-details {
+    padding: 14px 0 0;
+    border-top: 1px solid var(--border);
+    border-left: 0;
+  }
+  .area-analytics-header {
+    padding: 14px;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .area-analytics-content {
+    padding: 16px 14px 30px;
+  }
+  .analytics-header-actions {
+    justify-content: flex-start;
+  }
+  .area-analytics-section-heading {
+    flex-wrap: wrap;
+  }
+}
+@container (max-width: 420px) {
+  .analytics-record-controls {
+    grid-template-columns: 1fr;
+  }
+}
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .area-analytics,
+  .area-analytics * {
+    visibility: visible;
+  }
+  .area-analytics {
+    position: absolute !important;
+    inset: 0 !important;
+    width: 100% !important;
+    height: auto !important;
+    overflow: visible !important;
+    background: white !important;
+    color: black !important;
+  }
+  .area-analytics-content {
+    width: 100%;
+    overflow: visible;
+    padding: 12px;
+  }
+  .analytics-overview-section[hidden] {
+    display: block;
+  }
+  .analytics-brief-print {
+    display: block;
+    font-size: 11px;
+  }
+  .analytics-brief-print img {
+    max-width: 100%;
+    max-height: 400px;
+    object-fit: contain;
+  }
+  .analytics-brief-print pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-size: 8px;
+  }
+  .area-analytics-header button,
+  .area-analytics-content
+    button:not(.area-analytics-bar):not(.area-analytics-hour-bar):not(.analytics-breakdown-button),
+  .analytics-tabs,
+  .area-analytics-controls,
+  .analytics-filter-chips,
+  .analytics-records,
+  .investigation-section {
+    display: none !important;
+  }
+  .area-analytics-card {
+    break-inside: avoid;
+  }
 }
 .area-analytics-header {
   display: flex;
@@ -33,11 +383,6 @@
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.1em;
-}
-.area-analytics-description {
-  margin: 5px 0 0;
-  color: var(--muted);
-  font-size: 12px;
 }
 .area-analytics-content {
   width: min(1120px, 100%);
@@ -281,7 +626,7 @@
   font-size: 16px;
 }
 .area-analytics-section-heading p,
-.area-analytics-roadmap p:not(.area-analytics-eyebrow) {
+.area-analytics-roadmap p {
   margin: 5px 0 0;
 }
 .area-analytics-chart {

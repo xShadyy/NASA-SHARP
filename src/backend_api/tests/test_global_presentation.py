@@ -225,7 +225,7 @@ class GlobalPresentationTests(unittest.TestCase):
         measurements["concurrentWarmReaders"] = {"requests": after["requests"] - previous["requests"], "cacheHits": after["hits"] - previous["hits"], "generatedTiles": after["generated"] - previous["generated"], "elapsedMs": round((time.perf_counter() - started) * 1000, 3), "kind": "100 local serving calls across 20 threads; HTTP integration separately tested; not browser load latency"}
         measurements["peakTracemallocBytes"] = tracemalloc.get_traced_memory()[1]; tracemalloc.stop()
         measurements.update(estimatedUpstreamTransactions=0, actualUpstreamRequests=0, browserMemory=None, navigationFrameTimes=None)
-        target = Path(__file__).resolve().parents[3] / "tools" / "benchmark-global-results.json"
+        target = Path(self.directory.name) / "benchmark-global-results.json"
         target.write_text(json.dumps(measurements, indent=2), encoding="utf-8")
         print("\nGlobal presentation fixture timings: " + json.dumps(measurements))
 

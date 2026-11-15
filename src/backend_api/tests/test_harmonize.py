@@ -158,11 +158,11 @@ class HarmonizedActivityTest(unittest.TestCase):
         self.assertEqual(result.days[0].state, "unavailable")
         self.assertTrue(any(str(MIN_OVERLAP_DAYS) in note for note in result.notes))
 
-    def test_area_outside_the_extract_is_partial(self):
+    def test_area_outside_registered_reporting_geometry_is_unavailable(self):
         elsewhere = {"type": "Polygon", "coordinates": [[[10, 10], [11, 10], [11, 11], [10, 11], [10, 10]]]}
-        result = harmonized_daily_activity(self.rows, elsewhere, date(2005, 7, 2), date(2005, 7, 3), self.coverage, FILTERS)
-        self.assertEqual(result.days[0].count, 0)
-        self.assertEqual(result.days[0].state, "partial")
+        result = harmonized_daily_activity(self.rows, elsewhere, date(2005, 7, 2), date(2005, 7, 3), self.coverage, FILTERS, coverage_geometry=AREA)
+        self.assertIsNone(result.days[0].count)
+        self.assertEqual(result.days[0].state, "unavailable")
 
     def test_csv_store_and_calendar_document(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -233,7 +233,8 @@ class CalendarRouteTest(unittest.TestCase):
                 ]))
             detections.write_text("\n".join(detection_lines) + "\n", encoding="utf-8")
             coverage_path.write_text("\n".join(coverage_lines) + "\n", encoding="utf-8")
-            previous = {name: os.environ.get(name) for name in ("FIRE_DATA_CSV", "FIRE_COVERAGE_CSV", "DATABASE_URL", "FIRMS_MAP_KEY")}
+            previous = {name: os.environ.get(name) for name in ("FIRE_DATA_CSV", "FIRE_COVERAGE_CSV", "DATABASE_URL", "FIRMS_MAP_KEY", "SHARP_GLOBAL_DB_PATH")}
+            os.environ["SHARP_GLOBAL_DB_PATH"] = str(Path(directory) / "global.sqlite")
             os.environ["FIRE_DATA_CSV"] = str(detections)
             os.environ["FIRE_COVERAGE_CSV"] = str(coverage_path)
             os.environ.pop("DATABASE_URL", None)

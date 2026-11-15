@@ -36,7 +36,7 @@ export type AnalysisAction =
   | { type: 'cancel' }
   | { type: 'clear' }
   | { type: 'fit' }
-  | { type: 'apply-investigation'; area: AnalysisArea }
+  | { type: 'apply-investigation'; area: AnalysisArea | null }
 
 export function analysisReducer(state: AnalysisState, action: AnalysisAction): AnalysisState {
   switch (action.type) {

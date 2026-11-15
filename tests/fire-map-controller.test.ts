@@ -123,6 +123,10 @@ class FakeMap {
     this.specifications.set(id, specification)
   }
   addLayer(layer: { id: string }) {
+    assert.ok(
+      !Object.hasOwn(layer, 'filter') || Array.isArray((layer as { filter?: unknown }).filter),
+      'MapLibre filter must be an array when present',
+    )
     this.layers.set(layer.id, layer)
   }
   removeSource(id: string) {
@@ -143,7 +147,10 @@ class FakeMap {
   setFilter(id: string, filter: unknown) {
     this.filters.set(id, filter)
   }
-  setFeatureState() {}
+  featureStates: { target: { source: string; id: string }; value: Record<string, unknown> }[] = []
+  setFeatureState(target: { source: string; id: string }, value: Record<string, unknown>) {
+    this.featureStates.push({ target, value })
+  }
   getCanvas() {
     return this.canvas
   }
@@ -196,6 +203,62 @@ function controller(map: FakeMap) {
     createPopup: () => new FakePopup() as unknown as Popup,
   })
 }
+
+test('display-only pixels skip footprint work at close zoom and AOI footprints can resume', async (context) => {
+  class CloseZoomMap extends FakeMap {
+    boundsReads = 0
+    getZoom() {
+      return 14
+    }
+    getBounds() {
+      this.boundsReads++
+      return { getWest: () => 9, getEast: () => 11, getSouth: () => 19, getNorth: () => 21 }
+    }
+  }
+  const map = new CloseZoomMap()
+  const renderer = controller(map)
+  context.after(() => renderer.destroy())
+  renderer.setDisplay({ disableFootprints: true })
+  renderer.setData([observation('pixel')])
+  map.emit('moveend')
+  await new Promise((resolve) => setTimeout(resolve, 25))
+  assert.equal(map.boundsReads, 0)
+  assert.equal(renderer.getFootprintStatus().state, 'hidden')
+  const points = map.sources.get(FIRE_POINT_SOURCE)!
+  const updates = points.updates.length
+  renderer.setDisplay({ disableFootprints: false })
+  await new Promise((resolve) => setTimeout(resolve, 25))
+  assert.ok(map.boundsReads > 0)
+  assert.equal(renderer.getFootprintStatus().state, 'ready')
+  assert.equal(map.sources.get(FIRE_FOOTPRINT_SOURCE)!.updates.at(-1)?.features.length, 1)
+  assert.equal(points.updates.length, updates)
+  renderer.setDisplay({ disableFootprints: true })
+  assert.equal(map.sources.get(FIRE_FOOTPRINT_SOURCE)!.updates.at(-1)?.features.length, 0)
+  assert.equal(renderer.getFootprintStatus().state, 'hidden')
+})
+
+test('requested observation reconciles after asynchronous data and style/source restoration', () => {
+  const map = new FakeMap()
+  const renderer = controller(map)
+  renderer.setDisplay({ selectedObservationId: 'later' })
+  assert.equal(
+    map.featureStates.some((s) => s.target.id === 'later' && s.value.selected),
+    false,
+  )
+  renderer.setData([observation('later')])
+  assert.ok(map.featureStates.some((s) => s.target.id === 'later' && s.value.selected))
+  map.featureStates = []
+  map.sources.clear()
+  map.layers.clear()
+  map.images.clear()
+  map.emit('style.load')
+  assert.ok(map.featureStates.some((s) => s.target.id === 'later' && s.value.selected))
+  map.featureStates = []
+  map.emit('sourcedata', { sourceId: FIRE_POINT_SOURCE })
+  assert.ok(map.featureStates.some((s) => s.target.id === 'later' && s.value.selected))
+  renderer.destroy()
+  assert.equal(map.events.get('sourcedata')?.size, 0)
+})
 
 test('camera and interaction changes never rewrite the point data source', () => {
   const map = new FakeMap()
@@ -420,6 +483,7 @@ test('observation filters reuse the complete source and survive style reload', (
 
 test('large aggregate freezes canonical membership in bounded batches across camera changes and invalidates source changes', async (context) => {
   const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document')
+  const cleanup: { renderer?: ReturnType<typeof createFireDotController> } = {}
   Object.defineProperty(globalThis, 'document', {
     configurable: true,
     value: {
@@ -434,6 +498,7 @@ test('large aggregate freezes canonical membership in bounded batches across cam
     },
   })
   context.after(() => {
+    cleanup.renderer?.destroy()
     if (previousDocument) Object.defineProperty(globalThis, 'document', previousDocument)
     else Reflect.deleteProperty(globalThis, 'document')
   })
@@ -446,6 +511,7 @@ test('large aggregate freezes canonical membership in bounded batches across cam
       transferred = selection
     },
   })
+  cleanup.renderer = renderer
   const members = Array.from({ length: 1201 }, (_, index) =>
     observation('group-' + String(index).padStart(4, '0')),
   )
@@ -458,7 +524,15 @@ test('large aggregate freezes canonical membership in bounded batches across cam
     geometry: { type: 'Point', coordinates: [10, 20] },
   }
   map.emit('click', { point: { x: 10, y: 20 } })
-  await new Promise((resolve) => setTimeout(resolve, 20))
+  const readyBy = Date.now() + 3000
+  while (
+    !popup.root
+      ?.flatten()
+      .some((node) => node.textContent === 'Open in Area Analytics' && !node.disabled)
+  ) {
+    assert.ok(Date.now() < readyBy, 'The bounded observation membership should become ready')
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
   assert.equal(source.leafCalls, 3)
   assert.match(popup.root!.text(), /1201 matching out of 1201/)
   map.cluster = {

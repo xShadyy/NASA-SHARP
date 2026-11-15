@@ -170,6 +170,11 @@ class QuotaGovernor:
             local = db.execute("SELECT COALESCE(SUM(cost),0) FROM quota_reservations WHERE key_hash=? AND at>?", (self.fingerprint, time.time() - 600)).fetchone()[0]
         return {"estimatedReservedTransactions": local, "reportedTransactions": state.get("reportedUsed"), "reportedAt": state.get("reportedAt"), "limit": self.limit, "localBudget": self.local_limit, "headroom": self.headroom, "blockedUntil": state.get("blockedUntil"), "reason": state.get("reason"), "costsAreEstimates": True}
 
+    def provider_status(self):
+        """Persisted status lets different workers await the same cold check."""
+        with closing(self.connect()) as db:
+            return self._read(db)
+
     def availability_cache(self, body=None):
         with closing(self.connect()) as db, db:
             if body is not None:
@@ -195,16 +200,39 @@ class QuotaGovernor:
 
 
 async def reconcile_provider(app, governor):
-    if not governor.begin_status():
-        return
-    try:
-        governor.reserve(5, status_check=True)
-        response = await app.state.firms.get(f"/mapserver/mapkey_status/?MAP_KEY={app.state.key}", timeout=15)
-        if response.status_code != 200:
-            raise ValueError("Quota status service failed.")
-        governor.reconcile(response.json())
-    except (httpx.HTTPError, TimeoutError, ValueError, KeyError, TypeError, QuotaUnavailable):
-        governor.circuit("FIRMS quota status is unavailable; acquisition is delayed safely.", 120)
+    deadline = time.monotonic() + 30
+    while True:
+        state = governor.provider_status()
+        now = time.time()
+        if state.get("blockedUntil", 0) > now:
+            raise QuotaUnavailable(state.get("reason", "FIRMS acquisition is temporarily delayed."), state["blockedUntil"] - now)
+        if state.get("reportedAt", 0) > now - 60:
+            return
+        if governor.begin_status():
+            try:
+                governor.reserve(5, status_check=True)
+                response = await app.state.firms.get(f"/mapserver/mapkey_status/?MAP_KEY={app.state.key}", timeout=15)
+                if response.status_code == 429:
+                    delay = retry_seconds(response.headers.get("Retry-After"))
+                    governor.circuit("FIRMS quota status was rate limited; acquisition is delayed.", delay)
+                    raise QuotaUnavailable("FIRMS quota status was rate limited; acquisition is delayed.", delay)
+                if response.status_code in (401, 403):
+                    governor.circuit("FIRMS credentials were rejected; check server configuration.", 3600)
+                    raise QuotaUnavailable("FIRMS credentials were rejected; check server configuration.", 3600)
+                if response.status_code != 200:
+                    raise ValueError("Quota status service failed.")
+                governor.reconcile(response.json())
+                return
+            except QuotaUnavailable:
+                raise
+            except (httpx.HTTPError, TimeoutError, ValueError, KeyError, TypeError):
+                governor.circuit("FIRMS quota status is unavailable; acquisition is delayed safely.", 120)
+                raise QuotaUnavailable("FIRMS quota status is unavailable; acquisition is delayed safely.", 120) from None
+        if time.monotonic() >= deadline:
+            raise QuotaUnavailable("Shared FIRMS quota status check is still pending; retry shortly.", 30)
+        # No keyed caller reserves acquisition transactions before the persisted
+        # owner's result is visible. Waiting never performs another status call.
+        await asyncio.sleep(.05)
 
 
 async def governed_csv(app, path, started, raw_fetch):

@@ -1,4 +1,8 @@
-"""Offline, history-only reported-detection model and versioned serving.
+"""Retained offline research helpers for history-only reported-detection models.
+
+The prediction feature has been removed from the SHARP web application. This
+legacy module is not imported by application routes or capability discovery;
+existing offline experiments and stored research artifacts are retained.
 
 Labels concern reports, never physical absence of fire. A conservative 24-hour
 publication delay is assumed because canonical rows lack availability timestamps.
@@ -14,11 +18,12 @@ from collections import OrderedDict, defaultdict
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
-from harmonize import EARTH_RADIUS_M, METHOD_VERSION, geometry_bbox, prepared_area
+from harmonize import EARTH_RADIUS_M, METHOD_VERSION, geometry_bbox, prepared_area, geometry_supports_area
 from historical_activity import cell_polygon, day_range, load_archive, supports_geometry
 
 TARGET = "Probability of at least one reported satellite hotspot detection in a grid cell during the next 24 hours"
 GRID_M = 10000
+SUPPORT_POLICY = "whole-10km-cells-contained-in-registered-domain-v1"
 FEATURES = ["intercept", "activity_48h_ago", "prior_7_available_days_rate", "supported_neighbor_activity_48h_ago", "season_sine", "season_cosine", "supported_neighbor_fraction"]
 PROMOTION = {"minimumTestExamples": 500, "minimumTestPositives": 20, "minimumTestNegatives": 100,
              "minimumBrierSkill": .02, "minimumPrAucPrevalenceRatio": 1.2, "maximumCalibrationError": .05}
@@ -42,7 +47,7 @@ def domain_cells(geometry):
         for y in range(bottom, top + 1):
             lon = math.degrees((x + .5) * GRID_M / EARTH_RADIUS_M)
             lat = math.degrees(math.asin(max(-1, min(1, (y + .5) * GRID_M / EARTH_RADIUS_M))))
-            if area.contains(lon, lat):
+            if area.contains(lon, lat) and geometry_supports_area(geometry, cell_polygon((x, y), GRID_M)):
                 cells.append((x, y))
     return cells
 
@@ -245,6 +250,7 @@ def train_archive(archive, output: Path, iterations=150):
                 "methodVersion": METHOD_VERSION, "datasetVersion": manifest["datasetVersion"], "trainingInputGeneration": manifest["generation"],
                 "geometry": manifest["geometry"], "regionId": manifest["regionId"], "forecastPlatforms": manifest["forecastPlatforms"],
                 "trainedAt": datetime.now(UTC).isoformat(), "features": FEATURES, "weights": weights, "calibration": platt,
+                "supportPolicy": SUPPORT_POLICY,
                 "publicationLatencyHours": 24, "partitions": partition_meta, "partitionGapDays": 2,
                 "regularization": .01, "iterations": iterations, "sampling": "All domain cells; no negative sampling or class weighting",
                 "promotionCriteria": PROMOTION, "promotionChecks": criteria, "promoted": all(criteria.values()),
@@ -268,7 +274,8 @@ def outlook_document(query, now=None, archive=None, model_path=None):
     manifest, store = archive if archive is not None else load_archive()
     base = {"queryId": query.get("id"), "state": "unavailable", "target": TARGET, "horizonHours": 24,
             "gridSizeM": GRID_M, "effectiveInputResolution": "10 km aggregation of satellite reports; no weather inputs",
-            "features": {"type": "FeatureCollection", "features": []}, "evaluation": None, "modelVersion": None}
+            "features": {"type": "FeatureCollection", "features": []}, "evaluation": None, "modelVersion": None,
+            "supportPolicy": SUPPORT_POLICY}
     start = datetime.fromisoformat(query["interval"]["start"].replace("Z", "+00:00"))
     end = datetime.fromisoformat(query["interval"]["endExclusive"].replace("Z", "+00:00"))
     if not start.date() <= now.date() < end.date() + (timedelta(days=1) if end.time() != datetime.min.time() else timedelta(0)):
@@ -278,19 +285,10 @@ def outlook_document(query, now=None, archive=None, model_path=None):
     geometry = query["aoi"]["geometry"]
     if not supports_geometry(manifest, geometry):
         return {**base, "reason": "This region is outside the configured outlook domain."}
-    try:
-        complete, activity = reporting_data(manifest, store)
-        cells = domain_cells(manifest["geometry"])
-    except ValueError as exc:
-        return {**base, "reason": str(exc)}
     issue = datetime.combine(now.date(), datetime.min.time(), UTC)
-    latest = max(complete, default=None)
     base.update(issueTime=issue.isoformat(), validStart=issue.isoformat(), validEnd=(issue + timedelta(days=1)).isoformat(),
                 inputGeneration=manifest["generation"], datasetVersion=manifest["datasetVersion"],
-                inputFreshness={"latestCompleteReportingDay": latest.isoformat() if latest else None,
-                                "assumedPublicationLatencyHours": 24}, domain=manifest["geometry"])
-    if latest is None or latest < now.date() - timedelta(days=2):
-        return {**base, "reason": "Regional reporting data are too old for the next 24 hours."}
+                domain=manifest["geometry"])
     artifact = None
     configured = str(model_path or os.environ.get("SHARP_OUTLOOK_MODEL_PATH", "")).strip()
     if configured and Path(configured).is_file():
@@ -298,10 +296,24 @@ def outlook_document(query, now=None, archive=None, model_path=None):
         if artifact.get("methodVersion") != METHOD_VERSION or artifact.get("datasetVersion") != manifest["datasetVersion"] or artifact.get("geometry") != manifest["geometry"] or artifact.get("forecastPlatforms") != manifest.get("forecastPlatforms"):
             artifact = None
     query_identity = hashlib.sha256(json.dumps(query, sort_keys=True).encode()).hexdigest()
-    cache_key = (artifact.get("modelVersion") if artifact else None, issue.isoformat(), manifest["generation"], query_identity)
+    model_generation = hashlib.sha256(json.dumps(artifact, sort_keys=True, separators=(",", ":")).encode()).hexdigest() if artifact else None
+    cache_key = (artifact.get("modelVersion") if artifact else None, model_generation, issue.isoformat(), base["validEnd"], manifest["generation"], query_identity, SUPPORT_POLICY)
     if cache_key in _SERVING_CACHE:
-        return _SERVING_CACHE[cache_key]
-    promoted = bool(artifact and artifact.get("features") == FEATURES and artifact.get("promoted") and all(artifact.get("promotionChecks", {}).values()) and artifact.get("promotionChecks"))
+        cached = _SERVING_CACHE[cache_key]
+        if now < datetime.fromisoformat(cached["validEnd"]):
+            return cached
+        _SERVING_CACHE.pop(cache_key, None)
+    try:
+        complete, activity = reporting_data(manifest, store)
+        cells = domain_cells(manifest["geometry"])
+    except ValueError as exc:
+        return {**base, "reason": str(exc)}
+    latest = max(complete, default=None)
+    base["inputFreshness"] = {"latestCompleteReportingDay": latest.isoformat() if latest else None,
+                              "assumedPublicationLatencyHours": 24}
+    if latest is None or latest < now.date() - timedelta(days=2):
+        return {**base, "reason": "Regional reporting data are too old for the next 24 hours."}
+    promoted = bool(artifact and artifact.get("supportPolicy") == SUPPORT_POLICY and artifact.get("features") == FEATURES and artifact.get("promoted") and all(artifact.get("promotionChecks", {}).values()) and artifact.get("promotionChecks"))
     # Enforce forward issue time; retrospective evaluation artifacts cannot serve
     # a target window included in their final held-out test period.
     if promoted and now.date().isoformat() <= artifact["partitions"]["test"]["endInclusive"]:
@@ -314,7 +326,7 @@ def outlook_document(query, now=None, archive=None, model_path=None):
         points = polygon["coordinates"][0]
         lon = (points[0][0] + points[2][0]) / 2
         lat = (points[0][1] + points[2][1]) / 2
-        if not area.contains(lon, lat):
+        if not area.contains(lon, lat) or not geometry_supports_area(geometry, polygon):
             continue
         values = feature_values(now.date(), cell, complete, activity, supported_cells)
         if values is None:

@@ -55,7 +55,6 @@ type AnalysisPanelProps = {
   fireCount: number
   fireMessage: string
   onOpenAnalytics: () => void
-  onRetryFires: () => void
 }
 
 export function AnalysisPanel({
@@ -86,7 +85,6 @@ export function AnalysisPanel({
   fireStatus,
   fireCount,
   fireMessage,
-  onRetryFires,
   onOpenAnalytics,
 }: AnalysisPanelProps) {
   const [tab, setTab] = useState<'area' | 'activity'>('area')
@@ -220,7 +218,6 @@ export function AnalysisPanel({
               activity={activity}
               status={fireStatus}
               message={fireMessage}
-              onRetry={onRetryFires}
               focusedDay={focusedDay}
               onFocusDay={onFocusDay}
               onOpenAnalytics={onOpenAnalytics}
@@ -411,18 +408,6 @@ export function AnalysisPanel({
                       ? '1 satellite detection.'
                       : `${fireCount} satellite detections.`}
                 </p>
-              )}
-              {['error', 'unavailable', 'partial', 'stale'].includes(fireStatus) && (
-                <div className="analysis-error" role="alert">
-                  <p>{fireMessage}</p>
-                  {!/180(?:°| degrees)|31 UTC calendar days|smaller region|shorter period/i.test(
-                    fireMessage,
-                  ) && (
-                    <Button type="button" size="sm" variant="outline" onClick={onRetryFires}>
-                      Retry fires
-                    </Button>
-                  )}
-                </div>
               )}
             </section>
 

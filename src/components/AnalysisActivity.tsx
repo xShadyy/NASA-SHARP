@@ -39,7 +39,6 @@ type AnalysisActivityProps = {
   activity: AnalysisActivityData | null
   status: AnalysisFireStatus
   message: string
-  onRetry: () => void
   focusedDay: string | null
   onFocusDay: (day: string | null) => void
   onOpenAnalytics?: () => void
@@ -50,7 +49,6 @@ export function AnalysisActivity({
   activity,
   status,
   message,
-  onRetry,
   focusedDay,
   onFocusDay,
   onOpenAnalytics,
@@ -82,30 +80,10 @@ export function AnalysisActivity({
     <section className="analysis-activity" aria-labelledby={labelId}>
       <h2 id={labelId}>Activity</h2>
       <p className="analysis-activity-range">{formatUtcRange(displayRange)} UTC</p>
-      {['error', 'stale', 'partial'].includes(status) && (
-        <div className="analysis-error" role="alert">
-          <p>{message}</p>
-          {!/180(?:°| degrees)|31 UTC calendar days|smaller region|shorter period/i.test(
-            message,
-          ) && (
-            <Button size="sm" variant="outline" onClick={onRetry}>
-              {status === 'error' ? 'Retry' : 'Refresh'}
-            </Button>
-          )}
-        </div>
-      )}
       {status === 'loading' && (
         <p className="analysis-notice" role="status">
           {message || 'Loading activity.'}
         </p>
-      )}
-      {activity?.completeness === 'partial' && (
-        <p className="analysis-notice">
-          Some source partitions are still missing. Counts reflect available data.
-        </p>
-      )}
-      {activity?.completeness === 'unavailable' && (
-        <p className="analysis-notice">No source coverage is available for this period.</p>
       )}
       <div className="analysis-calendar">
         <div className="analysis-calendar-nav">

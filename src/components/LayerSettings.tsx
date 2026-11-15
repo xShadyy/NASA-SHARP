@@ -12,6 +12,7 @@ import './LayerSettings.css'
 type ReferenceKey = keyof MapReferenceLayers
 export type MapLayersControlProps = {
   investigationLayers?: ReactNode
+  globalStatus?: ReactNode
   background: MapBackground
   onBackgroundChange: (background: MapBackground) => void
   referenceLayers: MapReferenceLayers
@@ -166,6 +167,7 @@ export function MapLayersControl({
   overlayStatus,
   onOverlayRetry,
   investigationLayers,
+  globalStatus,
 }: MapLayersControlProps) {
   const skyId = useId()
   const titleId = useId()
@@ -208,6 +210,7 @@ export function MapLayersControl({
           </PopoverClose>
         </header>
         <div className="map-layers-scroll">
+          {globalStatus}
           {investigationLayers}
           <fieldset>
             <legend>Base map</legend>

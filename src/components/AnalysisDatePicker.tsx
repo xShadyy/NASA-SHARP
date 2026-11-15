@@ -25,14 +25,11 @@ export function AnalysisDatePicker({
   const [view, setView] = useState<'days' | 'months' | 'years'>('days')
   const [yearPage, setYearPage] = useState(Math.floor(Number(month.slice(0, 4)) / 12) * 12)
   const [preview, setPreview] = useState<AnalysisRange | null>(null)
-  const [custom, setCustom] = useState(false)
-  const [anchor, setAnchor] = useState<string | null>(null)
-  const [rangeError, setRangeError] = useState('')
   const drag = useRef<{ anchor: string; range: AnalysisRange } | null>(null)
   const suppressClick = useRef(false)
   const today = utcToday()
   const year = Number(month.slice(0, 4))
-  const selection = preview ?? (anchor ? { start: anchor, end: anchor } : range)
+  const selection = preview ?? range
   const monthLabel = new Intl.DateTimeFormat('en-GB', {
     month: 'long',
     year: 'numeric',
@@ -81,9 +78,6 @@ export function AnalysisDatePicker({
             variant="outline"
             aria-pressed={range.preset === preset}
             onClick={() => {
-              setCustom(false)
-              setAnchor(null)
-              setRangeError('')
               const next = rangePreset(preset)
               onChange(next)
               setMonth(next.end.slice(0, 7))
@@ -93,29 +87,9 @@ export function AnalysisDatePicker({
             {preset === '24h' ? 'Last 24h' : preset === '7d' ? 'Last 7 days' : 'Last month'}
           </Button>
         ))}
-        <Button
-          size="sm"
-          variant="outline"
-          aria-pressed={custom}
-          onClick={() => {
-            setCustom(true)
-            setAnchor(null)
-            setRangeError('')
-            setView('days')
-          }}
-        >
-          Custom range
-        </Button>
       </div>
       <p className="analysis-period-selection">
-        {custom && anchor
-          ? `${formatUtcDay(anchor)} → Select end date`
-          : custom
-            ? 'Select start date'
-            : range.preset === '24h'
-              ? 'Last 24 hours'
-              : formatUtcRange(selection)}{' '}
-        UTC
+        {range.preset === '24h' && !preview ? 'Last 24 hours' : formatUtcRange(selection)} UTC
       </p>
       <div className="analysis-date-nav">
         <Button
@@ -199,7 +173,6 @@ export function AnalysisDatePicker({
           role="group"
           aria-label="Select a day or drag a date range"
           onPointerDown={(event) => {
-            if (custom) return
             if (event.button !== 0) return
             const day = dayAt(event.clientX, event.clientY)
             if (!day) return
@@ -241,22 +214,6 @@ export function AnalysisDatePicker({
                 aria-label={formatUtcDay(day)}
                 aria-pressed={day >= selection.start && day <= selection.end}
                 onClick={(event) => {
-                  if (custom) {
-                    if (!anchor) {
-                      setAnchor(day)
-                      setRangeError('')
-                      return
-                    }
-                    try {
-                      onChange(customAnalysisRange(anchor, day))
-                    } catch (error) {
-                      setRangeError(error instanceof Error ? error.message : 'Invalid date range.')
-                      return
-                    }
-                    setAnchor(null)
-                    setCustom(false)
-                    return
-                  }
                   if (event.detail !== 0 && suppressClick.current) {
                     suppressClick.current = false
                     return
@@ -291,11 +248,6 @@ export function AnalysisDatePicker({
               </button>
             ))}
         </div>
-      )}
-      {rangeError && (
-        <p className="analysis-error" role="alert">
-          {rangeError}
-        </p>
       )}
     </div>
   )

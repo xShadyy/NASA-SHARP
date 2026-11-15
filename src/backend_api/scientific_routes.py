@@ -1,36 +1,13 @@
 """Scientific routes; recent diagnostics reuse the existing acquisition boundary."""
 import asyncio
+from datetime import timedelta
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
-from historical_activity import history_document, method_evidence, recurrence_document
-from activity_outlook import outlook_document
+from historical_activity import history_document, method_evidence, recurrence_document, load_query_archive, supports_geometry
+from historical_preparation import prepare_history
 from weather_context import weather_context
-from observation_explorer import cached_snapshot, SelectionInvalid
+from observation_explorer import cached_snapshot, SelectionInvalid, source_generation
 from harmonize import filters_from_query, parse_utc_interval, prepared_area
-
-
-def selected_interval_outlook(query, previous):
-    """Real stored recurrence is a diagnostic fallback, never a forecast probability."""
-    try:
-        store = cached_snapshot(query, {})
-    except SelectionInvalid:
-        return previous
-    recurrence = recurrence_document(query, store)
-    if not recurrence["features"]:
-        return {**previous, "reason": "No reported detections are stored for the selected interval; a forecast is unavailable."}
-    features = []
-    for feature in recurrence["features"]:
-        properties = feature["properties"]
-        features.append({**feature, "properties": {**properties,
-            "historicalReportedDates": properties["distinctDates"],
-            "historicalCoveredDays": properties["coveredReportingDays"],
-            "probability": None}})
-    return {**previous, "state": "historical-activity", "horizonHours": None,
-            "target": "Reported detections within the selected UTC interval",
-            "reason": "Showing stored observation recurrence. Forecast validation or inputs are unavailable; no future probabilities are shown.",
-            "gridSizeM": recurrence["gridSizeM"], "effectiveInputResolution": "2 km equal-area aggregation of reported satellite observations",
-            "validStart": query["interval"]["start"], "validEnd": query["interval"]["endExclusive"],
-            "issueTime": None, "features": {"type": "FeatureCollection", "features": features}}
 
 
 def validate_query(body):
@@ -52,12 +29,36 @@ async def cached_diagnostic(request, build):
     try:
         body = await request.json()
         query = validate_query(body)
-        store = cached_snapshot(query, body.get("options") or {})
+        store = await asyncio.to_thread(stored_diagnostic_snapshot, query, body.get("options") or {}, request.app.state.global_store.path.parent / "history")
         return await asyncio.to_thread(build, query, store)
     except SelectionInvalid as exc:
         return JSONResponse({"message": str(exc)}, status_code=409)
     except (ValueError, KeyError, TypeError) as exc:
         return JSONResponse({"message": str(exc)}, status_code=422)
+
+
+def stored_diagnostic_snapshot(query, options, root=None):
+    """Use the exact stored historical interval when no map snapshot exists.
+
+    Frozen groups never recover through a newer archive. This fallback performs
+    no acquisition and requires registered geometry, dates and input generation.
+    """
+    try:
+        return cached_snapshot(query, options)
+    except SelectionInvalid:
+        if options.get("selectionToken") or options.get("observationIds"):
+            raise
+        manifest, store = load_query_archive(query, root=root)
+        first, last = parse_utc_interval(query["interval"])
+        days = [record.day for record in store.coverage] if store else []
+        if (store is None or manifest is None or not days
+                or not supports_geometry(manifest, query["aoi"]["geometry"])
+                or not min(days) <= first < last <= max(days) + timedelta(days=1)):
+            raise
+        expected = options.get("sourceGeneration")
+        if expected is not None and expected != source_generation(store):
+            raise SelectionInvalid("The historical input generation changed. Refresh the investigation before mapping diagnostics.")
+        return store
 
 
 def register_scientific_routes(app, analysis_document):
@@ -75,19 +76,20 @@ def register_scientific_routes(app, analysis_document):
         try:
             body = await request.json()
             query = validate_query(body)
-            return await asyncio.to_thread(history_document, query, body.get("options"))
+            options = body.get("options") or {}
+            progress = await prepare_history(request.app, query, options)
+            archive = await asyncio.to_thread(load_query_archive, query, request.app.state.global_store.path.parent / "history")
+            result = await asyncio.to_thread(history_document, query, options, archive=archive)
+            return {**result, "preparation": progress}
         except (ValueError, KeyError, TypeError) as exc:
             return JSONResponse({"message": str(exc)}, status_code=422)
 
-    @router.post("/analysis/outlook")
-    async def outlook(request: Request):
+    @router.post("/analysis/history/prepare")
+    async def prepare(request: Request):
         try:
             body = await request.json()
             query = validate_query(body)
-            result = await asyncio.to_thread(outlook_document, query)
-            if result["state"] == "unavailable":
-                result = await asyncio.to_thread(selected_interval_outlook, query, result)
-            return result
+            return await prepare_history(request.app, query, body.get("options") or {})
         except (ValueError, KeyError, TypeError) as exc:
             return JSONResponse({"message": str(exc)}, status_code=422)
 

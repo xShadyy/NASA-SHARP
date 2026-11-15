@@ -1,3 +1,4 @@
+import { apiUrl } from '@/lib/api-config'
 import type { AreaGeometry } from '@/lib/analysis-area'
 import {
   analysisQuery,
@@ -12,8 +13,6 @@ import {
   type SeriesPoint,
 } from '@/lib/analysis-activity'
 import { fireMapFeatures, type FireFeature } from '@/lib/fire-severity'
-
-const API = '/firms-api'
 
 export type MonthActivity = {
   summaryOnly?: boolean
@@ -30,7 +29,12 @@ export type MonthActivity = {
 
 export type AnalysisMetadata = {
   summaryOnly?: boolean
+  matchingObservations?: number
+  displayFeatures?: number
+  displayGridSizeM?: number | null
+  representation?: string
   sourceGeneration?: string
+  sourceRecovery?: { previousGeneration?: string | null; sourceGeneration: string }
   queryId?: string
   datasetVersion?: string
   methodVersion?: string
@@ -185,7 +189,13 @@ export async function fetchAnalysisSelection(
     activity: {
       ...activity,
       dailyStats: missingDailyStats
-        ? { ...cachedDailyStats(activity, features), ...activity.dailyStats }
+        ? {
+            ...cachedDailyStats(
+              activity,
+              features.some((feature) => feature.properties.displayAggregate) ? [] : features,
+            ),
+            ...activity.dailyStats,
+          }
         : activity.dailyStats,
       range,
       areaName,
@@ -199,9 +209,16 @@ export async function fetchAnalysisMap(
   geometry: AreaGeometry,
   range: AnalysisRange,
   signal: AbortSignal,
+  options?: Record<string, unknown>,
+  sourceQuery?: unknown,
 ) {
   const body = record(
-    await postAnalysis('/analysis/map-source', rangeQuery(areaId, geometry, range), signal),
+    await postAnalysis(
+      '/analysis/map-source',
+      sourceQuery ?? rangeQuery(areaId, geometry, range),
+      signal,
+      options,
+    ),
     'The fire map',
   )
   return { features: fireMapFeatures(body), meta: body.meta as AnalysisMetadata | undefined }
@@ -290,13 +307,18 @@ export async function fetchAnalysisFires(
   return fireMapFeatures(await postAnalysis('/analysis/map-source', query, signal))
 }
 
-async function postAnalysis(path: string, query: unknown, signal: AbortSignal) {
+async function postAnalysis(
+  path: string,
+  query: unknown,
+  signal: AbortSignal,
+  options?: Record<string, unknown>,
+) {
   let response: Response
   try {
-    response = await fetch(`${API}${path}`, {
+    response = await fetch(apiUrl(path), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query }),
+      body: JSON.stringify({ query, ...(options ? { options } : {}) }),
       signal,
     })
   } catch (error) {
