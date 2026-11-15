@@ -95,17 +95,11 @@ export function useInvestigationLayers({ map, query, sourceGeneration, interacti
         <small>{enabled ? status : 'Distinct dates with reported detections · 2 km equal-area grid'}</small>
       </label>
     </div>
-    {enabled && <div className="diagnostic-legend">
-      <span style={{ background: 'linear-gradient(90deg,#c5c4ed,#31256b)' }} />
-      1 → repeated selected dates
-      <small>Blank areas: no reported detections or unavailable support; not confirmed absence of fire.</small>
-    </div>}
     {enabled && current && result?.error && <Button size="sm" variant="outline" onClick={() => setResult(null)}>Retry recurrence</Button>}
     <label className="diagnostic-opacity">Opacity
       <input type="range" aria-label="Activity diagnostic opacity" min="0.1" max="0.9" step="0.05" value={opacity}
         onChange={event => setOpacity(Number(event.target.value))} />
     </label>
     {!query && <small>Select and confirm an area first.</small>}
-    <Button size="sm" variant="ghost" disabled={!query} onClick={() => onInspect({})}>Method details</Button>
   </fieldset>
 }

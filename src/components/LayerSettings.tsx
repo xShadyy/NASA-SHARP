@@ -211,7 +211,6 @@ export function MapLayersControl({
         </header>
         <div className="map-layers-scroll">
           {globalStatus}
-          {investigationLayers}
           <fieldset>
             <legend>Base map</legend>
             <BackgroundSelector
@@ -234,6 +233,8 @@ export function MapLayersControl({
             ))}
           </fieldset>
           <Separator />
+          {investigationLayers}
+          {investigationLayers && <Separator />}
           <fieldset>
             <legend>Context overlays</legend>
             {contextOptions.map((option) => (
