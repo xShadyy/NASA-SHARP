@@ -349,7 +349,6 @@
   -webkit-user-select: none;
   -webkit-user-drag: none;
 }
-/* Popup controls keep their grid alignment and inset focus rings inside scrolling panels. */
 .fire-popup-wrap .maplibregl-popup-content {
   overflow: hidden;
 }

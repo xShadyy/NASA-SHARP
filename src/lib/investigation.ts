@@ -32,7 +32,7 @@ export type ObservationFilters = {
   observationId?: string
 }
 export type FrozenSelection = {
-  /** Exact query under which an AOI token was frozen; overall scope may be longer. */
+  
   query?: InvestigationScope['query']
   global?: GlobalSelection
   filters?: ObservationFilters

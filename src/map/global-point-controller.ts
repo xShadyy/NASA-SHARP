@@ -20,7 +20,7 @@ export function isGlobalPointSourceReady(map: Pick<MapLibreMap, 'getSource' | 'i
   return Boolean(map.getSource(GLOBAL_POINT_SOURCE) && map.isSourceLoaded(GLOBAL_POINT_SOURCE))
 }
 
-/** One native tile index and a GPU square renderer; no symbol-placement work. */
+
 export function createGlobalPointController(
   map: MapLibreMap,
   options: {
@@ -176,8 +176,7 @@ export function createGlobalPointController(
     }
     if (!manifest.pointTiles) {
       removePoints()
-      error =
-        'Individual hotspot tiles are unavailable. Restart the SHARP backend to load the updated map service.'
+      error = 'Individual hotspot tiles are temporarily unavailable. Please retry.'
       report()
       return
     }
@@ -199,8 +198,8 @@ export function createGlobalPointController(
       })
       source = map.getSource(GLOBAL_POINT_SOURCE)
     }
-    // Visible indexing keeps native local tiles/worker decoding active. Constant
-    // zero opacity bypasses circle drawing and never enters symbol placement.
+    
+    
     if (!map.getLayer(GLOBAL_POINT_INDEX_LAYER))
       map.addLayer(
         {
@@ -267,13 +266,13 @@ export function createGlobalPointController(
     report()
   }
   function frame() {
-    // No per-record queries or buffer updates during camera animation.
+    
     if (needsPreparation && !map.isMoving()) schedulePreparation()
   }
   function moved() {
     if (!enabled || !source) return
-    // Native tiles can return directly from cache without a new data event.
-    // Debounce programmatic camera frames/drag events until navigation settles.
+    
+    
     needsPreparation = true
     cancelPreparation()
     schedulePreparation(250)

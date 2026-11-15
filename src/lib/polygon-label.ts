@@ -20,9 +20,9 @@ function vector([longitude, latitude]: GeographicPosition): Vector {
   return [Math.cos(lat) * Math.cos(lon), Math.cos(lat) * Math.sin(lon), Math.sin(lat)]
 }
 
-/** A local Lambert azimuthal equal-area plane avoids longitude seams and
- * preserves a polar cap as an ordinary polygon. Densified WGS84 boundaries
- * supply the real footprint, including concavities, rather than its bbox. */
+
+
+
 function localPlane(points: readonly GeographicPosition[]) {
   const sum: Vector = [0, 0, 0]
   for (const point of points) {
@@ -58,9 +58,9 @@ function localPlane(points: readonly GeographicPosition[]) {
   }
 }
 
-/** A bounded branch-and-bound search finds the point farthest from polygon
- * edges. Unlike a centroid it stays inside a concave C or a polar triangle.
- * Called after Finish or a coalesced vertex edit, never on raw pointer events. */
+
+
+
 export function polygonInteriorPoint(
   points: readonly GeographicPosition[],
   boundary = geodesicPath(points, true),
@@ -125,7 +125,7 @@ export function polygonInteriorPoint(
   let best = makeCell((minX + maxX) / 2, (minY + maxY) / 2, 0)
   const geographicCenter = makeCell(0, 0, 0)
   if (geographicCenter.distance > best.distance) best = geographicCenter
-  // Seed with a boundary point, so the returned clearance can never be negative.
+  
   if (best.distance < 0) best = makeCell(ring[0][0], ring[0][1], 0)
   const precision = Math.max(width, height) / 2_048
   for (let examined = 0; queue.length && examined < 4_096; examined++) {

@@ -14,7 +14,13 @@ import {
   createInvestigation,
   investigationKey,
 } from '../src/lib/investigation'
-import { fetchObservationPage, exportInvestigation } from '../src/lib/observation-client'
+import {
+  fetchObservationPage,
+  exportInvestigation,
+  investigationExportFilename,
+  ObservationRequestError,
+  requiresObservationReselection,
+} from '../src/lib/observation-client'
 import type { AnalysisArea } from '../src/lib/analysis-area'
 
 const area: AnalysisArea = {
@@ -97,6 +103,7 @@ const page: ObservationPage = {
 
 test('dashboard cards use full matching server summaries rather than the current page or old 500-row sample', () => {
   const result = canonicalDashboard(page, scope)
+  assert.ok(result)
   assert.equal(result.count, 920)
   assert.equal(result.features.length, 0)
   assert.equal(result.summary.products[0].count, 920)
@@ -104,6 +111,65 @@ test('dashboard cards use full matching server summaries rather than the current
   assert.equal(result.summary.medianFrp, 15)
   assert.equal(result.summary.frpReported, 800)
   assert.equal(result.partial, true)
+})
+
+test('missing reporting support never becomes a zero-activity overview, while complete zero and observed records remain usable', () => {
+  const empty = {
+    ...page,
+    data: {
+      ...page.data,
+      total: 0,
+      summary: {
+        ...page.data.summary,
+        matchingCount: 0,
+        selectedCount: 0,
+        wholeAreaCount: 0,
+        facets: {},
+        dailyCoverage: {},
+        statistics: {
+          medianFrp: null,
+          frpReported: 0,
+          latest: null,
+          highestFrp: null,
+          topCells: [],
+        },
+      },
+    },
+  }
+  for (const completeness of ['unavailable', 'unknown', 'partial', undefined])
+    assert.equal(
+      canonicalDashboard({ ...empty, meta: { ...page.meta, completeness } }, scope),
+      null,
+    )
+  const complete = canonicalDashboard(
+    { ...empty, meta: { ...page.meta, completeness: 'complete' } },
+    scope,
+  )
+  assert.ok(complete)
+  assert.equal(complete.count, 0)
+  assert.equal(complete.partial, false)
+  const observed = canonicalDashboard(
+    { ...page, meta: { ...page.meta, completeness: 'unknown' } },
+    scope,
+  )
+  assert.ok(observed)
+  assert.equal(observed.count, 920)
+  assert.equal(observed.partial, true)
+  const noMatches = canonicalDashboard(
+    {
+      ...empty,
+      data: {
+        ...empty.data,
+        summary: { ...empty.data.summary, selectedCount: 1000, wholeAreaCount: 1500 },
+      },
+      meta: { ...page.meta, completeness: 'partial' },
+    },
+    scope,
+  )
+  assert.ok(noMatches)
+  assert.equal(noMatches.count, 0)
+  assert.equal(noMatches.partial, true)
+  assert.equal(empty.data.total, 0)
 })
 
 test('daily charts preserve leap day and distinguish reported zero, partial observations and unknown reporting', () => {
@@ -274,4 +340,63 @@ test('expired frozen export preserves both membership query and overall investig
   assert.equal(request?.investigation.selection.observationIds, undefined)
   assert.equal(request?.investigation.method, 'afternoon-active-cells-2km-1')
   assert.deepEqual(frozen.selection.observationIds, ['stable-one'])
+})
+
+test('bounded frozen IDs are sent when a token is absent and never replace token membership', () => {
+  const selected = {
+    ...scope,
+    selection: { sourceGeneration: 'immutable', observationIds: ['stable-one'] },
+  }
+  assert.deepEqual(scopeObservationOptions(selected).observationIds, ['stable-one'])
+  assert.equal(
+    scopeObservationOptions({
+      ...selected,
+      selection: { ...selected.selection, selectionToken: 'token' },
+    }).observationIds,
+    undefined,
+  )
+})
+
+test('exports include the AOI name without unsafe filename characters', () => {
+  assert.equal(
+    investigationExportFilename(
+      { ...scope, area: { ...area, name: 'Côte d’Ivoire / Region: 1' } },
+      'csv',
+    ),
+    'sharp-cote-d-ivoire-region-1-2024-02-28-2024-03-02.csv',
+  )
+  assert.ok(investigationExportFilename(scope, 'geojson').startsWith('sharp-regional-aoi-'))
+})
+
+test('structured frozen expiry and generation errors offer reselection instead of retrying membership', async (context) => {
+  let attempts = 0
+  context.mock.method(globalThis, 'fetch', async () => {
+    attempts++
+    return new Response(
+      JSON.stringify({
+        message: 'Select this group again.',
+        code: 'selection-source-changed',
+        action: 'refresh-selected-group',
+        recoverable: false,
+      }),
+      { status: 409 },
+    )
+  })
+  const frozen = {
+    ...scope,
+    selection: { selectionToken: 'frozen', sourceGeneration: 'immutable' },
+  }
+  await assert.rejects(
+    fetchObservationPage(frozen, scopeObservationOptions(frozen), new AbortController().signal),
+    (error: unknown) => requiresObservationReselection(error),
+  )
+  assert.equal(attempts, 1)
+  assert.equal(
+    requiresObservationReselection(
+      new ObservationRequestError(new Response('', { status: 503 }), {
+        message: 'Service unavailable.',
+      }),
+    ),
+    false,
+  )
 })

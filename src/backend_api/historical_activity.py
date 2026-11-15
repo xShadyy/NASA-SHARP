@@ -1,8 +1,4 @@
-"""Regional historical summaries using the existing afternoon active-cell method.
 
-No network acquisition occurs here. Explicit reporting-window coverage is required
-at import. A complete reporting window is not cloud-free observation of every cell.
-"""
 from __future__ import annotations
 
 import calendar
@@ -39,7 +35,7 @@ def geometry_key(geometry):
 
 
 def day_range(start, end):
-    """Unrestricted by the recent map's 31-day acquisition contract."""
+    
     while start < end:
         yield start
         start += timedelta(days=1)
@@ -50,7 +46,7 @@ def _row_json(row):
 
 
 def import_archive(path: Path, detections: Path, coverage: Path, manifest: dict):
-    """Atomically replace one configured regional extract; no inferred empty days."""
+    
     for field in ("regionId", "regionName", "geometry", "datasetVersion", "sources"):
         if not manifest.get(field):
             raise ValueError(f"Historical manifest requires {field}.")
@@ -97,8 +93,8 @@ def load_archive(path: Path | None = None):
         return None, None
     file = Path(configured)
     with closing(sqlite3.connect(f"file:{file.as_posix()}?mode=ro", uri=True)) as db:
-        # Pin metadata, detections and coverage to one SQLite snapshot even if
-        # an importer commits a replacement while the reader is iterating.
+        
+        
         db.execute("BEGIN")
         manifest = json.loads(db.execute("SELECT payload FROM metadata WHERE id=1").fetchone()[0])
         if manifest.get("methodVersion") != METHOD_VERSION:
@@ -236,7 +232,7 @@ def history_document(query, options=None, now=None, archive=None):
     minimum = max(MINIMUM_YEARS, int(options.get("minimumYears", MINIMUM_YEARS)))
     baseline_months = []
     for month in range(1, 13):
-        # Exclude leap day from every seasonal comparison for equal exposure.
+        
         included, excluded, values = [], [], []
         for year in years:
             days = [d for d in day_range(date(year, month, 1), date(year + (month == 12), month % 12 + 1, 1)) if (d.month, d.day) != (2, 29)]
@@ -249,7 +245,7 @@ def history_document(query, options=None, now=None, archive=None):
         baseline_months.append({"month": month, "median": median(values) if enough else None,
                                 "q25": quantile(values, .25) if enough else None, "q75": quantile(values, .75) if enough else None,
                                 "eligibleYears": included, "excludedYears": excluded})
-    # Selected period is capped at completed UTC days; compare identical month/day exposure.
+    
     lower = datetime.fromisoformat(query["interval"]["start"].replace("Z", "+00:00"))
     upper = datetime.fromisoformat(query["interval"]["endExclusive"].replace("Z", "+00:00"))
     completed_start = start + (timedelta(days=1) if lower.time() != datetime.min.time() else timedelta(0))
@@ -258,7 +254,7 @@ def history_document(query, options=None, now=None, archive=None):
     comparison = {"observedValue": None, "median": None, "difference": None, "eligibleYears": [], "excludedYears": [],
                   "coveredDays": 0, "expectedDays": len(selected_days), "endExclusive": effective_end.isoformat(),
                   "state": "unavailable", "partialPeriod": effective_end < end or completed_start != start}
-    # A period of <= 1 calendar year maps each month/day once to each baseline year.
+    
     if selected_days and len({(d.month, d.day) for d in selected_days}) == len(selected_days):
         covered = sum(d in daily and daily[d]["state"] == "complete" and daily[d]["value"] is not None for d in selected_days)
         comparison["coveredDays"] = covered

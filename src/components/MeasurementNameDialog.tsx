@@ -50,7 +50,7 @@ function MeasurementNameForm({
         <DialogHeader className="location-name-header">
           <DialogTitle>Rename measurement</DialogTitle>
           <DialogDescription>
-            {measurement.mode === 'area' ? 'Area' : 'Distance'} · {measurement.text}
+            {measurement.mode === 'area' ? 'Area' : 'Distance'} - {measurement.text}
           </DialogDescription>
         </DialogHeader>
         <form
@@ -90,7 +90,7 @@ function MeasurementNameForm({
   )
 }
 
-/** Keep a draft local until Save; switching targets starts a fresh draft. */
+
 export function MeasurementNameDialog(props: MeasurementNameDialogProps) {
   return props.measurement ? (
     <MeasurementNameForm

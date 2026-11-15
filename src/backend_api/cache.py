@@ -1,4 +1,4 @@
-"""Disposable SQLite cache of unfiltered FIRMS product / area / UTC day batches."""
+
 
 import json
 import sqlite3

@@ -175,7 +175,8 @@ class ObservationExplorerTest(unittest.TestCase):
                 remember_snapshot(QUERY, replace(self.store, rows=self.store.rows[1:]))
                 invalid = client.post("/analysis/observations", json={"query": QUERY, "options": {"selectionToken": token}})
                 self.assertEqual(invalid.status_code, 409)
-                self.assertEqual(invalid.json()["code"], "selection-invalid")
+                self.assertEqual(invalid.json()["code"], "selection-source-changed")
+                self.assertEqual(invalid.json()["action"], "refresh-selected-group")
 
     def test_imported_archive_daily_investigation_reuses_canonical_source(self):
         from fastapi.testclient import TestClient
@@ -218,8 +219,9 @@ class ObservationExplorerTest(unittest.TestCase):
                     key = explorer.scope_key(QUERY)
                     generation, store, created = explorer._snapshots[key]
                     explorer._snapshots[key] = (generation, store, created - explorer.SELECTION_TTL - 1)
-                    expired_selection = client.post("/analysis/observations", json={"query": QUERY, "options": {"page": 3}})
-                    self.assertEqual(expired_selection.status_code, 409)
+                    retained_query = client.post("/analysis/observations", json={"query": QUERY, "options": {"page": 3}})
+                    self.assertEqual(retained_query.status_code, 200, retained_query.text)
+                    self.assertEqual(retained_query.json()["data"]["total"], 620)
 
 
 if __name__ == "__main__":

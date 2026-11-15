@@ -1,6 +1,6 @@
 import type { MeasurementMode } from '@/lib/measurement-units'
 
-/** Official Space Apps accents, bright enough to distinguish over imagery. */
+
 export const MEASUREMENT_COLORS = [
   { id: 'white', label: 'White', value: '#FFFFFF' },
   { id: 'blue', label: 'Blue', value: '#2E96F5' },

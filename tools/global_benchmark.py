@@ -1,4 +1,4 @@
-"""Explicit offline multi-source benchmark; never imported by ordinary tests."""
+
 import asyncio
 import csv
 import io
@@ -22,7 +22,7 @@ from global_tiles import GlobalPresentation, cache_statistics
 
 
 def source_fixture(filename, count, anchor):
-    """Expand checked-in actual-schema examples, with explicitly fictitious values."""
+    
     source = ROOT / "src" / "backend_api" / "tests" / "fixtures" / filename
     reader = csv.DictReader(io.StringIO(source.read_text(encoding="utf-8")))
     examples = list(reader)
@@ -33,7 +33,7 @@ def source_fixture(filename, count, anchor):
         row = dict(examples[index % len(examples)])
         acquired = anchor - timedelta(minutes=1+index % (7*24*60))
         row.update(acq_date=acquired.date().isoformat(), acq_time=acquired.strftime("%H%M"))
-        # Include a dense region and a dispersed world, without duplicate centers.
+        
         row["latitude"] = f"{10+index/100000 if index % 4 == 0 else -65+(index % 130)+index/10000000:.7f}"
         row["longitude"] = f"{10+index/100000 if index % 4 == 0 else -179+(index % 358)+index/10000000:.7f}"
         writer.writerow(row)

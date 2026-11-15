@@ -1,4 +1,4 @@
-"""Optional official EFFIS WMS configuration; never converts FWI to probability."""
+
 import os
 from datetime import datetime
 from urllib.parse import urlencode
@@ -8,7 +8,7 @@ DOCUMENTATION = "https://forest-fire.emergency.copernicus.eu/downloads-instructi
 
 
 def weather_context():
-    """Require explicit provider issue/valid metadata rather than infer freshness."""
+    
     fields = {name: os.environ.get(name, "").strip() for name in (
         "SHARP_EFFIS_LAYER", "SHARP_EFFIS_ISSUE_TIME", "SHARP_EFFIS_VALID_TIME", "SHARP_EFFIS_RESOLUTION_KM")}
     if not all(fields.values()):

@@ -6,7 +6,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { ActivityTrend } from '../src/components/AnalysisActivity'
 import { customAnalysisRange, eachUtcDay } from '../src/lib/analysis-activity'
 
-// tsx's root test configuration uses the classic JSX transform.
+
 Object.assign(globalThis, { React })
 
 test('custom first/end selection spans months, includes leap day, reverses safely, rejects oversized ranges', () => {
@@ -46,7 +46,7 @@ test('harmonized trend keeps full interval under focus and distinguishes success
   assert.match(html, /0 harmonized active cells/)
   assert.match(html, /Unavailable harmonized active cells/)
   assert.match(html, /Missing reporting window/)
-  assert.equal((html.match(/aria-pressed="true"/g) ?? []).length, 2) // Default view and focused day.
+  assert.equal((html.match(/aria-pressed="true"/g) ?? []).length, 2) 
   assert.match(html, /28 February 2024|28 Feb 2024/)
   assert.match(html, /By satellite/)
 })

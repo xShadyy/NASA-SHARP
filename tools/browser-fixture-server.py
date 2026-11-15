@@ -1,8 +1,4 @@
-"""TEST ONLY: real local API backed by temporary, explicitly synthetic fixtures.
 
-Run this instead of a production backend during browser integration checks.
-No upstream acquisition is permitted. All databases disappear on shutdown.
-"""
 import argparse
 import csv
 import json
@@ -67,8 +63,8 @@ def main():
         expected_sources = list(sources.values()) + (["VIIRS_NOAA21_NRT"] if args.partial_global else [])
         published = store.publish(anchor, expected_sources, anchor.timestamp())
         initial_snapshot = published["snapshot"]
-        # Test-only immutable membership used to decode the actual browser tile
-        # responses. Production MVTs deliberately omit canonical metadata.
+        
+        
         with closing(store.connect()) as db:
             point_observations = [dict(row) for row in db.execute("""
                 SELECT o.id, o.observation_id AS observationId, o.longitude, o.latitude
@@ -186,8 +182,8 @@ def main():
 
         @api.app.post("/test-fixture/zero-observations")
         async def zero_observations():
-            # A successfully retrieved empty reporting window is distinct from
-            # an unavailable or still-loading dataset. Never touches production.
+            
+            
             empty_anchor = anchor + timedelta(seconds=5 + counts["fixture-publications"])
             counts["fixture-publications"] += 1
             for source in sources.values():

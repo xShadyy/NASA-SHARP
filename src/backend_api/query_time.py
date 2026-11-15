@@ -1,4 +1,4 @@
-"""Resolve query boundaries before requesting FIRMS UTC calendar days."""
+
 
 import re
 from datetime import UTC, date, datetime, time, timedelta
@@ -67,7 +67,7 @@ def query_window(
         raise HTTPException(422, "end must be later than start.")
     if upper > datetime.combine(today + timedelta(days=1), time.min, UTC):
         raise HTTPException(422, "The requested window extends past today in UTC.")
-    # Accept the exclusive midnight of the last day without requesting the next day.
+    
     last = (upper - timedelta(microseconds=1)).date()
     count = (last - lower.date()).days + 1
     if count > MAX_UTC_DAYS:

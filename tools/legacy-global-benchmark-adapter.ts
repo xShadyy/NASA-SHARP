@@ -1,4 +1,4 @@
-/** Test-only production-build alias for the previous JSON -> GeoJSON renderer. */
+
 import type { Map as MapLibreMap } from 'maplibre-gl'
 import type { GlobalManifest } from '@/hooks/use-global-fires'
 import {
@@ -29,7 +29,7 @@ export function createGlobalRasterController(
     map.getContainer().dataset.legacyGlobalLoading = String(status.loading)
     options.onStatus({
       ...status,
-      // Keep canonical investigation scope separate from display symbol count.
+      
       displayFeatures: manifest?.count ?? 0,
       sourceId: GLOBAL_AGGREGATE_SOURCE,
       displayedManifest: manifest,

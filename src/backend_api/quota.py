@@ -1,9 +1,4 @@
-"""Persistent shared MAP_KEY reservations and provider-status reconciliation.
 
-Estimated transaction costs intentionally exceed the official examples. They
-remain estimates: provider usage, other applications and unknown pricing can
-close the circuit. No key, keyed URL or response body is persisted/logged.
-"""
 from __future__ import annotations
 
 import asyncio
@@ -103,8 +98,8 @@ class QuotaGovernor:
                 raise QuotaUnavailable(state.get("reason", "FIRMS acquisition is temporarily delayed."), state["blockedUntil"] - now)
             db.execute("DELETE FROM quota_reservations WHERE at<=?", (now - 600,))
             local = db.execute("SELECT COALESCE(SUM(cost),0) FROM quota_reservations WHERE key_hash=?", (self.fingerprint,)).fetchone()[0]
-            # Reconcile observations conservatively: usage reported by another app
-            # plus every local reservation made after that observation.
+            
+            
             reported = state.get("reportedUsed", 0) if state.get("reportedAt", 0) > now - 600 else 0
             subsequent = db.execute("SELECT COALESCE(SUM(cost),0) FROM quota_reservations WHERE key_hash=? AND at>=?", (self.fingerprint, state.get("reportedAt", now - 600))).fetchone()[0]
             if local + cost > self.local_limit or reported + subsequent + cost > min(self.limit, state.get("providerLimit", self.limit)) - self.headroom:
@@ -171,7 +166,7 @@ class QuotaGovernor:
         return {"estimatedReservedTransactions": local, "reportedTransactions": state.get("reportedUsed"), "reportedAt": state.get("reportedAt"), "limit": self.limit, "localBudget": self.local_limit, "headroom": self.headroom, "blockedUntil": state.get("blockedUntil"), "reason": state.get("reason"), "costsAreEstimates": True}
 
     def provider_status(self):
-        """Persisted status lets different workers await the same cold check."""
+        
         with closing(self.connect()) as db:
             return self._read(db)
 
@@ -230,17 +225,17 @@ async def reconcile_provider(app, governor):
                 raise QuotaUnavailable("FIRMS quota status is unavailable; acquisition is delayed safely.", 120) from None
         if time.monotonic() >= deadline:
             raise QuotaUnavailable("Shared FIRMS quota status check is still pending; retry shortly.", 30)
-        # No keyed caller reserves acquisition transactions before the persisted
-        # owner's result is visible. Waiting never performs another status call.
+        
+        
         await asyncio.sleep(.05)
 
 
 async def governed_csv(app, path, started, raw_fetch):
-    """Install as app.fetch_csv; all keyed API work shares durable reservations."""
+    
     governor = getattr(app.state, "quota", None)
     if governor is None:
-        # Lightweight fake apps in existing tests provide a mocked fetch function;
-        # production startup always installs a governor on the shared database.
+        
+        
         from global_store import GlobalStore
         governor = QuotaGovernor(GlobalStore().path, app.state.key)
         app.state.quota = governor

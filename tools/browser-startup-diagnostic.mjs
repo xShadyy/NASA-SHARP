@@ -1,4 +1,4 @@
-/** Read-only startup probe of the running local canonical store; never initiates ingestion. */
+
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:net'
 import { mkdtemp, mkdir, writeFile, rm, readFile } from 'node:fs/promises'

@@ -77,7 +77,7 @@ const contextOptions: {
   {
     key: 'showProtectedAreas',
     label: 'Protected areas',
-    description: 'UNEP-WCMC / IUCN WDPA; latest protected-area release, verified October 2026.',
+    description: 'UNEP-WCMC / IUCN WDPCA protected areas; provider citation November 2026.',
   },
   {
     key: 'showEuropeanProtectedAreas',

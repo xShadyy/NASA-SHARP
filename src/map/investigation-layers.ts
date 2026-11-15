@@ -20,7 +20,7 @@ type DiagnosticData = {
   recurrenceEnabled: boolean
 }
 
-/** Retains unchanged source objects; camera and opacity updates do no GeoJSON preparation. */
+
 export function createInvestigationLayerController(map: MapLibreMap) {
   let data: DiagnosticData = {
     recurrence: null,
@@ -40,7 +40,7 @@ export function createInvestigationLayerController(map: MapLibreMap) {
     restorePending ||= restore
     if (orderingPending) return
     orderingPending = true
-    // Other style.load listeners restore observation layers later in the same event.
+    
     queueMicrotask(() => {
       if (!destroyed) {
         if (restorePending) {
@@ -60,8 +60,8 @@ export function createInvestigationLayerController(map: MapLibreMap) {
   }
 
   function apply() {
-    // isStyleLoaded also waits for remote tiles and pending GeoJSON preparation.
-    // These do not prevent updating an already initialized style's local sources.
+    
+    
     if (destroyed || !map.getStyle()) return
     const before = firstObservationLayer()
     for (const id of DIAGNOSTIC_LAYERS) {

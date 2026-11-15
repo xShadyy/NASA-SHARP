@@ -1,4 +1,4 @@
-"""Explicit read-only PNG serving measurements, never imported by unit tests."""
+
 import threading
 import time
 import tracemalloc

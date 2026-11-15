@@ -126,6 +126,7 @@ export type EarthMapHandle = {
     region?: CaptureRegion,
   ) => Promise<CaptureResult>
   captureInvestigation: (scope: InvestigationScope) => Promise<CaptureResult | null>
+  refreshGlobalObservations: () => Promise<InvestigationScope>
 }
 
 type EarthMapProps = {
@@ -209,7 +210,7 @@ function displayCoordinates(
   const valid = coordinates?.every(Number.isFinite)
   output.hidden = !valid
   const text = valid
-    ? `Lat ${coordinates![1].toFixed(6)}° · Lon ${coordinates![0].toFixed(6)}°`
+    ? `Lat ${coordinates![1].toFixed(6)}° - Lon ${coordinates![0].toFixed(6)}°`
     : ''
   if (output.textContent !== text) output.textContent = text
 }
@@ -276,6 +277,10 @@ export function EarthMap({
   const firesRef = useRef<ReturnType<typeof createFireDotController> | null>(null)
   const globalFiresRef = useRef<ReturnType<typeof createGlobalRasterController> | null>(null)
   const global = useGlobalFires()
+  const [globalRefreshState, setGlobalRefreshState] = useState<'idle' | 'loading' | 'failed'>(
+    'idle',
+  )
+  const globalRefreshRequest = useRef<Promise<InvestigationScope> | null>(null)
   const [globalDisplay, setGlobalDisplay] = useState<GlobalRasterDisplayStatus>({
     loading: false,
     error: '',
@@ -331,6 +336,7 @@ export function EarthMap({
     onGlobalInvestigation?.(scope),
   )
   useEffect(() => {
+    if (globalRefreshState !== 'idle') return
     const shown = globalDisplay.visibleTiles ? globalDisplay.displayedManifest : global.manifest
     if (!shown?.snapshotId || !shown.interval) return
     reportGlobalInvestigation(
@@ -349,7 +355,12 @@ export function EarthMap({
         },
       ),
     )
-  }, [global.manifest, globalDisplay.visibleTiles, globalDisplay.displayedManifest])
+  }, [
+    global.manifest,
+    globalDisplay.visibleTiles,
+    globalDisplay.displayedManifest,
+    globalRefreshState,
+  ])
   const compatibleHighlight =
     highlightInvestigation &&
     highlightInvestigation.area.id === analysis.confirmed?.id &&
@@ -491,8 +502,8 @@ export function EarthMap({
     globalFiresRef.current?.setInvestigation(globalDisplayFilters, frozenGlobal?.aggregateId)
   }, [displayedGlobalManifest, globalDisplayFilters, frozenGlobal?.aggregateId, mapInstance])
   useEffect(() => {
-    globalFiresRef.current?.setEnabled(globalEnabled)
-  }, [globalEnabled, mapInstance])
+    globalFiresRef.current?.setEnabled(globalEnabled && globalRefreshState === 'idle')
+  }, [globalEnabled, mapInstance, globalRefreshState])
   useEffect(() => {
     if (!globalEnabled) {
       globalFiresRef.current?.setHighlight(null)
@@ -615,8 +626,8 @@ export function EarthMap({
       !mapInstance.getSource(globalDisplay.sourceId)
     )
       return
-    // The controller reports a completed native raster viewport render.
-    // Optional imagery and subsequent background publications never gate entry.
+    
+    
     reportStartup({ ready: true, phase: 'rendering', error: '' })
     startupFinished.current = true
   }, [global.manifest, global.error, globalDisplay, ready, mapInstance, fatal, notice])
@@ -679,7 +690,53 @@ export function EarthMap({
     ready,
   ])
 
+  function refreshGlobalObservations(): Promise<InvestigationScope> {
+    if (globalRefreshRequest.current) return globalRefreshRequest.current
+    setGlobalRefreshState('loading')
+    globalFiresRef.current?.setEnabled(false)
+    const request = global
+      .refresh()
+      .then((result) => {
+        if (result.error) throw result.error
+        const manifest = result.data
+        if (!manifest?.snapshotId || !manifest.interval || manifest.status === 'unavailable')
+          throw new Error('Current worldwide observations are unavailable. Retry the refresh.')
+        globalFiresRef.current?.setManifest(manifest)
+        globalFiresRef.current?.setInvestigation({})
+        globalFiresRef.current?.setHighlight(null)
+        setGlobalRefreshState('idle')
+        setNotice('')
+        return createGlobalInvestigation(
+          {
+            snapshotId: manifest.snapshotId,
+            window: manifest.window,
+            interval: manifest.interval,
+          },
+          {},
+          {
+            sourceGeneration: manifest.snapshotId,
+            completeness: manifest.completeness,
+            fetchedAt: manifest.retrievedAt,
+            generatedAt: manifest.publishedAt,
+          },
+        )
+      })
+      .catch((error: unknown) => {
+        setGlobalRefreshState('failed')
+        setNotice(
+          'Worldwide observations could not refresh. Your map position and area edits are preserved. Retry when the service is available.',
+        )
+        throw error
+      })
+      .finally(() => {
+        if (globalRefreshRequest.current === request) globalRefreshRequest.current = null
+      })
+    globalRefreshRequest.current = request
+    return request
+  }
+
   useImperativeHandle(ref, () => ({
+    refreshGlobalObservations,
     finishAnalysisDrawing() {
       analysisRef.current?.finish()
     },
@@ -777,7 +834,7 @@ export function EarthMap({
           return null
         if (!map.getSource(FIRE_POINT_SOURCE) || !map.isSourceLoaded(FIRE_POINT_SOURCE)) return null
       }
-      // Wait for the exact applied investigation's local worker sources to finish.
+      
       if (!map.isStyleLoaded()) return null
       return captureMapImage(map, { format: 'png', header: true, timestamp: true, scalebar: true })
     },
@@ -1270,6 +1327,10 @@ export function EarthMap({
   }
 
   function retryMapResources() {
+    if (globalRefreshState === 'failed') {
+      void refreshGlobalObservations().catch(() => undefined)
+      return
+    }
     const map = mapRef.current
     if (!map) return
     const nasaOnly = notice === NASA_TILE_NOTICE

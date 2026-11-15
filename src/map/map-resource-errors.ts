@@ -1,6 +1,5 @@
 export type MapResourceFailure = 'imagery' | 'labels' | 'observations' | 'overlay' | 'rendering'
 
-/** MapLibre emits source, style and glyph errors on the same event channel. */
 export function classifyMapResourceError(
   sourceId: unknown,
   sourceType: unknown,

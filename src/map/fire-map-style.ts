@@ -21,8 +21,6 @@ export const FIRE_CLUSTER_THRESHOLD = 20000
 export const FIRE_PIXEL_COLOR = '#ff0000'
 export const GLOBAL_FIRE_PIXEL_COLOR = FIRE_PIXEL_COLOR
 
-// The 24 px square at pixelRatio 2 is 12 CSS px at scale 1. Keep
-// individual global detections visible: 2.25 CSS px at overview, 1 px at close zoom.
 const GLOBAL_FIRE_PIXEL_SCALES = [
   [0, 0.1875],
   [4, 0.15],
@@ -36,7 +34,6 @@ export const GLOBAL_FIRE_PIXEL_SIZE_EXPRESSION: ExpressionSpecification = [
   ...GLOBAL_FIRE_PIXEL_SCALES.flatMap(([zoom, scale]) => [zoom, scale]),
 ]
 
-/** Solid square width in CSS pixels, shared by native and GPU renderers. */
 export function globalFirePixelSize(zoom: number) {
   const level = Number.isNaN(zoom) ? 0 : zoom
   if (level <= GLOBAL_FIRE_PIXEL_SCALES[0][0]) return 12 * GLOBAL_FIRE_PIXEL_SCALES[0][1]
@@ -115,7 +112,7 @@ export function fireLayerSpecifications(): (
       filter: ['!', ['has', 'point_count']],
       layout: {
         'icon-image': FIRE_SQUARE_IMAGE,
-        'icon-size': ['interpolate', ['linear'], ['zoom'], 0, 0.75, 8, 1.02, 14, 1.26],
+        'icon-size': ['interpolate', ['linear'], ['zoom'], 0, 0.375, 8, 0.51, 14, 0.63],
         'icon-allow-overlap': true,
         'icon-ignore-placement': true,
         'icon-padding': 0,
@@ -138,14 +135,17 @@ export function fireLayerSpecifications(): (
       filter: ['has', 'point_count'],
       layout: {
         'icon-image': FIRE_SQUARE_IMAGE,
-        'icon-size': 2,
+        'icon-size': 1.25,
         'icon-allow-overlap': true,
         'icon-ignore-placement': true,
         'icon-padding': 0,
         'icon-anchor': 'center',
         'symbol-sort-key': ['coalesce', ['get', 'latestEpoch'], 0],
-        'text-field': ['to-string', ['coalesce', ['get', 'detectionCount'], ['get', 'point_count']]],
-        'text-size': 10,
+        'text-field': [
+          'to-string',
+          ['coalesce', ['get', 'detectionCount'], ['get', 'point_count']],
+        ],
+        'text-size': 9,
         'text-font': ['Fira Sans'],
         'text-allow-overlap': true,
         'text-ignore-placement': true,

@@ -18,7 +18,7 @@ export function clampPopupOffset(
   }
 }
 
-/** Drag only the heading; text, native controls and the map retain their own gestures. */
+
 export function createDraggablePopup(popup: Popup, map: MapLibreMap) {
   let content: HTMLElement | null = null
   let offset = { x: 0, y: 0 }

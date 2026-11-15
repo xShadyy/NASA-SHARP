@@ -60,7 +60,7 @@ function LocationNameForm({
     >
       <p className="location-save-coordinates">
         {formatCoordinates(location.coordinates)}
-        {location.country ? ` · ${location.country}` : ''}
+        {location.country ? ` - ${location.country}` : ''}
       </p>
       <form
         onSubmit={(event) => {

@@ -1,4 +1,4 @@
-"""Operate shared durable global observations without any browser acquisition."""
+
 import argparse
 import asyncio
 import json

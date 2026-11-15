@@ -1,4 +1,4 @@
-"""Explicit regional import and offline forecast training; never fetches FIRMS."""
+
 import argparse
 import json
 import sys

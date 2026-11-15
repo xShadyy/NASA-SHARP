@@ -1,9 +1,4 @@
-"""Local transparent XYZ pixel tiles from immutable canonical observations.
 
-Rasterization visits every matching record without clustering or sampling. A
-pixel is a display mark, not a measured fire footprint. No reader acquires NASA
-data, and no canonical field or analytical membership is changed.
-"""
 from __future__ import annotations
 
 import hashlib
@@ -128,9 +123,9 @@ class GlobalRasterPresentation(GlobalPresentation):
             clauses.append(spatial)
             parameters.extend(values)
         elif z:
-            # At overview scales the RTree covers many historical generations.
-            # The immutable snapshot index is smaller: apply exact normalized
-            # bounds there before reading rows, avoiding an archive-wide ID list.
+            
+            
+            
             west, north, east, south = bounds
             if west < 0:
                 intervals = [(0., east), (west + 1, 1.)]
@@ -146,8 +141,8 @@ class GlobalRasterPresentation(GlobalPresentation):
         parameters.extend([-MERCATOR_LIMIT, MERCATOR_LIMIT])
         statement = ("SELECT o.mx,o.my FROM " + source + " WHERE " +
                      " AND ".join(clauses))
-        # Each row starts with PNG's explicit no-filter byte. This fixed-size
-        # buffer bounds rendering memory regardless of the selected record count.
+        
+        
         stride = RASTER_SIZE * 4 + 1
         pixels = bytearray(stride * RASTER_SIZE)
         observations = visited = 0
@@ -192,7 +187,7 @@ class GlobalRasterPresentation(GlobalPresentation):
 
 
 def prewarm_global_raster(store, snapshot, window="24h"):
-    """Warm five overview PNGs after publication; local immutable reads only."""
+    
     started = time.perf_counter()
     service = GlobalRasterPresentation(store)
     tiles = [(0, 0, 0), *( (1, x, y) for x in range(2) for y in range(2) )]

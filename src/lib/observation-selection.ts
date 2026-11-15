@@ -62,7 +62,7 @@ export function observationGroup(
   return ''
 }
 
-/** Works on frozen canonical membership, never on a rendered page or camera bounds. */
+
 export function queryObservationSelection(
   features: readonly FireFeature[],
   filters: ObservationSelectionFilters,

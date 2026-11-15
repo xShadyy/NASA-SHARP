@@ -1,13 +1,4 @@
-"""Retained offline research helpers for history-only reported-detection models.
 
-The prediction feature has been removed from the SHARP web application. This
-legacy module is not imported by application routes or capability discovery;
-existing offline experiments and stored research artifacts are retained.
-
-Labels concern reports, never physical absence of fire. A conservative 24-hour
-publication delay is assumed because canonical rows lack availability timestamps.
-Evaluation is therefore retrospective, not an operational forecast replay.
-"""
 from __future__ import annotations
 
 import hashlib
@@ -67,8 +58,8 @@ def reporting_data(manifest, store):
 
 
 def feature_values(day, cell, complete, activity, supported_cells=None):
-    # At midnight D, all feature acquisitions must predate D-1 00:00 UTC.
-    # Publication lag is 24 hours; D-1 observations are intentionally excluded.
+    
+    
     latest = day - timedelta(days=2)
     window = [latest - timedelta(days=i) for i in range(7)]
     if any(d not in complete for d in window):
@@ -110,7 +101,7 @@ def fit_logistic(samples, iterations=150, regularization=.01):
 
 
 def fit_calibration(scores, labels):
-    # Platt adjustment fit only on the distinct chronological calibration set.
+    
     intercept, slope = 0., 1.
     for _ in range(200):
         di = ds = 0.
@@ -136,7 +127,7 @@ def metrics(labels, scores, issue_dates=None):
     ranked = [(score, label) for _index, score, label in sorted(
         ((i, score, label) for i, (score, label) in enumerate(zip(scores, labels))),
         key=lambda item: (-item[1], item[0]))]
-    # Average precision with equal-score groups; ties never depend on input order.
+    
     seen = true = 0
     ap = 0.
     cursor = 0
@@ -160,8 +151,8 @@ def metrics(labels, scores, issue_dates=None):
         error += len(pairs) / n * abs(predicted - observed)
         bins.append({"lower": i / 10, "upper": (i + 1) / 10, "count": len(pairs), "predicted": predicted, "observed": observed})
     if issue_dates is not None:
-        # Freeze the area budget separately at each forecast issue, rather than
-        # selecting cell/day pairs across a pooled test period.
+        
+        
         by_issue = defaultdict(list)
         for index, (issue, score, label) in enumerate(zip(issue_dates, scores, labels)):
             by_issue[issue].append((index, score, label))
@@ -215,7 +206,7 @@ def train_archive(archive, output: Path, iterations=150):
     train_end, calibration_end = days[int(len(days) * .6)], days[int(len(days) * .8)]
     partitions = {"train": [], "calibration": [], "test": []}
     for day in days:
-        # Two full days between partitions prevent shared/overlapping targets.
+        
         part = "train" if day < train_end else "calibration" if train_end + timedelta(days=2) <= day < calibration_end else "test" if day >= calibration_end + timedelta(days=2) else None
         if part is None:
             continue
@@ -229,7 +220,7 @@ def train_archive(archive, output: Path, iterations=150):
     weights = fit_logistic(train, iterations)
     platt = fit_calibration([sigmoid(dot(weights, x)) for _d, _c, x, _y in calibration], [y for _d, _c, _x, y in calibration])
     tables = baseline_tables(train)
-    # Baseline choice is frozen using calibration, before looking at final holdout.
+    
     cal_labels = [y for _d, _c, _x, y in calibration]
     baseline = min(("seasonal", "persistence"), key=lambda kind: metrics(cal_labels, baseline_scores(tables, calibration, kind))["brier"])
     labels = [y for _d, _c, _x, y in test]
@@ -314,8 +305,8 @@ def outlook_document(query, now=None, archive=None, model_path=None):
     if latest is None or latest < now.date() - timedelta(days=2):
         return {**base, "reason": "Regional reporting data are too old for the next 24 hours."}
     promoted = bool(artifact and artifact.get("supportPolicy") == SUPPORT_POLICY and artifact.get("features") == FEATURES and artifact.get("promoted") and all(artifact.get("promotionChecks", {}).values()) and artifact.get("promotionChecks"))
-    # Enforce forward issue time; retrospective evaluation artifacts cannot serve
-    # a target window included in their final held-out test period.
+    
+    
     if promoted and now.date().isoformat() <= artifact["partitions"]["test"]["endInclusive"]:
         promoted = False
     area = prepared_area(geometry)
@@ -330,7 +321,7 @@ def outlook_document(query, now=None, archive=None, model_path=None):
             continue
         values = feature_values(now.date(), cell, complete, activity, supported_cells)
         if values is None:
-            continue  # Unsupported windows are masked, never zero probability.
+            continue  
         historical_days = [d for d in complete if now.date() - timedelta(days=32) <= d <= now.date() - timedelta(days=2)]
         property_values = {"id": f"outlook:{cell[0]}:{cell[1]}", "historicalReportedDates": sum(cell in activity[d] for d in historical_days),
                            "historicalCoveredDays": len(historical_days), "recentActivityRate": values[2],

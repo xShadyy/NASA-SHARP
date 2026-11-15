@@ -1,4 +1,4 @@
-"""Local immutable worldwide presentation endpoints. These never contact FIRMS."""
+
 from __future__ import annotations
 
 import asyncio

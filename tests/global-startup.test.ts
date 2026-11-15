@@ -53,7 +53,7 @@ test('a completed observation frame recovers an error and readiness stays latche
 test('an explicit retry starts a clean attempt while ordinary progress retains any failure', () => {
   const failure = { ...pending('fetching'), error: 'The service is unavailable.' }
   assert.equal(mergeGlobalStartupState(failure, pending('fetching')), failure)
-  // Retry assigns a fresh initial state directly, outside the background-event merger.
+  
   const reset = pending('fetching')
   const retryProgress = mergeGlobalStartupState(reset, pending('rendering'))
   assert.deepEqual(retryProgress, pending('rendering'))

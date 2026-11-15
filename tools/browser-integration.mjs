@@ -1,7 +1,7 @@
-/** Real Chromium + actual FastAPI routes; explicitly synthetic temporary databases.
- * External basemap images are substituted locally; no NASA credentials or downloads.
- * Opt in with SHARP_BROWSER_TEST=1, then run npm run test.
- */
+
+
+
+
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
@@ -15,7 +15,19 @@ import { productionPreview } from './browser-production-server.mjs'
 
 const pause = (ms) => new Promise((done) => setTimeout(done, ms))
 const chromePath =
-  process.env.SHARP_TEST_CHROME ?? 'C:/Program Files/Google/Chrome/Application/chrome.exe'
+  process.env.SHARP_TEST_CHROME ??
+  [
+    'C:/Program Files/Google/Chrome/Application/chrome.exe',
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+    '/usr/bin/google-chrome',
+  ].find(existsSync)
+const pythonPath =
+  process.env.SHARP_TEST_PYTHON ??
+  ['src/backend_api/.venv/Scripts/python.exe', 'src/backend_api/.venv/bin/python'].find(
+    existsSync,
+  ) ??
+  (process.platform === 'win32' ? 'python' : 'python3')
 async function availablePort() {
   const server = createServer()
   await new Promise((resolve, reject) => {
@@ -29,8 +41,8 @@ async function availablePort() {
   return port
 }
 const rasterPrefix = 'global-hotspot-raster-'
-// Resolve the live MapLibre instance from React's existing development refs.
-// This runs only over CDP; application code needs no test globals or hooks.
+
+
 export const liveMap = `(()=>{const node=document.querySelector('.earth-map-canvas');const key=node&&Object.keys(node).find(key=>key.startsWith('__reactFiber$'));for(let fiber=key&&node[key];fiber;fiber=fiber.return){for(let hook=fiber.memoizedState,n=0;hook&&n++<150;hook=hook.next){const candidate=hook.memoizedState?.current;if(candidate&&typeof candidate.getStyle==='function'&&typeof candidate.getCanvas==='function')return candidate;}}return null})()`
 const rasterSources = `Object.entries(${liveMap}.getStyle().sources).filter(([id])=>id.startsWith(${JSON.stringify(rasterPrefix)}))`
 
@@ -146,7 +158,10 @@ export class CDP {
 }
 
 export async function browserIntegration() {
-  assert.ok(existsSync(chromePath), 'Set SHARP_TEST_CHROME to a local Chromium executable')
+  assert.ok(
+    chromePath && existsSync(chromePath),
+    'Set SHARP_TEST_CHROME to a local Chromium executable',
+  )
   const apiPort = process.env.SHARP_TEST_API_PORT
     ? Number(process.env.SHARP_TEST_API_PORT)
     : await availablePort()
@@ -167,15 +182,20 @@ export async function browserIntegration() {
   const failures = [],
     requests = [],
     results = []
+  const mutedTextContrast = {}
+  let narrowMobileLayout, reducedMotionDuration
   const requestUrls = new Map()
   const responseHeaders = new Map()
+  const responseStatuses = new Map()
+  const deliberatelyExpiredSnapshots = new Set()
   const rasterReads = [],
     rasterResponses = []
   let totalEncodedResponseBytes = 0,
     apiEncodedResponseBytes = 0,
     globalTilesCompleted = 0,
     rasterBodyFallbacks = 0,
-    rasterCachedBodyReuses = 0
+    rasterCachedBodyReuses = 0,
+    expectedExpiredRasterResponses = 0
   const start = performance.now()
   const launch = (executable, args, options = {}) => {
     const child = spawn(executable, args, {
@@ -188,7 +208,7 @@ export async function browserIntegration() {
   }
   try {
     const server = launch(
-      resolve('src/backend_api/.venv/Scripts/python.exe'),
+      pythonPath,
       [
         'tools/browser-fixture-server.py',
         '--port',
@@ -207,6 +227,9 @@ export async function browserIntegration() {
     })
     server.stderr.on('data', (chunk) => {
       serverLog += chunk
+    })
+    server.on('error', (error) => {
+      serverLog += String(error)
     })
     const ready = Date.now() + 20000
     while (Date.now() < ready) {
@@ -238,6 +261,22 @@ export async function browserIntegration() {
       if (vite.exitCode != null) throw Error(viteLog)
       await pause(100)
     }
+    for (const [path, expected] of [
+      ['/legal/LICENSE', /Apache License/],
+      ['/legal/THIRD-PARTY-LICENSES.txt', /MapLibre|MIT License|Third.party/i],
+      ['/brand/fonts/OFL.txt', /SIL OPEN FONT LICENSE/i],
+    ]) {
+      const response = await fetch(frontendUrl + path)
+      assert.equal(response.status, 200, `Production legal asset ${path} is served`)
+      assert.match(
+        await response.text(),
+        expected,
+        `Production legal asset ${path} contains its actual license`,
+      )
+    }
+    results.push(
+      'Production Apache, third-party notices and bundled font license URLs serve the actual texts',
+    )
     const chrome = launch(chromePath, [
       '--headless=new',
       '--no-first-run',
@@ -280,6 +319,7 @@ export async function browserIntegration() {
       })
     })
     cdp.on('Network.responseReceived', (item, sessionId) => {
+      responseStatuses.set(`${sessionId ?? 'page'}:${item.requestId}`, item.response.status)
       responseHeaders.set(
         `${sessionId ?? 'page'}:${item.requestId}`,
         Object.fromEntries(
@@ -298,6 +338,14 @@ export async function browserIntegration() {
         /\/global\/raster\/([^/]+)\/24h\/[^/]+\/(\d+)\/(\d+)\/(\d+)\.png(?:\?|$)/,
       )
       if (raster) {
+        const expectedExpiry = deliberatelyExpiredSnapshots.has(raster[1])
+        if (
+          expectedExpiry &&
+          responseStatuses.get(`${sessionId ?? 'page'}:${item.requestId}`) === 410
+        ) {
+          expectedExpiredRasterResponses++
+          return
+        }
         globalTilesCompleted++
         rasterReads.push(
           cdp
@@ -305,6 +353,10 @@ export async function browserIntegration() {
             .catch(async () => {
               rasterBodyFallbacks++
               const response = await fetch(url)
+              if (expectedExpiry && response.status === 410) {
+                expectedExpiredRasterResponses++
+                return null
+              }
               assert.ok(response.ok, 'The exact rendered raster tile remains available locally')
               return {
                 body: Buffer.from(await response.arrayBuffer()).toString('base64'),
@@ -312,6 +364,7 @@ export async function browserIntegration() {
               }
             })
             .then(async (response) => {
+              if (response === null) return
               let bytes = Buffer.from(response.body, response.base64Encoded ? 'base64' : 'utf8')
               if (!bytes.length) {
                 const previous = rasterResponses.find((tile) => tile.url === url)
@@ -321,6 +374,10 @@ export async function browserIntegration() {
                   return
                 }
                 const recovered = await fetch(url)
+                if (expectedExpiry && recovered.status === 410) {
+                  expectedExpiredRasterResponses++
+                  return
+                }
                 assert.ok(
                   recovered.ok,
                   'An uncaptured cached PNG remains available under its exact immutable URL',
@@ -402,9 +459,9 @@ export async function browserIntegration() {
     await cdp.send('Fetch.enable', interceptedProviders)
     cdp.on('Target.attachedToTarget', (item) => {
       void (async () => {
-        // Native MapLibre vector requests originate in dedicated workers.
-        // Attach before their first instruction. Fetch interception belongs to
-        // the page target; Chromium does not expose Fetch on worker sessions.
+        
+        
+        
         try {
           await cdp.send('Network.enable', {}, item.sessionId)
           await cdp.send('Runtime.enable', {}, item.sessionId)
@@ -531,7 +588,7 @@ export async function browserIntegration() {
       `(()=>{const map=${liveMap};return {center:map.getCenter().toArray(),zoom:map.getZoom()}})()`,
     )
     const initialProjection = await cdp.eval(`${liveMap}.getProjection().type`)
-    await cdp.eval(`void ${liveMap}.jumpTo({center:[18,12],zoom:12})`)
+    await cdp.eval(`void ${liveMap}.jumpTo({center:[18,12],zoom:13})`)
     await pause(1000)
     await cdp.until(
       `${rasterSources}.some(([id])=>${liveMap}.isSourceLoaded(id))`,
@@ -547,7 +604,7 @@ export async function browserIntegration() {
     await writeFile(
       '.cache/browser-tests/globe-close-diagnostic.json',
       JSON.stringify(
-        { sample: globeCloseDiagnostic, tiles: rasterResponses.filter((tile) => tile.z === 12) },
+        { sample: globeCloseDiagnostic, tiles: rasterResponses.filter((tile) => tile.z === 13) },
         null,
         2,
       ),
@@ -558,24 +615,28 @@ export async function browserIntegration() {
       'Flat projection ready for exact close-zoom pixel inspection',
     )
     await pause(400)
-    await cdp.eval(`void ${liveMap}.jumpTo({center:[18,12],zoom:12})`)
+    await cdp.eval(`void ${liveMap}.jumpTo({center:[18,12],zoom:13})`)
     await cdp.until(
       `${rasterSources}.some(([id])=>${liveMap}.isSourceLoaded(id))`,
       'Native raster pixels remain available at close zoom',
     )
-    let closeRedSample = await redPixelSample(cdp, 18, 12)
+    let closeRedSample = await redPixelSample(cdp, 18, 12, 25)
     for (let attempt = 0; !closeRedSample.redPixels && attempt < 30; attempt++) {
       await pause(100)
-      closeRedSample = await redPixelSample(cdp, 18, 12)
+      closeRedSample = await redPixelSample(cdp, 18, 12, 25)
     }
     assert.ok(
       closeRedSample.redPixels > 0,
       `The fixed minimum pixel remains visible at its canonical position: ${JSON.stringify(closeRedSample)}`,
     )
     assert.ok(
-      closeRedSample.width <= overviewRedSample.width &&
-        closeRedSample.height <= overviewRedSample.height,
-      'Actual close-zoom pixels do not grow larger than overview pixels',
+      closeRedSample.width > overviewRedSample.width &&
+        closeRedSample.height > overviewRedSample.height &&
+        closeRedSample.width >= 10 &&
+        closeRedSample.width <= 18 &&
+        closeRedSample.height >= 10 &&
+        closeRedSample.height <= 18,
+      'Close-zoom pixels grow to a readable approximately 14 px mark while overview pixels remain small',
     )
     await cdp.click('Globe', `document.querySelector('.map-view-control')`)
     await cdp.eval(`void ${liveMap}.jumpTo(${JSON.stringify(initialCamera)})`)
@@ -614,7 +675,7 @@ export async function browserIntegration() {
     results.push(
       'Startup spinner blocks entry, recovers through Retry, and waits for mapped24-hour data; partial coverage opens; no status box or alternate window selector',
     )
-    // The test-only point grid surrounds the initial center; hit testing is real.
+    
     await pause(1800)
     const clickMap = async (dx = 0, dy = 0) => {
       const box = await cdp.eval(
@@ -657,15 +718,55 @@ export async function browserIntegration() {
       `document.querySelector('main')?.dataset.investigationLayout==='split'`,
       'desktop map/analytics split',
     )
+    assert.equal(
+      await cdp.eval(`!!document.querySelector('#area-analytics-days:not(:disabled)')`),
+      false,
+      'The regional duration slider cannot alter an immutable global snapshot',
+    )
+    assert.ok(
+      await cdp.eval(
+        `document.querySelector('.area-analytics-controls').textContent.includes(${JSON.stringify(loadedManifest.interval.start)}) && document.querySelector('.area-analytics-controls').textContent.includes(${JSON.stringify(loadedManifest.interval.endExclusive)})`,
+      ),
+      'Global analytics shows its exact available UTC interval',
+    )
+    for (const section of ['Overview', 'Method', 'History']) await cdp.click(section)
+    assert.equal(
+      requests.filter((request) => request.url.endsWith('/analysis/history/prepare')).length,
+      0,
+      'Opening global analytics sections never starts historical acquisition',
+    )
+    assert.ok(
+      await cdp.eval(
+        `Array.from(document.querySelectorAll('.area-analytics button')).some(button=>button.textContent.trim()==='Choose a regional area')`,
+      ),
+      'Global scope offers an explicit regional investigation transition',
+    )
+    await cdp.click('Choose a regional area')
+    await cdp.until(
+      `!!document.querySelector('.analysis-panel')`,
+      'Explicit global-to-regional transition opens area selection',
+    )
+    await cdp.click('Area Analytics')
     await cdp.click('Records')
     await cdp.until(
       `document.querySelector('.analytics-records')?.textContent.includes('702 matching observations')`,
       'Area Analytics starts with the complete global24-hour scope',
     )
+    const recordQueriesBeforeSearch = requests.filter((request) =>
+      request.url.endsWith('/global/observations'),
+    ).length
+    await cdp.input('.analytics-record-search input', fixture.observationIds[2].slice(0, 8))
+    await pause(80)
     await cdp.input('.analytics-record-search input', fixture.observationIds[2])
     await cdp.until(
       `document.querySelector('.analytics-records')?.textContent.includes(${JSON.stringify(fixture.observationIds[2])})`,
       'query-wide search beyond the old sample finds its canonical record',
+    )
+    assert.equal(
+      requests.filter((request) => request.url.endsWith('/global/observations')).length -
+        recordQueriesBeforeSearch,
+      1,
+      'Fast search edits coalesce into one query-wide request',
     )
     assert.ok(
       await cdp.eval(`!document.querySelector('.map-workspace').inert`),
@@ -680,16 +781,6 @@ export async function browserIntegration() {
       ),
       'Desktop analytics is left of the mounted globe',
     )
-    await cdp.click('Expand analytics')
-    await cdp.until(
-      `document.querySelector('main').dataset.investigationLayout==='expanded'`,
-      'expanded analytics',
-    )
-    await cdp.click('Restore split')
-    await cdp.until(
-      `document.querySelector('main').dataset.investigationLayout==='split'`,
-      'restored split',
-    )
     const separator = `document.querySelector(${JSON.stringify('[role="separator"][aria-label="Resize map and analytics"]')})`
     await cdp.eval(`${separator}.focus()`)
     await cdp.send('Input.dispatchKeyEvent', {
@@ -703,6 +794,16 @@ export async function browserIntegration() {
       code: 'ArrowLeft',
     })
     assert.equal(await cdp.eval(`${separator}.getAttribute('aria-valuenow')`), '47')
+    const desktopLight = await cdp.send('Page.captureScreenshot', { format: 'png' })
+    await writeFile(
+      '.cache/browser-tests/desktop-light.png',
+      Buffer.from(desktopLight.data, 'base64'),
+    )
+    const measureMutedContrast = () =>
+      cdp.eval(
+        `(()=>{const text=document.querySelector('.area-analytics-control-note'),surface=document.querySelector('.area-analytics'),color=getComputedStyle(text).color,background=getComputedStyle(surface).backgroundColor,canvas=document.createElement('canvas');canvas.width=canvas.height=1;const context=canvas.getContext('2d');context.fillStyle=background;context.fillRect(0,0,1,1);const bg=Array.from(context.getImageData(0,0,1,1).data).slice(0,3);context.fillStyle=color;context.fillRect(0,0,1,1);const fg=Array.from(context.getImageData(0,0,1,1).data).slice(0,3);const luminance=rgb=>rgb.map(v=>{v/=255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4}).reduce((sum,v,i)=>sum+v*[.2126,.7152,.0722][i],0),a=luminance(bg),b=luminance(fg);return{color,background,foregroundRgb:fg,backgroundRgb:bg,ratio:(Math.max(a,b)+.05)/(Math.min(a,b)+.05)}})()`,
+      )
+    mutedTextContrast.light = await measureMutedContrast()
     await cdp.eval(`document.querySelector('.analytics-records .analytics-record-link').click()`)
     await cdp.until(
       `!!document.querySelector('[aria-label="Selected satellite observation"]')`,
@@ -739,11 +840,33 @@ export async function browserIntegration() {
       `!!document.querySelector('.analytics-brief-print img')`,
       'matching map capture in analysis brief',
     )
+    await cdp.eval(`document.querySelector('button[aria-label="Switch to dark theme"]').click()`)
+    await cdp.until(`document.documentElement.dataset.theme==='dark'`, 'Dark analytics theme')
+    const desktopDark = await cdp.send('Page.captureScreenshot', { format: 'png' })
+    await writeFile(
+      '.cache/browser-tests/desktop-dark.png',
+      Buffer.from(desktopDark.data, 'base64'),
+    )
+    mutedTextContrast.dark = await measureMutedContrast()
+    assert.ok(
+      mutedTextContrast.light.ratio >= 4.5 && mutedTextContrast.dark.ratio >= 4.5,
+      `Actual muted text contrast meets 4.5:1 in both themes: ${JSON.stringify(mutedTextContrast)}`,
+    )
+    await cdp.send('Emulation.setEmulatedMedia', { media: 'print' })
+    assert.equal(
+      await cdp.eval(`getComputedStyle(document.querySelector('.analytics-brief-print p')).color`),
+      'rgb(17, 17, 17)',
+      'Dark-theme brief prints with readable dark text',
+    )
     const pdf = await cdp.send('Page.printToPDF', { printBackground: true })
     const pdfBytes = Buffer.from(pdf.data, 'base64')
     assert.equal(pdfBytes.subarray(0, 4).toString(), '%PDF')
     await writeFile('.cache/browser-tests/analysis-brief.pdf', pdfBytes)
-    results.push('Interactive split, resize, expand/restore, row selection, full export actions')
+    await cdp.send('Emulation.setEmulatedMedia', { media: '' })
+    await cdp.eval(`document.querySelector('button[aria-label="Switch to light theme"]').click()`)
+    results.push(
+      'Interactive split, keyboard resize, row selection, complete matching exports and print-ready brief',
+    )
     await cdp.send('Emulation.setDeviceMetricsOverride', {
       width: 650,
       height: 900,
@@ -764,6 +887,67 @@ export async function browserIntegration() {
       `document.querySelector('.analytics-records')?.textContent.includes(${JSON.stringify(fixture.observationIds[2])})`,
       'mobile state retained',
     )
+    const mobileShot = await cdp.send('Page.captureScreenshot', { format: 'png' })
+    await writeFile(
+      '.cache/browser-tests/mobile-analytics.png',
+      Buffer.from(mobileShot.data, 'base64'),
+    )
+    await cdp.send('Emulation.setDeviceMetricsOverride', {
+      width: 390,
+      height: 844,
+      deviceScaleFactor: 1,
+      mobile: false,
+    })
+    await cdp.until(
+      `innerWidth===390 && document.querySelector('main').dataset.investigationLayout==='mobile'`,
+      '390px mobile analytics viewport',
+    )
+    narrowMobileLayout = await cdp.eval(
+      `(()=>{const content=document.querySelector('.area-analytics-content');const selectors=['.area-analytics-header','.area-analytics-controls','.area-analytics-header button','.area-analytics-controls button','.analytics-record-controls input','.analytics-record-controls select','.area-analytics-range-foot>span'];const bounds=selectors.flatMap(selector=>Array.from(document.querySelectorAll(selector)).map(element=>{const r=element.getBoundingClientRect();return{selector,text:element.textContent.trim().slice(0,80),left:r.left,right:r.right}}));return{width:innerWidth,bodyWidth:document.body.scrollWidth,contentWidth:content.clientWidth,contentScrollWidth:content.scrollWidth,bounds,overflow:bounds.filter(r=>r.left<-.5||r.right>innerWidth+.5)}})()`,
+    )
+    const narrowShot = await cdp.send('Page.captureScreenshot', { format: 'png' })
+    await writeFile('.cache/browser-tests/mobile-390.png', Buffer.from(narrowShot.data, 'base64'))
+    await writeFile(
+      '.cache/browser-tests/mobile-390-layout.json',
+      JSON.stringify(narrowMobileLayout, null, 2),
+    )
+    assert.ok(
+      narrowMobileLayout.bodyWidth <= 390,
+      `390px page has no horizontal overflow: ${JSON.stringify(narrowMobileLayout)}`,
+    )
+    assert.ok(
+      narrowMobileLayout.contentScrollWidth <= narrowMobileLayout.contentWidth + 1,
+      `390px analytics content has no horizontal overflow: ${JSON.stringify(narrowMobileLayout)}`,
+    )
+    assert.deepEqual(
+      narrowMobileLayout.overflow,
+      [],
+      '390px analytics header and controls remain within the viewport',
+    )
+    await cdp.click('Map', `document.querySelector('[aria-label="Investigation views"]')`)
+    await cdp.send('Emulation.setEmulatedMedia', {
+      features: [{ name: 'prefers-reduced-motion', value: 'reduce' }],
+    })
+    await cdp.click('Map & layers')
+    await cdp.until(
+      `!!document.querySelector('[data-slot="popover-content"][data-state="open"]')`,
+      'Map layers popover with reduced-motion preference',
+    )
+    reducedMotionDuration = await cdp.eval(
+      `Math.max(...getComputedStyle(document.querySelector('[data-slot="popover-content"][data-state="open"]')).animationDuration.split(',').map(value=>parseFloat(value)*(value.trim().endsWith('ms')?.001:1)))`,
+    )
+    assert.ok(reducedMotionDuration <= 0.001, 'Reduced-motion popover animation is at most 1 ms')
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape' })
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape' })
+    await cdp.send('Emulation.setEmulatedMedia', { features: [] })
+    await cdp.click('Analytics', `document.querySelector('[aria-label="Investigation views"]')`)
+    await cdp.until(
+      `document.querySelector('.analytics-records')?.textContent.includes(${JSON.stringify(fixture.observationIds[2])})`,
+      '390px Map/Analytics tabs preserve selected records',
+    )
+    results.push(
+      '390x844 mobile analytics has no horizontal overflow, preserves records across tabs, and honors reduced motion',
+    )
     await cdp.send('Emulation.setDeviceMetricsOverride', {
       width: 1500,
       height: 1000,
@@ -775,23 +959,62 @@ export async function browserIntegration() {
       'desktop restored after mobile',
     )
     results.push('Mobile Map / Analytics tabs preserve investigation state')
-    await fetch(`${apiUrl}/test-fixture/expire-snapshot`, { method: 'POST' })
+    const expired = await fetch(`${apiUrl}/test-fixture/expire-snapshot`, { method: 'POST' }).then(
+      (response) => response.json(),
+    )
+    deliberatelyExpiredSnapshots.add(expired.expiredSnapshotId)
     await cdp.eval(
       `(()=>{const select=Array.from(document.querySelectorAll('.analytics-record-controls label')).find(e=>e.textContent.trim().startsWith('Sort')).querySelector('select');Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(select,'oldest');select.dispatchEvent(new Event('change',{bubbles:true}));})()`,
     )
     await cdp.until(
-      `document.querySelector('.analytics-records [role="alert"]')?.textContent.includes('refresh selection')`,
+      `Array.from(document.querySelectorAll('.analytics-records [role="alert"] button')).some(button=>button.textContent.trim()==='Refresh worldwide observations')`,
       'expired frozen membership requires explicit refresh',
     )
     results.push('Expired snapshot stays unavailable with an explicit refresh action')
-    await cdp.click('Return to map and refresh selection')
-    // Country selection uses actual bundled boundary data, then custom historical interval.
+    const beforeRefresh = await cdp.eval(
+      `(()=>{globalThis.__sharpTestMapBeforeRefresh=${liveMap};const map=${liveMap};return{center:map.getCenter().toArray(),zoom:map.getZoom(),bearing:map.getBearing(),pitch:map.getPitch()}})()`,
+    )
+    const refreshRequestStart = requests.length
+    await cdp.click('Refresh worldwide observations')
+    await cdp.until(
+      `${rasterSources}.some(([id,source])=>source.tiles?.[0].includes(${JSON.stringify(expired.replacementSnapshotId)}) && ${liveMap}.isSourceLoaded(id))`,
+      'Explicit refresh renders the fresh worldwide snapshot',
+    )
+    assert.equal(
+      await cdp.eval(`${liveMap}===globalThis.__sharpTestMapBeforeRefresh`),
+      true,
+      'Explicit refresh preserves the mounted map',
+    )
+    const afterRefresh = await cdp.eval(
+      `(()=>{const map=${liveMap};return{center:map.getCenter().toArray(),zoom:map.getZoom(),bearing:map.getBearing(),pitch:map.getPitch()}})()`,
+    )
+    assert.deepEqual(afterRefresh, beforeRefresh, 'Explicit refresh preserves the exact map camera')
+    assert.equal(
+      await cdp.eval(`!!document.querySelector('[data-slot="startup-loading"]')`),
+      false,
+      'Refreshing an expired investigation never reopens the startup gate',
+    )
+    assert.equal(
+      requests
+        .slice(refreshRequestStart)
+        .some((request) =>
+          request.url.includes('/global/raster/' + expired.expiredSnapshotId + '/'),
+        ),
+      false,
+      'Explicit refresh causes no new requests for expired raster URLs',
+    )
+    results.push(
+      'Explicit expired-global refresh replaces membership and pixels while preserving the live map, camera and entered app',
+    )
+    
     await cdp.click('Burning Activity Calendar')
     await cdp.until(
       `!!document.querySelector('.analysis-panel')`,
       'Burning Activity Calendar opened',
     )
-    // Drawing through actual mouse events preserves the map's draft/confirmed boundary.
+    await cdp.eval(`void ${liveMap}.jumpTo({center:[18,12],zoom:5})`)
+    await pause(500)
+    
     await cdp.click('Draw area')
     await cdp.click('Draw rectangle')
     await pause(400)
@@ -803,8 +1026,7 @@ export async function browserIntegration() {
     )
     await cdp.click('Use this area')
     await cdp.click('Area', `document.querySelector('.analysis-panel')`)
-    await cdp.click('Custom range')
-    // Choose an earlier month using existing calendar navigation; both clicks are normal UI.
+    
     await cdp.eval(
       `document.querySelector('.analysis-date-nav button[aria-label="Previous"]').click()`,
     )
@@ -813,9 +1035,27 @@ export async function browserIntegration() {
     )
     const first = dates[7],
       last = dates[14]
-    await cdp.eval(`document.querySelector('[data-period-day="${first}"]').click()`)
+    const chooseDay = async (day, shift = false) => {
+      await cdp.eval(`document.querySelector('[data-period-day="${day}"]').focus()`)
+      await cdp.send('Input.dispatchKeyEvent', {
+        type: 'keyDown',
+        key: 'Enter',
+        code: 'Enter',
+        windowsVirtualKeyCode: 13,
+        text: '\r',
+        modifiers: shift ? 8 : 0,
+      })
+      await cdp.send('Input.dispatchKeyEvent', {
+        type: 'keyUp',
+        key: 'Enter',
+        code: 'Enter',
+        windowsVirtualKeyCode: 13,
+        modifiers: shift ? 8 : 0,
+      })
+    }
+    await chooseDay(first)
     await pause(80)
-    await cdp.eval(`document.querySelector('[data-period-day="${last}"]').click()`)
+    await chooseDay(last, true)
     await cdp.click('Edit area', `document.querySelector('.analysis-panel-footer')`)
     await cdp.until(
       `Array.from(document.querySelectorAll('.analysis-panel button')).some(e=>e.textContent.trim()==='Finish editing')`,
@@ -823,11 +1063,55 @@ export async function browserIntegration() {
     )
     await cdp.click('Activity', `document.querySelector('.analysis-panel')`)
     await cdp.click('Open in Area Analytics')
-    await cdp.until(
-      `document.querySelector('.analytics-date-fields input')?.value===${JSON.stringify(first)}`,
-      'calendar historical range handoff',
+    const periodEnd = new Date(Date.parse(last + 'T00:00:00Z') + 86400000).toISOString()
+    const observationRequests = () =>
+      requests
+        .filter(
+          (request) =>
+            new URL(request.url).pathname.endsWith('/analysis/observations') &&
+            request.method === 'POST',
+        )
+        .map((request) => JSON.parse(request.body))
+    for (
+      let attempt = 0;
+      attempt < 100 &&
+      !observationRequests().some(
+        (request) =>
+          request.query.interval.start === first + 'T00:00:00.000Z' &&
+          request.query.interval.endExclusive === periodEnd,
+      );
+      attempt++
     )
+      await pause(100)
+    assert.ok(
+      observationRequests().some(
+        (request) =>
+          request.query.interval.start === first + 'T00:00:00.000Z' &&
+          request.query.interval.endExclusive === periodEnd,
+      ),
+      'Calendar handoff retains the actual first date and exclusive end in canonical requests',
+    )
+    await cdp.click('Overview')
+    await cdp.click('Method')
     await cdp.click('History')
+    assert.equal(
+      requests.filter((request) => request.url.endsWith('/analysis/history/prepare')).length,
+      0,
+      'Opening regional Overview, Method and History reads stored data without preparation',
+    )
+    await cdp.click('Load historical data')
+    for (
+      let attempt = 0;
+      attempt < 50 &&
+      !requests.some((request) => request.url.endsWith('/analysis/history/prepare'));
+      attempt++
+    )
+      await pause(100)
+    assert.equal(
+      requests.filter((request) => request.url.endsWith('/analysis/history/prepare')).length,
+      1,
+      'Historical preparation starts only after the explicit Load historical data action',
+    )
     await cdp.until(
       `!!document.querySelector('.investigation-section .history-heatmap tbody tr:nth-child(3) td button:not(:disabled)')`,
       'integrated History section',
@@ -843,9 +1127,27 @@ export async function browserIntegration() {
       `document.querySelector('.history-daily button:not(:disabled)').title.slice(0,10)`,
     )
     await cdp.eval(`document.querySelector('.history-daily button:not(:disabled)').click()`)
-    await cdp.until(
-      `document.querySelector('.analytics-date-fields input')?.value===${JSON.stringify(historicalDay)}`,
-      'historical daily detail becomes the actual investigation',
+    const historicalEnd = new Date(
+      Date.parse(historicalDay + 'T00:00:00Z') + 86400000,
+    ).toISOString()
+    for (
+      let attempt = 0;
+      attempt < 100 &&
+      !observationRequests().some(
+        (request) =>
+          request.query.interval.start === historicalDay + 'T00:00:00.000Z' &&
+          request.query.interval.endExclusive === historicalEnd,
+      );
+      attempt++
+    )
+      await pause(100)
+    assert.ok(
+      observationRequests().some(
+        (request) =>
+          request.query.interval.start === historicalDay + 'T00:00:00.000Z' &&
+          request.query.interval.endExclusive === historicalEnd,
+      ),
+      'Historical day detail becomes the exact canonical investigation',
     )
     results.push(
       'AOI drawing, pending edits and custom calendar range transfer; historical month/day linked to records',
@@ -909,9 +1211,11 @@ export async function browserIntegration() {
       `!!document.querySelector('.analytics-records tbody tr')`,
       'AOI popup canonical membership handed to complete records',
     )
-    assert.equal(
-      await cdp.eval(`document.querySelector('.analytics-date-fields input').value`),
-      historicalDay,
+    assert.ok(
+      await cdp.eval(
+        `document.querySelector('.area-analytics-controls').textContent.includes(${JSON.stringify(historicalDay + 'T00:00:00.000Z')})`,
+      ),
+      'Popup handoff retains the historical UTC date',
     )
     const selectedRequest = requests
       .filter(
@@ -989,6 +1293,9 @@ export async function browserIntegration() {
       upstreamRequests: finalFixture.upstreamAttempts.length,
       exceptions: failures,
       configuredApiRequests: requests.filter((r) => r.url.includes('/science-api/')).length,
+      mutedTextContrast,
+      narrowMobileLayout,
+      reducedMotionDuration,
       totalEncodedResponseBytes,
       apiEncodedResponseBytes,
       initialCanonicalCoreCount: representedObservations,
@@ -1005,6 +1312,7 @@ export async function browserIntegration() {
       nativeRasterTileResponses: rasterResponses.length,
       rasterBodyFallbacks,
       rasterCachedBodyReuses,
+      expectedExpiredRasterResponses,
       nativeRasterTileEncodedBytes: rasterResponses.reduce(
         (sum, tile) => sum + tile.encodedBytes,
         0,

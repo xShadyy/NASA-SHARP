@@ -130,7 +130,7 @@ class AnalysisAcquisitionCacheTest(unittest.TestCase):
         service.retain_firms_store(("expired",), replace(store, expires_at=time.time() - 1))
         self.assertFalse(service._FIRMS_STORES)
 
-    def test_wrapped_acquisition_areas_fail_before_any_upstream_request(self):
+    def test_canonical_dateline_areas_use_bounded_boxes_and_invalid_longitudes_do_not_acquire(self):
         from fastapi.testclient import TestClient
         wrapped = {"type": "Polygon", "coordinates": [[[179, -1], [-179, -1], [-179, 1], [179, 1], [179, -1]]]}
         split = {"type": "MultiPolygon", "coordinates": [
@@ -141,7 +141,7 @@ class AnalysisAcquisitionCacheTest(unittest.TestCase):
         empty = CanonicalStore((), (), "isolated empty fixture")
         with patch("app.store_from_environment", return_value=empty), patch("app.fetch_csv", new=AsyncMock()) as upstream, TestClient(service.app) as client:
             service.app.state.key = "isolated-test-key"
-            for geometry in (wrapped, split, unwrapped):
+            for geometry in (unwrapped,):
                 request = query("2026-11-01", "2026-11-02")
                 request["aoi"]["geometry"] = geometry
                 response = client.post("/analysis/map-source", json={"query": request})
@@ -151,14 +151,11 @@ class AnalysisAcquisitionCacheTest(unittest.TestCase):
         service.validate_acquisition_longitudes(AREA)
         service.validate_acquisition_longitudes({"type": "Polygon", "coordinates": [[[-170, -1], [-60, -1], [60, -1], [170, -1], [170, 1], [60, 1], [-60, 1], [-170, 1], [-170, -1]]]})
 
-        async def direct():
-            request = query("2026-11-01", "2026-11-02")
-            request["aoi"]["geometry"] = wrapped
-            with patch("app.product_windows", new=AsyncMock()) as availability:
-                with self.assertRaisesRegex(RejectedQuery, "180"):
-                    await service.firms_canonical_store(SimpleNamespace(), request, (-179, -1, 179, 1))
-                self.assertEqual(availability.call_count, 0)
-        asyncio.run(direct())
+        for geometry in (wrapped, split):
+            boxes = [tuple(map(float, box.split(","))) for box in service.analysis_acquisition_boxes(geometry)]
+            self.assertEqual(len(boxes), 2)
+            self.assertEqual(sum(east-west for west, _south, east, _north in boxes), 2)
+            self.assertTrue(all(-180 <= west < east <= 180 and east-west <= 1 for west, _south, east, _north in boxes))
 
     def test_started_shared_batch_survives_one_cancelled_analysis_consumer(self):
         async def exercise(directory):
@@ -311,9 +308,13 @@ class AnalysisMapContractTest(unittest.TestCase):
         result = overview_document(query("2026-11-01", "2026-11-02"), store)
         self.assertEqual(result["data"]["daily"][0]["detectionCount"], 1)
         self.assertEqual(result["data"]["daily"][0]["medianFrp"], 20)
-        with patch("harmonize.kept_detections", return_value=[None] * 100_001):
-            with self.assertRaisesRegex(RejectedQuery, "100,000"):
-                map_source_document(query("2026-11-01", "2026-11-02"), store)
+        dense = [replace(row, longitude=0.5 + index / 10_000_000) for index in range(100_001)]
+        with patch("harmonize.kept_detections", return_value=dense):
+            mapped = map_source_document(query("2026-11-01", "2026-11-02"), store)
+        self.assertEqual(mapped["meta"]["representation"], "bounded-display-aggregates")
+        self.assertEqual(mapped["meta"]["matchingObservations"], 100_001)
+        self.assertLessEqual(len(mapped["data"]["data"]["features"]), 25_000)
+        self.assertEqual(sum(item["properties"].get("detectionCount", 1) for item in mapped["data"]["data"]["features"]), 100_001)
 
     def test_response_freshness_uses_acquisition_and_exact_selected_observations(self):
         from fastapi.testclient import TestClient

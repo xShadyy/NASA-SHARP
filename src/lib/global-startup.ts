@@ -6,7 +6,7 @@ export type GlobalStartupState = {
 
 export const GLOBAL_STARTUP_TIMEOUT_MS = 30_000
 
-/** Background progress must not erase a failure before an explicit retry. */
+
 export function mergeGlobalStartupState(
   current: GlobalStartupState,
   next: GlobalStartupState,

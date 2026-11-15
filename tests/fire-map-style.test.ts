@@ -112,8 +112,15 @@ test('hotspot square and footprint layers validate against installed MapLibre', 
     assert.equal(clusterColor.value.evaluate({ zoom: 0 }, { properties: { maxFrp } }), expected)
   assert.deepEqual(clusters.layout?.['text-field'], [
     'to-string',
-    ['get', 'point_count_abbreviated'],
+    ['coalesce', ['get', 'detectionCount'], ['get', 'point_count']],
   ])
+  const count = createExpression(clusters.layout?.['text-field'], 'string')
+  if (count.result === 'error') assert.fail(JSON.stringify(count.value))
+  assert.equal(
+    count.value.evaluate({ zoom: 0 }, { properties: { detectionCount: 1201, point_count: 30 } }),
+    '1201',
+  )
+  assert.equal(count.value.evaluate({ zoom: 0 }, { properties: { point_count: 30 } }), '30')
 })
 
 test('native FRP severity colors remain available to analytical scales', () => {

@@ -235,7 +235,7 @@ export function createFireDotController(map: MapLibreMap, options: FireControlle
     if (!popupPinned) return
     const target = event.target
     if (target instanceof Element && target.closest('.fire-popup-wrap')) return
-    // The map click handler resolves observation clicks and closes empty-map clicks.
+    
     if (target === map.getCanvas()) return
     popup.remove()
   }

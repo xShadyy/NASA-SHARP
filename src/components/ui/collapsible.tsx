@@ -1,7 +1,7 @@
 import * as React from 'react'
 import * as CollapsiblePrimitive from '@radix-ui/react-collapsible'
 
-// shadcn/ui Collapsible, using the same Radix primitives as the other local controls.
+
 function Collapsible(props: React.ComponentProps<typeof CollapsiblePrimitive.Root>) {
   return <CollapsiblePrimitive.Root data-slot="collapsible" {...props} />
 }

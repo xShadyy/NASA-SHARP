@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import type { AnalysisArea } from '@/lib/analysis-area'
 import { selectedActivityStats, type AnalysisActivityData } from '@/lib/analysis-api'
 import type { AnalysisFireStatus } from '@/hooks/use-analysis-fires'
+import { missingActivityDescription } from '@/lib/analysis-request-status'
 import {
   ANALYSIS_PLATFORMS,
   addUtcDays,
@@ -142,7 +143,7 @@ export function AnalysisActivity({
                 formatUtcDay(day) +
                 '. ' +
                 (!cell
-                  ? 'Loading'
+                  ? missingActivityDescription(status)
                   : cell.count === null || cell.state === 'unavailable'
                     ? 'No coverage'
                     : cell.count + ' harmonized active cells')
@@ -157,6 +158,7 @@ export function AnalysisActivity({
                   aria-label={description}
                   title={description}
                   aria-pressed={focusedDay === day}
+                  disabled={!cell || cell.count == null || cell.state === 'unavailable'}
                   onClick={() => onFocusDay(focusedDay === day ? null : day)}
                   onFocus={() => setDetail(description)}
                   onPointerEnter={() => setDetail(description)}
@@ -205,7 +207,7 @@ export function AnalysisActivity({
             value={
               activity?.days.some((day) => day.count != null)
                 ? formatNumber(activity.days.reduce((sum, day) => sum + (day.count ?? 0), 0))
-                : '—'
+                : '-'
             }
             detail="Sum of reported daily harmonized active cells, in active-cell-days. Missing days are excluded."
           />
@@ -241,7 +243,7 @@ export function AnalysisActivity({
       )}
       <p className="analysis-heat-unit">
         {summaryOnly
-          ? 'Stored daily activity · active-cell-days. Select a date for its map observations.'
+          ? 'Stored daily activity - active-cell-days. Select a date for its map observations.'
           : 'Statistics count returned satellite detections. Calendar cells use the harmonized afternoon method.'}
       </p>
       <ActivityTrend
@@ -355,8 +357,8 @@ export function ActivityTrend({
       </div>
       <p className="analysis-heat-unit">
         {view === 'harmonized'
-          ? 'Harmonized afternoon active cells · 2 km grid'
-          : 'Raw detections · sensor sensitivity and reporting availability differ'}
+          ? 'Harmonized afternoon active cells - 2 km grid'
+          : 'Raw detections - sensor sensitivity and reporting availability differ'}
       </p>
       {!days.length ? (
         <p className="analysis-notice">The trend appears when the selected dates have loaded.</p>

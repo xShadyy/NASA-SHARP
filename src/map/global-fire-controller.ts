@@ -33,7 +33,7 @@ export function createGlobalFireController(
     createPopup?: () => Popup
     onOpenAnalytics?: (selection: FrozenSelection) => void
     onRefreshSnapshot?: () => void
-    /** Context pixels only; inspection remains available in analytical scopes. */
+    
     displayOnly?: boolean
   },
 ) {
@@ -307,8 +307,8 @@ export function createGlobalFireController(
       }
       if (disposed || controller.signal.aborted || current !== revision) return
       const merged = mergeGlobalTiles(loaded)
-      // Immutable snapshot membership also covers canonical metadata. An extra empty
-      // tile or a wrapped camera must not resend an unchanged collection to workers.
+      
+      
       const nextAggregateKey = `${activeSnapshot}:${merged.aggregates.features
         .map((feature) => String(feature.id ?? feature.properties.id))
         .sort()

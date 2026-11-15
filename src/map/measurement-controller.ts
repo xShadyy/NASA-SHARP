@@ -65,7 +65,7 @@ export type MeasurementTarget = {
   name: string
   color: MeasurementColor
   unit: MeasurementUnit
-  /** Formatted value only; the optional name is rendered separately with it. */
+  
   text: string
 }
 
@@ -140,9 +140,9 @@ const MAX_VECTOR_LATITUDE = 85.0511287798066
 const rounded = new Intl.NumberFormat('en', { maximumFractionDigits: 2 })
 const precise = new Intl.NumberFormat('en', { maximumFractionDigits: 4 })
 
-/** Geometry and geodesics are cached on vertex edits. Cursor previews update
- * only the dashed-edge source; explicit vertex drags coalesce geometry writes
- * behind worker backpressure. Neither pointer path updates React per move. */
+
+
+
 export function createMeasurementController(
   map: MapLibreMap,
   options: {
@@ -202,7 +202,7 @@ export function createMeasurementController(
   readout.hidden = true
   readout.setAttribute('aria-hidden', 'true')
   container.append(readout)
-  // Dimensions come from ResizeObserver, never a forced layout after writing text.
+  
   let containerWidth = container.clientWidth,
     containerHeight = container.clientHeight
   let readoutWidth = 150,
@@ -299,8 +299,8 @@ export function createMeasurementController(
     },
     before,
   )
-  // Native symbols follow their geographic points in both projections. They
-  // deliberately remain readable over imagery and cannot be hidden by cities.
+  
+  
   for (const area of [false, true])
     map.addLayer({
       id: area ? LAYERS[7] : LAYERS[6],
@@ -414,9 +414,9 @@ export function createMeasurementController(
     canvas.classList.toggle('measurement-vertex-dragging', drag !== null)
   }
 
-  /** A canonical GeoJSON point may appear in another wrapped world. Project
-   * the copy nearest the pointer, then inverse-project it to reject a point on
-   * the hidden hemisphere. No private MapLibre transform APIs are needed. */
+  
+
+
   function vertexScreenPosition(
     point: GeographicPosition,
     near: ScreenPoint,
@@ -510,8 +510,8 @@ export function createMeasurementController(
       for (let index = 1; index < path.length; index++) {
         const from = path[index - 1],
           to = path[index]
-        // Both endpoints use the same wrapped world, avoiding a false chord
-        // between opposite edges of a Mercator copy at the antimeridian.
+        
+        
         const wrap = Math.round((pointerLongitude - (from[0] + to[0]) / 2) / 360) * 360
         const project = (position: GeographicPosition) => {
           const result = map.project([position[0] + wrap, position[1]])
@@ -529,8 +529,8 @@ export function createMeasurementController(
       }
     }
     if (nearest) return target(nearest)
-    // Only visible, truly enclosed fill is selectable; not a polygon's bbox or
-    // a hidden hemisphere. This also covers polar caps and concave polygons.
+    
+    
     for (const current of [...finished.values()].reverse()) {
       if (
         current.mode === 'area' &&
@@ -595,8 +595,8 @@ export function createMeasurementController(
       distanceKm: segments.reduce((total, segment) => total + segment.distanceKm, 0),
       crossing:
         current.mode === 'area' && current.points.length >= 4 && hasCrossingPaths(closedPaths),
-      // A cap can enclose a pole even with every vertex below the vector
-      // source's latitude limit. Its closed ring includes that polar edge.
+      
+      
       hasPolarGeometry:
         boundary.some((position) => Math.abs(position[1]) > MAX_VECTOR_LATITUDE) ||
         ring.some((position) => Math.abs(position[1]) > MAX_VECTOR_LATITUDE),
@@ -702,11 +702,11 @@ export function createMeasurementController(
     if (size && display && labelMeasure) {
       labelMeasure.font = `400 ${size}px "Fira Sans"`
       const width = Math.max(100, Math.min(320, containerWidth - 24))
-      while (display.length > 2 && labelMeasure.measureText(`${display} · ${value}`).width > width)
+      while (display.length > 2 && labelMeasure.measureText(`${display} - ${value}`).width > width)
         display = `${display.replace(/…$/, '').slice(0, -1)}…`
-      if (labelMeasure.measureText(`${display} · ${value}`).width > width) display = ''
+      if (labelMeasure.measureText(`${display} - ${value}`).width > width) display = ''
     }
-    return display ? `${display} · ${value}` : value
+    return display ? `${display} - ${value}` : value
   }
 
   function reconcilePolarLabels(labels: MeasurementLabel[]) {
@@ -812,7 +812,7 @@ export function createMeasurementController(
           : current.cache.distanceKm
       showReadout(
         current.cache.crossing
-          ? 'Edges cross · Move or remove a point'
+          ? 'Edges cross - Move or remove a point'
           : formatMeasurement(value, current.unit),
       )
       return
@@ -826,7 +826,7 @@ export function createMeasurementController(
         ? Math.abs(current.cache.accumulator.previewSignedAreaKm2(cursor))
         : current.cache.distanceKm + geodesicDistanceKm(current.points.at(-1)!, cursor)
     const text = current.cache.crossing
-      ? 'Edges cross · Move or remove a point'
+      ? 'Edges cross - Move or remove a point'
       : formatMeasurement(value, current.unit)
     showReadout(text)
   }
@@ -851,8 +851,8 @@ export function createMeasurementController(
       previewWriter.write(empty)
       return
     }
-    // Only the candidate edges move. The clicked footprint stays filled until
-    // the next click, avoiding a whole polygon reindex on every pointer frame.
+    
+    
     const points =
       current.mode === 'area' && current.points.length >= 2
         ? [current.points.at(-1)!, cursor, current.points[0]]
@@ -918,14 +918,14 @@ export function createMeasurementController(
     cursorPoint = null
     previewDirty = false
     previewHasGeometry = false
-    // Hide before worker completion: an older in-flight source update cannot
-    // flash its dashed line back onto a finished or discarded measurement.
+    
+    
     setPreviewVisible(false)
     readout.hidden = true
     clearTimeout(scheduledTimer)
     scheduledTimer = undefined
-    // Replaces any pending preview with an empty collection. In-flight work
-    // cannot restore a stale line after Finish, Clear or leaving the canvas.
+    
+    
     previewWriter.write(empty)
   }
 
@@ -936,9 +936,9 @@ export function createMeasurementController(
     current.points[active.index] = active.pending
     active.pending = null
     rebuild(current)
-    // Vertex moves are coalesced to 30 Hz and bounded by worker backpressure.
-    // The finished polygon's interior anchor follows the actual new footprint,
-    // including concave shapes, instead of retaining a stale screen position.
+    
+    
+    
     if (current.mode === 'area' && current.finished && !current.cache.crossing) {
       current.cache.labelAnchor = polygonInteriorPoint(current.points, current.cache.boundary)
     }
@@ -975,8 +975,8 @@ export function createMeasurementController(
 
   function onDragTouchMove(event: TouchEvent) {
     if (!drag || drag.touchId === null) return
-    // A second finger cancels this edit rather than accidentally moving a
-    // point during a pinch. The next gesture can navigate the map normally.
+    
+    
     if (event.touches.length !== 1) {
       endDrag(true)
       return
@@ -1077,9 +1077,9 @@ export function createMeasurementController(
     }
   }
 
-  // The selected drawing tool owns clicks, including existing vertices. Editing
-  // resumes in Orbit / after closing Measure tools, so connecting to an
-  // existing finished endpoint can also start a new line without moving it.
+  
+  
+  
   function drawingToolActive() {
     return mode !== 'orbit'
   }
@@ -1091,8 +1091,8 @@ export function createMeasurementController(
     if (event.defaultPrevented || event.originalEvent.defaultPrevented) return
     const index = findVertex(event.point)
     if (index === null) return
-    // Preventing MapLibre's starting event blocks pan/rotate for this gesture
-    // without disabling handlers or changing the user's navigation settings.
+    
+    
     event.preventDefault()
     event.originalEvent.preventDefault()
     beginDrag(index, event.point, null)
@@ -1192,8 +1192,8 @@ export function createMeasurementController(
     const current = draft()
     if (mode === 'orbit' || !canFinish(current)) return
     renderedShapes.delete(current.id)
-    // Each distance leg is a real independent measurement: its own name,
-    // color, endpoints and context actions. Polygons remain one area.
+    
+    
     const records =
       current.mode === 'ruler'
         ? current.points.slice(1).map((point, index): Shape => ({
@@ -1238,9 +1238,9 @@ export function createMeasurementController(
   function cancelDrawing() {
     const current = draft()
     if (destroyed || mode === 'orbit' || !current.points.length) return false
-    // A secondary click ends only the clicked geometry, never the candidate
-    // point following the cursor. Keep valid shapes; discard partial/invalid
-    // ones so the preview cannot leave an unfinished segment behind.
+    
+    
+    
     endDrag()
     if (canFinish(current)) finish()
     else clear()
@@ -1543,10 +1543,10 @@ function pathMidpoint(segments: GeodesicSegment[]): GeographicPosition {
   return segments.at(-1)!.midpoint
 }
 
-/** MapLibre v6 setData resolves after worker processing. One upload in flight
- * plus one replaceable latest payload prevents a stale-work queue. updateData
- * was inspected, but diffing a single moving feature still reindexes that
- * feature; separate fixed/transient sources avoid touching fixed geometry. */
+
+
+
+
 function latestSourceWriter(map: MapLibreMap, id: string, onIdle?: () => void) {
   let pending: FeatureCollection | null = null
   let busy = false

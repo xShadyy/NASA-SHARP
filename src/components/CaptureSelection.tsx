@@ -19,7 +19,7 @@ function rectangle(start: Point, end: Point): CaptureRegion {
   }
 }
 
-/** Mount over the map's exact CSS bounds. The overlay consumes drawing gestures. */
+
 export function CaptureSelection({ onSelected, onCancel }: CaptureSelectionProps) {
   const ref = useRef<HTMLDivElement>(null)
   const drag = useRef<{ id: number; start: Point } | null>(null)

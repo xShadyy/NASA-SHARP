@@ -1,8 +1,4 @@
-"""One leased owner downloads official NRT bulk products for all map visitors.
 
-Public bulk URLs do not contain MAP_KEY. RT/URT API supplements remain a
-separate explicitly budgeted path; bulk NRT is not represented as RT/URT.
-"""
 from __future__ import annotations
 
 import asyncio
@@ -45,8 +41,8 @@ def configured_sources():
 
 
 def parse_bulk(text, source):
-    # Reuse the existing NASA-format validator and canonical conversion in bounded
-    # batches rather than building a second full GeoJSON collection for the world.
+    
+    
     from app import Source, parse_features, feature_to_detection
     reader = csv.DictReader(io.StringIO(text, newline=""), strict=True)
     required = {"latitude", "longitude", "acq_date", "acq_time", "satellite", "confidence"}
@@ -137,8 +133,8 @@ async def refresh_global(store=None, client=None, now=None, sources=None, force=
         hours = state.get("downloadWindowHours")
         if hours is None:
             hours = 168 if str(state.get("providerUrl", "")).endswith("_7d.csv") else 24 if str(state.get("providerUrl", "")).endswith("_24h.csv") else 0
-        # A recently fetched seven-day product does not replace the owner's
-        # explicitly configured 24-hour acquisition product (or vice versa).
+        
+        
         return hours == requested_hours
     if not force and current.get("publishedAt") and now.timestamp() - instant(current["publishedAt"]).timestamp() < cadence and all(has_requested_extract(source) for source in sources):
         store.release("global-ingestion", owner)
@@ -147,9 +143,9 @@ async def refresh_global(store=None, client=None, now=None, sources=None, force=
     own_client = client is None
     client = client or httpx.AsyncClient(timeout=httpx.Timeout(120, connect=15), follow_redirects=False)
     started = time.perf_counter()
-    # A single stable publication anchor, never one independently chosen per tile.
-    # Refresh frequency must not crop the latest supplied acquisitions. One
-    # batch anchor is persisted for all sources/tiles, independent of cadence.
+    
+    
+    
     anchor = now.astimezone(UTC).replace(microsecond=0)
     successes = 0
     changed = False
@@ -170,8 +166,8 @@ async def refresh_global(store=None, client=None, now=None, sources=None, force=
         except asyncio.CancelledError:
             await publish_task
             raise
-        # Serve the first useful tiles from the same immutable publication. A
-        # display-cache failure must not invalidate successful canonical data.
+        
+        
         await warm_retained_raster(store, published["snapshot"])
         return published
     try:
@@ -188,7 +184,7 @@ async def refresh_global(store=None, client=None, now=None, sources=None, force=
                 result = await download_source(client, source, state, window=window)
                 if result.get("unchanged"):
                     state = {**state, "status": "ok", "checkedAt": result["checkedAt"], "failure": None}
-                    # 304 never claims the old file contains newly acquired reports.
+                    
                     store.update_source_state(source, state)
                 else:
                     changed = True
@@ -201,10 +197,10 @@ async def refresh_global(store=None, client=None, now=None, sources=None, force=
                         except (ValueError, TypeError):
                             pass
                     metadata["timeAnchorBasis"] = "Provider Last-Modified bounded by publication anchor" if metadata.get("lastModified") else "Published retrieval anchor; provider generation time unavailable"
-                    # The official page promises "last 7 days" without a precise
-                    # public file start instant. Keep every supplied record within
-                    # 168h, but do not claim the ambiguous first boundary date is a
-                    # complete reporting window. Retained days can fill it later.
+                    
+                    
+                    
+                    
                     metadata["downloadWindowHours"] = 24 if window == "24h" else 168
                     metadata["coverageStart"] = utc(datetime.combine(end.date(), datetime.min.time(), UTC) - timedelta(days=0 if window == "24h" else 6))
                     metadata["coverageEndExclusive"] = utc(end)
@@ -214,14 +210,14 @@ async def refresh_global(store=None, client=None, now=None, sources=None, force=
                     try:
                         await asyncio.shield(write_task)
                     except asyncio.CancelledError:
-                        # A shutdown must not release ownership while its SQLite
-                        # partition transaction is still running in a thread.
+                        
+                        
                         await write_task
                         raise
                 successes += 1
                 if window == "24h" and not lease_lost:
-                    # Make a useful partial 24h view available after the first
-                    # satellite; each new membership is an immutable snapshot.
+                    
+                    
                     available = [store.source_state(name) for name in sources]
                     ends = [instant(item["coverageEndExclusive"]) for item in available if item and item.get("coverageEndExclusive")]
                     if ends:
@@ -232,8 +228,8 @@ async def refresh_global(store=None, client=None, now=None, sources=None, force=
                 state = store.source_state(source)
                 state["retryAt"] = utc(now + timedelta(seconds=max(cadence, getattr(error, "retry_after", cadence))))
                 store.update_source_state(source, state)
-        # Anchor at the most recent known bulk generation, retaining failed source
-        # data at that fixed interval with explicit stale/partial status.
+        
+        
         available = [store.source_state(source) for source in sources]
         ends = [instant(state["coverageEndExclusive"]) for state in available if state and state.get("coverageEndExclusive")]
         if lease_lost:
@@ -255,7 +251,7 @@ async def refresh_global(store=None, client=None, now=None, sources=None, force=
 
 
 async def warm_retained_raster(store, snapshot=None):
-    """Warm local display images once per retained generation, without acquisition."""
+    
     if os.environ.get("SHARP_GLOBAL_RASTER_PREWARM_ENABLED", "1").lower() in {"0", "false", "no"}:
         return {"state": "disabled"}
     try:
@@ -271,8 +267,8 @@ async def warm_retained_raster(store, snapshot=None):
     try:
         claimed = await asyncio.to_thread(store.lease, lease_name, owner, 120)
     except (sqlite3.Error, OSError):
-        # Read-only serving remains useful without a writable coordination DB.
-        # Do not attempt metric/failure writes on this path.
+        
+        
         return {"state": "skipped"}
     if not claimed:
         return {"state": "coalesced"}
@@ -293,15 +289,15 @@ async def warm_retained_raster(store, snapshot=None):
         except (sqlite3.Error, OSError):
             pass
         return {"state": "failed"}
-    # Keep the short lease until expiry so staggered API-worker startups do not
-    # immediately repeat the same warmup. This never changes dataset freshness.
+    
+    
     return {"state": "warmed", "result": result}
 
 
 async def run_owner(app):
-    """Backend-lifetime service, independent of browser requests/disconnects."""
+    
     store = app.state.global_store
-    # Let serving start before local cache preparation or cold acquisition.
+    
     await asyncio.sleep(1)
     await warm_retained_raster(store)
     if os.environ.get("SHARP_GLOBAL_INGEST_ENABLED", "1").lower() in {"0", "false", "no"}:

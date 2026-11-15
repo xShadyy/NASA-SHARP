@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs'
 import { unlink } from 'node:fs/promises'
 import { browserIntegration } from '../tools/browser-integration.mjs'
 
-// Explicit opt-in keeps ordinary unit checks independent of local Chrome.
+
 const marker = '.cache/browser-tests/run'
 const diagnosticMarker = '.cache/browser-tests/startup-diagnostic'
 const diagnostic = existsSync(diagnosticMarker)
