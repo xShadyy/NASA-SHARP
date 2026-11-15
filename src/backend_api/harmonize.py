@@ -334,6 +334,9 @@ def detection_from_row(row: dict[str, str | None]) -> Detection:
         _optional_float(row.get("scan_km") or row.get("scan")),
         _optional_float(row.get("track_km") or row.get("track")),
         _optional_float(row.get("nominal_resolution_m")),
+        (row.get("source_product") or "").strip() or None,
+        (row.get("product_version") or "").strip() or None,
+        (row.get("processing_tier") or "").strip() or None,
     )
 
 

@@ -2,6 +2,7 @@ import {
   lazy,
   Suspense,
   useEffect,
+  useMemo,
   useReducer,
   useRef,
   useState,
@@ -40,7 +41,17 @@ import { MeasurementPanel } from '@/components/MeasurementPanel'
 import { AreaAnalytics } from '@/components/AreaAnalytics'
 import { AnalysisPanel } from '@/components/AnalysisPanel'
 import { analysisReducer, initialAnalysisState } from '@/lib/analysis-state'
-import { utcToday, type AnalysisRange } from '@/lib/analysis-activity'
+import {
+  utcToday,
+  focusRange,
+  MAX_ANALYSIS_DAYS,
+  type AnalysisRange,
+} from '@/lib/analysis-activity'
+import {
+  createInvestigation,
+  type InvestigationScope,
+  type FrozenSelection,
+} from '@/lib/investigation'
 import { useAnalysisCountrySelection } from '@/hooks/use-analysis-country-selection'
 import { useAnalysisFires } from '@/hooks/use-analysis-fires'
 import { CapturePanel } from '@/components/CapturePanel'
@@ -165,13 +176,38 @@ function ExplorerSidebar({
 }) {
   const { open, setOpen, isMobile, openMobile, setOpenMobile } = useSidebar()
   const expanded = isMobile ? openMobile : open
+  useEffect(() => {
+    let active = true
+    const measure = () => {
+      if (!active) return
+      const context = document.createElement('canvas').getContext('2d')
+      if (!context) return
+      const button = document.querySelector('#explorer-sidebar [data-slot="sidebar-menu-button"]')
+      context.font = button ? getComputedStyle(button).font : '500 14px "Fira Sans", sans-serif'
+      const width =
+        Math.ceil(
+          Math.max(
+            ...[...navigation.map((item) => item.name), 'Instructions'].map(
+              (name) => context.measureText(name).width,
+            ),
+          ),
+        ) + 90
+      document.documentElement.style.setProperty(
+        '--explorer-sidebar-width',
+        `${Math.max(280, width)}px`,
+      )
+    }
+    measure()
+    void document.fonts.ready.then(measure)
+    return () => {
+      active = false
+    }
+  }, [])
   const selectNav = (name: string) => {
     setActiveNav(name)
-    if (name === 'Area Analytics' || name === 'Burning Activity Calendar') {
-      if (isMobile) setOpenMobile(false)
-      else setOpen(false)
-    }
-    if (name === 'Instructions' || name === 'Saved locations') {
+    if (isMobile && (name === 'Area Analytics' || name === 'Burning Activity Calendar'))
+      setOpenMobile(false)
+    else {
       if (isMobile) setOpenMobile(true)
       else setOpen(true)
     }
@@ -252,7 +288,7 @@ function ExplorerSidebar({
               <h3 id="instructions-layers-heading">Current map layers</h3>
               <p>
                 Choose the base map and optional layers in Map &amp; layers. Detail appears as you
-                zoom in. Fire detections are not connected yet.
+                zoom in. Satellite hotspots use reported fire radiative power in MW.
               </p>
               <h4>Base maps</h4>
               <dl>
@@ -404,7 +440,28 @@ function App() {
   const [analysisFocusedDay, setAnalysisFocusedDay] = useState<string | null>(null)
   const [activityGeneration, setActivityGeneration] = useState(0)
   const analysisOpen = activeNav === 'Burning Activity Calendar'
-  const fires = useAnalysisFires(analysisOpen ? analysis.confirmed : null, analysisRange)
+  const fires = useAnalysisFires(analysis.confirmed, analysisRange, analysisFocusedDay)
+  const [mapFilters, setMapFilters] = useState<InvestigationScope['filters']>({})
+  const [mapSelection, setMapSelection] = useState<{
+    selection: FrozenSelection
+    features: typeof fires.features
+  } | null>(null)
+  function openAnalytics() {
+    setActiveNav('Area Analytics')
+  }
+  const fireQuery = useMemo(
+    () =>
+      analysis.confirmed
+        ? createInvestigation(
+            analysis.confirmed,
+            (Date.parse(analysisRange.end) - Date.parse(analysisRange.start)) / 86_400_000 >=
+              MAX_ANALYSIS_DAYS && analysisFocusedDay
+              ? focusRange(analysisRange, analysisFocusedDay)
+              : analysisRange,
+          ).query
+        : null,
+    [analysis.confirmed, analysisRange, analysisFocusedDay],
+  )
   const countrySelection = useAnalysisCountrySelection(analysisOpen, analysis, dispatchAnalysis)
   const [camera, setCamera] = useState<MapCameraState>({
     ready: false,
@@ -714,7 +771,7 @@ function App() {
               <span className="brand-symbol" aria-hidden="true">
                 <img
                   className="brand-logo"
-                  src={`${import.meta.env.BASE_URL}brand/sharp-logo.svg`}
+                  src={`${import.meta.env.BASE_URL}brand/${theme === 'dark' ? 'sharp-logo-white.svg' : 'sharp-logo.svg'}`}
                   alt=""
                   width={76}
                   height={40}
@@ -759,15 +816,22 @@ function App() {
             data-analysis-open={analysisOpen}
             style={
               {
-                '--sidebar-width': analysisOpen ? '360px' : '234px',
-                '--sidebar-width-icon': analysisOpen ? '70px' : '46px',
+                '--sidebar-width': 'var(--explorer-sidebar-width, 300px)',
+                '--sidebar-width-icon': '70px',
               } as CSSProperties
             }
           >
             <ExplorerSidebar
               activeNav={activeNav}
               setActiveNav={(name) => {
-                if (name !== 'Burning Activity Calendar') countrySelection.cancel()
+                if (name !== 'Burning Activity Calendar') {
+                  if (analysis.phase === 'loading') countrySelection.cancel()
+                  else countrySelection.stopPicking()
+                }
+                if (name === 'Area Analytics') {
+                  openAnalytics()
+                  return
+                }
                 if (name === 'Burning Activity Calendar') {
                   chooseMode('orbit')
                   setCaptureOpen(false)
@@ -812,6 +876,8 @@ function App() {
                     dispatchAnalysis({ type: 'edit' })
                   }}
                   onConfirm={() => {
+                    setMapFilters({})
+                    setMapSelection(null)
                     setAnalysisFocusedDay(null)
                     setActivityGeneration((current) => current + 1)
                     countrySelection.setPicking(false)
@@ -819,14 +885,20 @@ function App() {
                   }}
                   onFitArea={() => dispatchAnalysis({ type: 'fit' })}
                   onCancel={countrySelection.cancel}
-                  onClear={countrySelection.clear}
+                  onClear={() => {
+                    setMapFilters({})
+                    setMapSelection(null)
+                    countrySelection.clear()
+                  }}
                   onClose={() => {
-                    countrySelection.cancel()
+                    countrySelection.stopPicking()
                     setActiveNav('Saved locations')
                   }}
                   range={analysisRange}
                   generation={activityGeneration}
                   onRangeChange={(next) => {
+                    setMapFilters({})
+                    setMapSelection(null)
                     setAnalysisFocusedDay(null)
                     setAnalysisRange(next)
                   }}
@@ -838,6 +910,7 @@ function App() {
                   fireCount={fires.count}
                   fireMessage={fires.message}
                   onRetryFires={fires.retry}
+                  onOpenAnalytics={() => openAnalytics()}
                 />
               )}
               <main
@@ -885,6 +958,17 @@ function App() {
                       fires={fires.features}
                       focusedFireDay={analysisFocusedDay}
                       fireRange={analysisRange}
+                      fireQuery={fireQuery}
+                      fireSourceGeneration={fires.meta?.sourceGeneration}
+                      fireFilters={mapFilters}
+                      selectedObservationIds={
+                        mapSelection
+                          ? mapSelection.features === fires.features
+                            ? mapSelection.selection.observationIds
+                            : []
+                          : undefined
+                      }
+                      onOpenAnalytics={openAnalytics}
                       referenceLayers={referenceLayers}
                       onReferenceChange={changeReferenceLayer}
                       showSpace={showSpace}
@@ -1061,6 +1145,18 @@ function App() {
                     </Tooltip>
                   </Collapsible>
                 </div>
+                {mapSelection && !areaAnalyticsOpen && (
+                  <div className="map-investigation-selection">
+                    <span>
+                      {mapSelection.features === fires.features
+                        ? `Selected group · ${mapSelection.selection.observationIds?.length ?? 0} observations`
+                        : 'Source changed. Select the group again to refresh its membership.'}
+                    </span>
+                    <Button variant="outline" size="sm" onClick={() => setMapSelection(null)}>
+                      Whole area
+                    </Button>
+                  </div>
+                )}
                 {areaAnalyticsOpen && (
                   <AreaAnalytics
                     analysisArea={analysis.confirmed}

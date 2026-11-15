@@ -15,6 +15,8 @@ sys.path.insert(0, str(ROOT / "src" / "backend_api"))
 import app as service
 from cache import BatchCache
 from harmonize import map_source_document, overview_document
+from harmonize import detection_id
+from observation_explorer import observations_document, freeze_document, export_document
 
 
 async def benchmark(label, days, observations_per_day):
@@ -71,6 +73,32 @@ async def benchmark(label, days, observations_per_day):
                     "acquisition_cache_hit": store.cache_hit,
                 }
                 del map_document, body, summary
+        started = time.perf_counter()
+        observations = observations_document(request, store, {"options": {"pageSize": 25, "sort": "frp", "groupBy": "hour"}})
+        explorer_ms = (time.perf_counter() - started) * 1000
+        frozen_ids = [detection_id(row) for row in store.rows[:20_000]]
+        started = time.perf_counter()
+        token = None
+        for offset in range(0, len(frozen_ids), 2000):
+            selected = freeze_document(request, store, {"options": {"observationIds": frozen_ids[offset:offset + 2000], "selectionToken": token}})
+            token = selected["data"]["selectionToken"]
+        frozen_ms = (time.perf_counter() - started) * 1000
+        started = time.perf_counter()
+        popup_page = observations_document(request, store, {"options": {"selectionToken": token, "pageSize": 10, "groupBy": "hour", "sort": "frp"}})
+        popup_ms = (time.perf_counter() - started) * 1000
+        started = time.perf_counter()
+        exported = export_document(request, store, {"format": "geojson"})
+        export_bytes = 0
+        async for chunk in exported.body_iterator:
+            export_bytes += len(chunk.encode() if isinstance(chunk, str) else chunk)
+        processing = {"complete_query_count": observations["data"]["total"],
+            "query_filter_sort_group_page_ms": round(explorer_ms, 2),
+            "frozen_selection_count": len(frozen_ids), "bounded_freeze_ms": round(frozen_ms, 2),
+            "frozen_popup_page_count": len(popup_page["data"]["rows"]),
+            "frozen_popup_global_query_ms": round(popup_ms, 2),
+            "complete_geojson_export_ms": round((time.perf_counter() - started) * 1000, 2),
+            "complete_geojson_export_bytes": export_bytes,
+            "instrumentation": "tracemalloc enabled; includes canonical filtering/aggregation, excludes network latency"}
         _, peak = tracemalloc.get_traced_memory()
         tracemalloc.stop()
         return {
@@ -79,6 +107,7 @@ async def benchmark(label, days, observations_per_day):
             "peak_tracemalloc_bytes": peak,
             "sqlite_bytes": sum(path.stat().st_size for path in Path(directory).glob("cache.sqlite3*")),
             "measurements": measurements,
+            "observation_processing": processing,
         }
 
 

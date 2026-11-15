@@ -46,7 +46,7 @@ function simplifyRing(ring: Position[], reference?: number): Position[] {
     north = Math.max(north, latitude)
   }
   const tolerance = Math.min(DISPLAY_TOLERANCE, Math.max(east - west, north - south) / 1200)
-  let simplified: Position[] = unwrapped
+  let simplified: Position[]
   try {
     simplified = simplify<Polygon>(
       { type: 'Polygon', coordinates: [unwrapped] },
@@ -79,7 +79,7 @@ export function prepareCountryDisplayGeometry(
 ): PreparedBoundaryGeometry {
   const displayGeometry = simplifyCountryDisplayGeometry(geometry)
   const displayBoundary = wrappedArea(displayGeometry)
-  let displayMask: MultiPolygon | null = null
+  let displayMask: MultiPolygon | null
   try {
     displayMask = outsideAreaMask(displayGeometry)
   } catch {

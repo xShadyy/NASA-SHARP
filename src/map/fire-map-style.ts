@@ -81,7 +81,7 @@ export function fireLayerSpecifications(): (
       filter: ['!', ['has', 'point_count']],
       layout: {
         'icon-image': FIRE_SQUARE_IMAGE,
-        'icon-size': ['interpolate', ['linear'], ['zoom'], 0, 0.75, 8, 1.02, 14, 1.26],
+        'icon-size': ['interpolate', ['linear'], ['zoom'], 0, 0.375, 8, 0.51, 14, 0.63],
         'icon-allow-overlap': true,
         'icon-ignore-placement': true,
         'icon-padding': 0,

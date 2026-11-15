@@ -5,7 +5,7 @@ import {
   MODIS_START_DAY,
   addUtcDays,
   calendarWeeks,
-  clampRange,
+  customAnalysisRange,
   formatUtcDay,
   formatUtcRange,
   rangePreset,
@@ -25,11 +25,14 @@ export function AnalysisDatePicker({
   const [view, setView] = useState<'days' | 'months' | 'years'>('days')
   const [yearPage, setYearPage] = useState(Math.floor(Number(month.slice(0, 4)) / 12) * 12)
   const [preview, setPreview] = useState<AnalysisRange | null>(null)
+  const [custom, setCustom] = useState(false)
+  const [anchor, setAnchor] = useState<string | null>(null)
+  const [rangeError, setRangeError] = useState('')
   const drag = useRef<{ anchor: string; range: AnalysisRange } | null>(null)
   const suppressClick = useRef(false)
   const today = utcToday()
   const year = Number(month.slice(0, 4))
-  const selection = preview ?? range
+  const selection = preview ?? (anchor ? { start: anchor, end: anchor } : range)
   const monthLabel = new Intl.DateTimeFormat('en-GB', {
     month: 'long',
     year: 'numeric',
@@ -78,6 +81,9 @@ export function AnalysisDatePicker({
             variant="outline"
             aria-pressed={range.preset === preset}
             onClick={() => {
+              setCustom(false)
+              setAnchor(null)
+              setRangeError('')
               const next = rangePreset(preset)
               onChange(next)
               setMonth(next.end.slice(0, 7))
@@ -87,9 +93,29 @@ export function AnalysisDatePicker({
             {preset === '24h' ? 'Last 24h' : preset === '7d' ? 'Last 7 days' : 'Last month'}
           </Button>
         ))}
+        <Button
+          size="sm"
+          variant="outline"
+          aria-pressed={custom}
+          onClick={() => {
+            setCustom(true)
+            setAnchor(null)
+            setRangeError('')
+            setView('days')
+          }}
+        >
+          Custom range
+        </Button>
       </div>
       <p className="analysis-period-selection">
-        {range.preset === '24h' ? 'Last 24 hours' : formatUtcRange(selection)} UTC
+        {custom && anchor
+          ? `${formatUtcDay(anchor)} → Select end date`
+          : custom
+            ? 'Select start date'
+            : range.preset === '24h'
+              ? 'Last 24 hours'
+              : formatUtcRange(selection)}{' '}
+        UTC
       </p>
       <div className="analysis-date-nav">
         <Button
@@ -173,11 +199,12 @@ export function AnalysisDatePicker({
           role="group"
           aria-label="Select a day or drag a date range"
           onPointerDown={(event) => {
+            if (custom) return
             if (event.button !== 0) return
             const day = dayAt(event.clientX, event.clientY)
             if (!day) return
             suppressClick.current = true
-            drag.current = { anchor: day, range: clampRange(day, day) }
+            drag.current = { anchor: day, range: customAnalysisRange(day, day) }
             setPreview(drag.current.range)
             event.currentTarget.setPointerCapture(event.pointerId)
           }}
@@ -185,7 +212,7 @@ export function AnalysisDatePicker({
             if (!drag.current) return
             const day = dayAt(event.clientX, event.clientY)
             if (!day) return
-            drag.current.range = clampRange(drag.current.anchor, day)
+            drag.current.range = customAnalysisRange(drag.current.anchor, day)
             setPreview(drag.current.range)
           }}
           onPointerUp={finish}
@@ -214,11 +241,31 @@ export function AnalysisDatePicker({
                 aria-label={formatUtcDay(day)}
                 aria-pressed={day >= selection.start && day <= selection.end}
                 onClick={(event) => {
+                  if (custom) {
+                    if (!anchor) {
+                      setAnchor(day)
+                      setRangeError('')
+                      return
+                    }
+                    try {
+                      onChange(customAnalysisRange(anchor, day))
+                    } catch (error) {
+                      setRangeError(error instanceof Error ? error.message : 'Invalid date range.')
+                      return
+                    }
+                    setAnchor(null)
+                    setCustom(false)
+                    return
+                  }
                   if (event.detail !== 0 && suppressClick.current) {
                     suppressClick.current = false
                     return
                   }
-                  onChange(event.shiftKey ? clampRange(range.start, day) : clampRange(day, day))
+                  onChange(
+                    event.shiftKey
+                      ? customAnalysisRange(range.start, day)
+                      : customAnalysisRange(day, day),
+                  )
                 }}
                 onKeyDown={(event) => {
                   const amount = (
@@ -231,7 +278,7 @@ export function AnalysisDatePicker({
                   event.preventDefault()
                   const next = addUtcDays(day, amount)
                   if (next < MODIS_START_DAY || next > today) return
-                  if (event.shiftKey) onChange(clampRange(range.start, next))
+                  if (event.shiftKey) onChange(customAnalysisRange(range.start, next))
                   if (next.slice(0, 7) !== month) setMonth(next.slice(0, 7))
                   requestAnimationFrame(() =>
                     document
@@ -245,7 +292,11 @@ export function AnalysisDatePicker({
             ))}
         </div>
       )}
-      <p className="analysis-period-note">Click a day or drag to select up to 31 days.</p>
+      {rangeError && (
+        <p className="analysis-error" role="alert">
+          {rangeError}
+        </p>
+      )}
     </div>
   )
 }

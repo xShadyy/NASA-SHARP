@@ -1,38 +1,49 @@
 {
-  "recorded_at": "2026-11-15T11:14:37.742199+00:00",
+  "recorded_at": "2026-11-15T13:42:47.342400+00:00",
   "results": [
     {
       "scenario": "small-region-day",
       "fixture": "isolated synthetic NASA-format daily CSV; no external requests",
       "days": 1,
       "observations_per_day": 500,
-      "peak_tracemalloc_bytes": 1964310,
+      "peak_tracemalloc_bytes": 1963622,
       "sqlite_bytes": 36864,
       "measurements": {
         "cold": {
-          "acquisition_ms": 73.01,
-          "query_and_serialization_ms": 114.02,
+          "acquisition_ms": 87.64,
+          "query_and_serialization_ms": 133.8,
           "upstream_mock_calls": 1,
-          "map_bytes": 307692,
+          "map_bytes": 307721,
           "detection_count": 500,
           "acquisition_cache_hit": false
         },
         "warm": {
           "acquisition_ms": 0.07,
-          "query_and_serialization_ms": 41.17,
+          "query_and_serialization_ms": 34.95,
           "upstream_mock_calls": 0,
-          "map_bytes": 307692,
+          "map_bytes": 307721,
           "detection_count": 500,
           "acquisition_cache_hit": true
         },
         "disk": {
-          "acquisition_ms": 29.13,
-          "query_and_serialization_ms": 68.6,
+          "acquisition_ms": 28.48,
+          "query_and_serialization_ms": 65.34,
           "upstream_mock_calls": 0,
-          "map_bytes": 307692,
+          "map_bytes": 307721,
           "detection_count": 500,
           "acquisition_cache_hit": true
         }
+      },
+      "observation_processing": {
+        "complete_query_count": 500,
+        "query_filter_sort_group_page_ms": 75.91,
+        "frozen_selection_count": 500,
+        "bounded_freeze_ms": 44.59,
+        "frozen_popup_page_count": 10,
+        "frozen_popup_global_query_ms": 78.57,
+        "complete_geojson_export_ms": 299.27,
+        "complete_geojson_export_bytes": 271239,
+        "instrumentation": "tracemalloc enabled; includes canonical filtering/aggregation, excludes network latency"
       }
     },
     {
@@ -40,33 +51,44 @@
       "fixture": "isolated synthetic NASA-format daily CSV; no external requests",
       "days": 7,
       "observations_per_day": 3000,
-      "peak_tracemalloc_bytes": 63620038,
+      "peak_tracemalloc_bytes": 63625925,
       "sqlite_bytes": 167936,
       "measurements": {
         "cold": {
-          "acquisition_ms": 2453.61,
-          "query_and_serialization_ms": 4321.09,
+          "acquisition_ms": 2725.01,
+          "query_and_serialization_ms": 4770.33,
           "upstream_mock_calls": 7,
-          "map_bytes": 12965313,
+          "map_bytes": 12965342,
           "detection_count": 21000,
           "acquisition_cache_hit": false
         },
         "warm": {
-          "acquisition_ms": 0.13,
-          "query_and_serialization_ms": 1792.93,
+          "acquisition_ms": 0.15,
+          "query_and_serialization_ms": 1919.24,
           "upstream_mock_calls": 0,
-          "map_bytes": 12965313,
+          "map_bytes": 12965342,
           "detection_count": 21000,
           "acquisition_cache_hit": true
         },
         "disk": {
-          "acquisition_ms": 1009.15,
-          "query_and_serialization_ms": 2848.43,
+          "acquisition_ms": 1130.68,
+          "query_and_serialization_ms": 3078.53,
           "upstream_mock_calls": 0,
-          "map_bytes": 12965313,
+          "map_bytes": 12965342,
           "detection_count": 21000,
           "acquisition_cache_hit": true
         }
+      },
+      "observation_processing": {
+        "complete_query_count": 21000,
+        "query_filter_sort_group_page_ms": 3048.57,
+        "frozen_selection_count": 20000,
+        "bounded_freeze_ms": 5378.59,
+        "frozen_popup_page_count": 10,
+        "frozen_popup_global_query_ms": 2865.25,
+        "complete_geojson_export_ms": 12334.65,
+        "complete_geojson_export_bytes": 11309991,
+        "instrumentation": "tracemalloc enabled; includes canonical filtering/aggregation, excludes network latency"
       }
     },
     {
@@ -74,33 +96,44 @@
       "fixture": "isolated synthetic NASA-format daily CSV; no external requests",
       "days": 31,
       "observations_per_day": 1000,
-      "peak_tracemalloc_bytes": 93039510,
+      "peak_tracemalloc_bytes": 93032752,
       "sqlite_bytes": 290816,
       "measurements": {
         "cold": {
-          "acquisition_ms": 3802.16,
-          "query_and_serialization_ms": 6456.71,
+          "acquisition_ms": 3728.97,
+          "query_and_serialization_ms": 6451.69,
           "upstream_mock_calls": 31,
-          "map_bytes": 19117862,
+          "map_bytes": 19117891,
           "detection_count": 31000,
           "acquisition_cache_hit": false
         },
         "warm": {
-          "acquisition_ms": 0.34,
-          "query_and_serialization_ms": 2682.1,
+          "acquisition_ms": 0.18,
+          "query_and_serialization_ms": 3132.26,
           "upstream_mock_calls": 0,
-          "map_bytes": 19117862,
+          "map_bytes": 19117891,
           "detection_count": 31000,
           "acquisition_cache_hit": true
         },
         "disk": {
-          "acquisition_ms": 1491.3,
-          "query_and_serialization_ms": 4276.71,
+          "acquisition_ms": 1620.55,
+          "query_and_serialization_ms": 4578.73,
           "upstream_mock_calls": 0,
-          "map_bytes": 19117862,
+          "map_bytes": 19117891,
           "detection_count": 31000,
           "acquisition_cache_hit": true
         }
+      },
+      "observation_processing": {
+        "complete_query_count": 31000,
+        "query_filter_sort_group_page_ms": 4500.71,
+        "frozen_selection_count": 20000,
+        "bounded_freeze_ms": 8929.86,
+        "frozen_popup_page_count": 10,
+        "frozen_popup_global_query_ms": 3215.18,
+        "complete_geojson_export_ms": 18618.18,
+        "complete_geojson_export_bytes": 16616975,
+        "instrumentation": "tracemalloc enabled; includes canonical filtering/aggregation, excludes network latency"
       }
     }
   ]

@@ -1,4 +1,6 @@
 import os
+os.environ["SHARP_GLOBAL_INGEST_ENABLED"] = "0"
+import os
 import sys
 import tempfile
 import unittest

@@ -42,8 +42,6 @@ export function useAnalysisCountrySelection(
   useEffect(() => {
     if (!enabled) return
     let active = true
-    setCatalogueLoading(true)
-    setCatalogueError('')
     loadAnalysisCountries().then(
       (items) => {
         if (!active) return
@@ -75,8 +73,8 @@ export function useAnalysisCountrySelection(
   }, [stopPicking, dispatch])
 
   useEffect(() => {
-    if (!enabled) cancel()
-  }, [enabled, cancel])
+    if (!enabled) request.cancel()
+  }, [enabled, request])
 
   useEffect(() => {
     if (!enabled) return
@@ -120,8 +118,12 @@ export function useAnalysisCountrySelection(
     countries,
     catalogueLoading,
     catalogueError,
-    retryCatalogue: () => setAttempt((value) => value + 1),
-    picking,
+    retryCatalogue: () => {
+      setCatalogueLoading(true)
+      setCatalogueError('')
+      setAttempt((value) => value + 1)
+    },
+    picking: enabled && picking,
     setPicking,
     lastCountryId,
     selectCountry,

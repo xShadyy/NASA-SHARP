@@ -4,6 +4,8 @@ import type { AnalysisArea } from '@/lib/analysis-area'
 import {
   crossesDateline,
   MAX_ANALYSIS_DAYS,
+  MAX_HISTORICAL_DAYS,
+  focusRange,
   utcMidnight,
   type AnalysisRange,
 } from '@/lib/analysis-activity'
@@ -11,6 +13,7 @@ import type { FireFeature } from '@/lib/fire-severity'
 import {
   analysisSelectionKey,
   fetchAnalysisSelection,
+  fetchAnalysisMap,
   type AnalysisSelectionData,
 } from '@/lib/analysis-api'
 
@@ -38,31 +41,33 @@ export function trimAnalysisCache(client: QueryClient) {
   }
 }
 
-export function useAnalysisFires(area: AnalysisArea | null, range: AnalysisRange) {
+export function useAnalysisFires(
+  area: AnalysisArea | null,
+  range: AnalysisRange,
+  focusedDay: string | null = null,
+) {
+  const geometry = area?.sourceGeometry ?? area?.geometry
   const client = useQueryClient()
   const [clock, setClock] = useState(() => Date.now())
   const key = useMemo(
     () =>
-      area ? analysisSelectionKey(area.id, area.geometry, range) : ['analysis-selection', 'idle'],
-    [area?.id, area?.geometry, range.start, range.end, range.startAt, range.endAt],
+      area && geometry
+        ? analysisSelectionKey(area.id, geometry, range)
+        : ['analysis-selection', 'idle'],
+    [area, geometry, range],
   )
   const dateline = !!area && crossesDateline(area.fullBounds ?? area.bounds)
   const days = (utcMidnight(range.end) - utcMidnight(range.start)) / 86400000 + 1
+  const historical = days > MAX_ANALYSIS_DAYS
   const invalidRange =
     !Number.isFinite(days) ||
     days < 1 ||
-    days > MAX_ANALYSIS_DAYS ||
+    days > MAX_HISTORICAL_DAYS ||
     (range.startAt && range.endAt && Date.parse(range.endAt) <= Date.parse(range.startAt))
   const query = useQuery({
     queryKey: key,
     queryFn: async ({ signal }) => {
-      const result = await fetchAnalysisSelection(
-        area!.id,
-        area!.name,
-        area!.geometry,
-        range,
-        signal,
-      )
+      const result = await fetchAnalysisSelection(area!.id, area!.name, geometry!, range, signal)
       setTimeout(() => trimAnalysisCache(client), 0)
       return result
     },
@@ -79,26 +84,39 @@ export function useAnalysisFires(area: AnalysisArea | null, range: AnalysisRange
     refetchOnReconnect: false,
     refetchOnMount: false,
   })
+  const dayRange = focusRange(range, focusedDay)
+  const focusedMap = useQuery({
+    queryKey: ['analysis-map-focus', area?.id, geometry, dayRange],
+    queryFn: ({ signal }) => fetchAnalysisMap(area!.id, geometry!, dayRange, signal),
+    enabled: !!area && historical && !!focusedDay && !dateline && !invalidRange,
+    staleTime: 5 * 60_000,
+    gcTime: 5 * 60_000,
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: false,
+  })
   const data = area && !dateline && !invalidRange ? (query.data ?? null) : null
-  const meta = data?.meta ?? null
+  const meta =
+    historical && focusedDay ? (focusedMap.data?.meta ?? data?.meta ?? null) : (data?.meta ?? null)
   const expires = Date.parse(meta?.expiresAt ?? '')
   useEffect(() => {
     if (!Number.isFinite(expires)) return
     const delay = expires - Date.now()
-    if (delay <= 0) {
-      setClock(Date.now())
-      return
-    }
-    const timer = setTimeout(() => setClock(Date.now()), Math.min(delay + 1, 2147483647))
+    const timer = setTimeout(
+      () => setClock(Date.now()),
+      Math.max(0, Math.min(delay + 1, 2147483647)),
+    )
     return () => clearTimeout(timer)
   }, [expires])
-  const stale =
-    meta?.freshness === 'stale' ||
-    (Number.isFinite(expires) && expires <= Math.max(clock, Date.now()))
-  const loading = !!area && !dateline && !invalidRange && (query.isFetching || query.isPending)
+  const stale = meta?.freshness === 'stale' || (Number.isFinite(expires) && expires <= clock)
+  const focusedLoading = historical && !!focusedDay && focusedMap.isFetching
+  const focusedError = historical && !!focusedDay && focusedMap.isError
+  const loading =
+    !!area && !dateline && !invalidRange && (query.isFetching || query.isPending || focusedLoading)
   const status: AnalysisFireStatus = !area
     ? 'idle'
-    : dateline || invalidRange || query.isError
+    : dateline || invalidRange || query.isError || focusedError
       ? 'error'
       : loading
         ? 'loading'
@@ -112,33 +130,44 @@ export function useAnalysisFires(area: AnalysisArea | null, range: AnalysisRange
   const message = dateline
     ? 'This area crosses 180 degrees longitude. Select an area on one side of the date line.'
     : invalidRange
-      ? 'Select between 1 and 31 UTC calendar days.'
-      : query.isError
-        ? query.error instanceof Error
-          ? query.error.message
-          : 'Observations could not be loaded.'
-        : loading
-          ? 'Loading observations for the selected period.'
-          : status === 'unavailable'
-            ? 'No source coverage is available for the selected period.'
-            : status === 'partial'
-              ? 'Some source data is unavailable. Counts reflect loaded observations.'
-              : status === 'stale'
-                ? 'Cached observations are stale. Refresh to check for updated source data.'
-                : data && !meta?.freshness && !meta?.expiresAt
-                  ? 'Source freshness was not reported.'
-                  : ''
+      ? 'Select a valid UTC interval shorter than 100 years.'
+      : focusedError
+        ? focusedMap.error instanceof Error
+          ? focusedMap.error.message
+          : 'Observations for this date could not be loaded.'
+        : query.isError
+          ? query.error instanceof Error
+            ? query.error.message
+            : 'Observations could not be loaded.'
+          : loading
+            ? 'Loading observations for the selected period.'
+            : status === 'unavailable'
+              ? data?.meta.coverage || 'No source coverage is available for the selected period.'
+              : status === 'partial'
+                ? 'Some source data is unavailable. Counts reflect loaded observations.'
+                : status === 'stale'
+                  ? 'Cached observations are stale. Refresh to check for updated source data.'
+                  : data && !meta?.freshness && !meta?.expiresAt
+                    ? 'Source freshness was not reported.'
+                    : ''
   return {
     status,
-    features: data?.features ?? EMPTY_FEATURES,
+    features: historical
+      ? focusedDay
+        ? (focusedMap.data?.features ?? EMPTY_FEATURES)
+        : EMPTY_FEATURES
+      : (data?.features ?? EMPTY_FEATURES),
     activity: data?.activity ?? null,
     meta: stale && meta ? { ...meta, freshness: 'stale' } : meta,
     message,
-    count: data?.features.length ?? 0,
+    count: historical ? (focusedMap.data?.features.length ?? 0) : (data?.features.length ?? 0),
     appliedRange: data?.activity.range ?? range,
     appliedAreaName: data?.activity.areaName ?? area?.name ?? '',
     retry: () => {
-      if (area && !dateline && !invalidRange) void query.refetch()
+      if (area && !dateline && !invalidRange) {
+        if (historical && focusedDay) void focusedMap.refetch()
+        else void query.refetch()
+      }
     },
   }
 }

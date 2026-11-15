@@ -1,3 +1,5 @@
+import os
+os.environ["SHARP_GLOBAL_INGEST_ENABLED"] = "0"
 import asyncio
 import json
 import os

@@ -7,6 +7,7 @@ import type {
 } from 'maplibre-gl'
 import { loadCountryOverview } from '@/lib/analysis-countries'
 import { FIRE_LAYER_BEFORE_ID } from './geography'
+import { ANALYSIS_AREA_COLOR } from './analysis-colors'
 
 export const COUNTRY_PICK_SOURCE = 'analysis-country-overview'
 export const COUNTRY_PICK_LAYER = 'analysis-country-pick'
@@ -38,12 +39,6 @@ export function createCountryPickingController(
   tooltip.setAttribute('aria-hidden', 'true')
   map.getContainer().append(tooltip)
 
-  function accent() {
-    return (
-      getComputedStyle(map.getContainer()).getPropertyValue('--brand-accent').trim() || '#0960e1'
-    )
-  }
-
   function ensureLayers() {
     if (disposed) return
     if (!map.getSource(COUNTRY_PICK_SOURCE))
@@ -62,7 +57,7 @@ export function createCountryPickingController(
           type: 'fill',
           source: COUNTRY_PICK_SOURCE,
           layout: { visibility },
-          paint: { 'fill-color': accent(), 'fill-opacity': ['case', hover, 0.1, 0.001] },
+          paint: { 'fill-color': ANALYSIS_AREA_COLOR, 'fill-opacity': ['case', hover, 0.1, 0.001] },
         },
         before,
       )
@@ -183,12 +178,6 @@ export function createCountryPickingController(
     if (active) load()
   }
 
-  function updateTheme() {
-    if (disposed) return
-    if (map.getLayer(COUNTRY_PICK_LAYER))
-      map.setPaintProperty(COUNTRY_PICK_LAYER, 'fill-color', accent())
-  }
-
   map.on('mousemove', pointerMove)
   map.on('click', click)
   map.on('mouseout', clearHover)
@@ -197,7 +186,6 @@ export function createCountryPickingController(
 
   return {
     setEnabled,
-    updateTheme,
     destroy() {
       if (disposed) return
       clearHover()

@@ -4,6 +4,8 @@ import {
   eachUtcDay,
   monthSpan,
   rangeQuery,
+  MAX_ANALYSIS_DAYS,
+  historicalUtcDays,
   type AnalysisRange,
   type ActivityStats,
   type CalendarDay,
@@ -14,6 +16,7 @@ import { fireMapFeatures, type FireFeature } from '@/lib/fire-severity'
 const API = '/firms-api'
 
 export type MonthActivity = {
+  summaryOnly?: boolean
   month: string
   start: string
   end: string
@@ -26,6 +29,8 @@ export type MonthActivity = {
 }
 
 export type AnalysisMetadata = {
+  summaryOnly?: boolean
+  sourceGeneration?: string
   queryId?: string
   datasetVersion?: string
   methodVersion?: string
@@ -109,6 +114,63 @@ export async function fetchAnalysisSelection(
   signal: AbortSignal,
 ): Promise<AnalysisSelectionData> {
   const query = rangeQuery(areaId, geometry, range)
+  if ((Date.parse(range.end) - Date.parse(range.start)) / 86_400_000 + 1 > MAX_ANALYSIS_DAYS) {
+    const history = record(
+      await postAnalysis('/analysis/history', query, signal),
+      'Historical activity',
+    )
+    const rows = Array.isArray(history.daily) ? history.daily : []
+    const byDay = new Map(
+      rows.map((item) => {
+        const day = record(item, 'Historical day')
+        return [String(day.date), day]
+      }),
+    )
+    const days = historicalUtcDays(range.start, range.end).map((date) => {
+      const day = byDay.get(date)
+      return {
+        date,
+        count: typeof day?.value === 'number' ? day.value : null,
+        state: typeof day?.state === 'string' ? day.state : 'unavailable',
+        coverage: typeof day?.coverage === 'string' ? day.coverage : 'No stored reporting coverage',
+      }
+    })
+    const completeness = days.every((day) => day.count == null)
+      ? 'unavailable'
+      : days.some((day) => day.state !== 'complete' || day.count == null)
+        ? 'partial'
+        : 'complete'
+    const unknown = { detections: null, daysWithDetections: null, peakDate: null, medianFrp: null }
+    return {
+      features: [],
+      activity: {
+        month: range.start.slice(0, 7),
+        start: range.start,
+        end: range.end,
+        days,
+        series: [],
+        medianFrp: null,
+        stats: unknown,
+        dailyStats: {},
+        completeness,
+        range,
+        areaName,
+        summaryOnly: true,
+      },
+      meta: {
+        summaryOnly: true,
+        completeness,
+        coverage:
+          typeof history.reason === 'string'
+            ? history.reason
+            : 'Stored daily harmonized activity. Select a date to inspect its satellite observations.',
+        datasetVersion:
+          typeof history.datasetVersion === 'string' ? history.datasetVersion : undefined,
+        methodVersion:
+          typeof history.methodVersion === 'string' ? history.methodVersion : undefined,
+      },
+    }
+  }
   const [map, activity] = await Promise.all([
     postAnalysis('/analysis/map-source', query, signal),
     fetchRangeActivity(areaId, geometry, range, signal),
@@ -130,6 +192,19 @@ export async function fetchAnalysisSelection(
     },
     meta: body.meta && typeof body.meta === 'object' ? (body.meta as AnalysisMetadata) : {},
   }
+}
+
+export async function fetchAnalysisMap(
+  areaId: string,
+  geometry: AreaGeometry,
+  range: AnalysisRange,
+  signal: AbortSignal,
+) {
+  const body = record(
+    await postAnalysis('/analysis/map-source', rangeQuery(areaId, geometry, range), signal),
+    'The fire map',
+  )
+  return { features: fireMapFeatures(body), meta: body.meta as AnalysisMetadata | undefined }
 }
 
 export function analysisSelectionKey(areaId: string, geometry: AreaGeometry, range: AnalysisRange) {
@@ -226,7 +301,7 @@ async function postAnalysis(path: string, query: unknown, signal: AbortSignal) {
     })
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') throw error
-    throw new Error('The analysis service is not running.')
+    throw new Error('The analysis service is not running.', { cause: error })
   }
   const body: unknown = await response.json().catch(() => null)
   if (!response.ok) throw new Error(messageFrom(body, response.status))

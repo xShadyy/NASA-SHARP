@@ -19,6 +19,7 @@ import { createCountryPickingController } from './country-picking'
 import { FIRE_LAYER_BEFORE_ID } from './geography'
 import { createAnalysisGeometryPreparer } from './analysis-geometry-preparer'
 import { fallbackAnalysisDisplayGeometry, type AnalysisDisplayGeometry } from './analysis-geometry'
+import { ANALYSIS_AREA_FILL_PAINT } from './analysis-colors'
 
 const SOURCE = 'analysis-area'
 const MASK = 'analysis-outside'
@@ -122,15 +123,6 @@ export function createAnalysisController(
       notice.hidden = !message
     },
   })
-  const themeObserver = new MutationObserver(() => {
-    if (!styleReady || disposed) return
-    updateTheme()
-    countryPicking.updateTheme()
-  })
-  themeObserver.observe(document.documentElement, {
-    attributes: true,
-    attributeFilter: ['data-theme'],
-  })
   let containerWidth = container.clientWidth
   let containerHeight = container.clientHeight
   let readoutWidth = 240
@@ -220,15 +212,6 @@ export function createAnalysisController(
     readout.hidden = true
   }
 
-  function accent() {
-    return getComputedStyle(container).getPropertyValue('--brand-accent').trim() || '#0960e1'
-  }
-
-  function updateTheme() {
-    for (const [id, property] of [['analysis-area-fill', 'fill-color']] as const)
-      if (map.getLayer(id)) map.setPaintProperty(id, property, accent())
-  }
-
   function ensureLayers() {
     if (!map.getSource(SOURCE))
       map.addSource(SOURCE, { type: 'geojson', data: empty, tolerance: 0 })
@@ -257,10 +240,7 @@ export function createAnalysisController(
           id: LAYERS[1],
           type: 'fill',
           source: SOURCE,
-          paint: {
-            'fill-color': accent(),
-            'fill-opacity': ['case', ['==', ['get', 'role'], 'candidate'], 0.12, 0.055],
-          },
+          paint: ANALYSIS_AREA_FILL_PAINT,
         },
         before,
       )
@@ -676,7 +656,6 @@ export function createAnalysisController(
       disposed = true
       geometryPreparer.destroy()
       countryPicking.destroy()
-      themeObserver.disconnect()
       notice.remove()
       stopDrawing()
       readoutObserver.disconnect()

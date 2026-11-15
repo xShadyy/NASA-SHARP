@@ -1,0 +1,48 @@
+{
+  "kind": "synthetic local fixture, no NASA traffic or browser measurements",
+  "observations": 15000,
+  "worldwide24h": {
+    "generationMs": 17.369700002745958,
+    "bytes": 38273,
+    "gzipBytes": 2958,
+    "observations": 2675,
+    "features": 54,
+    "coldMs": 18.777,
+    "warmMs": 1.479
+  },
+  "worldwide7d": {
+    "generationMs": 37.94710000147461,
+    "bytes": 112688,
+    "gzipBytes": 6489,
+    "observations": 15000,
+    "features": 160,
+    "coldMs": 39.745,
+    "warmMs": 1.533
+  },
+  "regionalZoom": {
+    "generationMs": 3.3005000004777685,
+    "bytes": 7483,
+    "gzipBytes": 1180,
+    "observations": 60,
+    "features": 10,
+    "coldMs": 4.677,
+    "warmMs": 1.278
+  },
+  "aggregateInspection": {
+    "matchingCount": 18,
+    "pageBytes": 5698,
+    "ms": 24.361
+  },
+  "concurrentWarmReaders": {
+    "requests": 100,
+    "cacheHits": 100,
+    "generatedTiles": 0,
+    "elapsedMs": 42.1,
+    "kind": "100 local serving calls across 20 threads; HTTP integration separately tested; not browser load latency"
+  },
+  "peakTracemallocBytes": 815632,
+  "estimatedUpstreamTransactions": 0,
+  "actualUpstreamRequests": 0,
+  "browserMemory": null,
+  "navigationFrameTimes": null
+}

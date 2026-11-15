@@ -65,9 +65,11 @@
   line-height: 1.6;
 }
 .analysis-selection-tools {
-  display: flex;
-  align-items: center;
-  gap: 4px;
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  align-items: stretch;
+  gap: 6px;
+  justify-content: center;
   margin-bottom: 12px;
 }
 .analysis-selection-tools svg {
@@ -76,8 +78,9 @@
   flex-shrink: 0;
 }
 .analysis-methods.ui-toggle-group {
-  display: inline-flex;
-  width: fit-content;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: 100%;
   max-width: 100%;
   gap: 4px;
   margin-bottom: 0;
@@ -100,7 +103,7 @@
   font-weight: 700;
 }
 .analysis-map-pick.ui-button {
-  width: fit-content;
+  width: 100%;
   height: 30px;
   min-height: 30px;
   padding: 0 6px;
@@ -127,7 +130,8 @@
   margin-top: 12px;
 }
 .analysis-country-search.ui-command {
-  width: min(100%, 230px);
+  width: 100%;
+  margin-inline: auto;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-lg);
   overflow: hidden;
@@ -578,21 +582,22 @@
 }
 
 .analysis-date-picker {
-  width: min(100%, 300px);
+  width: 100%;
   margin: 0 auto 16px;
   padding: 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
 }
 .analysis-presets {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   flex-wrap: wrap;
   gap: 4px;
   margin-bottom: 10px;
 }
 .analysis-presets .ui-button {
   flex: 1;
-  height: 28px;
+  height: 34px;
   padding-inline: 7px;
   font-size: 11px;
 }
@@ -624,7 +629,7 @@
   text-align: center;
 }
 .analysis-date-days button {
-  height: 28px;
+  height: 34px;
   min-width: 0;
   padding: 0;
   border: 0;
@@ -753,4 +758,45 @@
 }
 .analysis-source-details p {
   margin: 5px 0 0;
+}
+.analysis-selection,
+.analysis-panel-footer,
+.analysis-country-section > .analysis-field-label,
+.analysis-draw-section > .analysis-field-label {
+  text-align: center;
+}
+.analysis-panel-footer,
+.analysis-draw-tools {
+  justify-content: center;
+}
+.analysis-selection-tools .analysis-methods {
+  flex: 1;
+}
+.analysis-selection-tools .analysis-methods .ui-toggle-group-item,
+.analysis-selection-tools .analysis-map-pick {
+  padding-inline: 7px;
+  min-width: 0;
+  min-height: 44px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  line-height: 1.2;
+  white-space: normal;
+  text-align: center;
+}
+.analysis-trend-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  margin-block: 8px;
+}
+.analysis-trend [role='button'] {
+  cursor: pointer;
+  outline-offset: 2px;
+}
+.analysis-trend [role='button']:focus {
+  outline: 2px solid var(--focus);
 }

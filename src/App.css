@@ -30,6 +30,7 @@
   --deep-blue: #07173f;
   --white: #ffffff;
   --brand-accent: #0960e1;
+  --map-accent: #0960e1;
   color: var(--text);
   background: var(--surface);
   color-scheme: light;
@@ -121,7 +122,7 @@ input:focus-visible {
   position: relative;
   z-index: 20;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(230px, 360px) auto;
+  grid-template-columns: minmax(0, max-content) minmax(230px, 1fr) auto;
   align-items: center;
   gap: 24px;
   padding: 0 30px;
@@ -173,12 +174,12 @@ input:focus-visible {
   object-fit: contain;
 }
 :root[data-theme='dark'] .brand-symbol {
-  border-radius: var(--radius-md);
-  background: #fff;
+  background: transparent;
 }
 .header-search {
   position: relative;
   width: 100%;
+  max-width: 420px;
   justify-self: center;
 }
 .search-field {
@@ -862,7 +863,7 @@ input:focus-visible {
   .app-header {
     padding: 0 18px;
     gap: 14px;
-    grid-template-columns: minmax(0, 1fr) minmax(230px, 0.85fr) auto;
+    grid-template-columns: minmax(0, max-content) minmax(230px, 1fr) auto;
   }
   .header-actions {
     gap: 7px;
@@ -956,4 +957,21 @@ input:focus-visible {
 .explorer-stage[data-capture-selecting] .capture-panel {
   opacity: 0;
   pointer-events: none;
+}
+.map-investigation-selection {
+  position: absolute;
+  left: 16px;
+  bottom: 92px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  max-width: calc(100% - 32px);
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
 }

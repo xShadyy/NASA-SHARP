@@ -41,7 +41,7 @@ class FakeElement {
   }
 }
 
-type StoredLayer = { id: string; layout?: Record<string, unknown> }
+type StoredLayer = { id: string; layout?: Record<string, unknown>; paint?: Record<string, unknown> }
 
 class FakeMap {
   container = new FakeElement()
@@ -189,6 +189,47 @@ const overview: FeatureCollection = {
 async function flush() {
   await new Promise((resolve) => setTimeout(resolve, 0))
 }
+
+test('country selection keeps its blue fill in both interface themes and after a style reload', async (context) => {
+  dom(context)
+  let interfaceAccent = '#eafe07'
+  let themeReads = 0
+  Object.defineProperty(globalThis, 'getComputedStyle', {
+    configurable: true,
+    value: () => ({
+      getPropertyValue: () => {
+        themeReads += 1
+        return interfaceAccent
+      },
+    }),
+  })
+  const map = new FakeMap()
+  let loads = 0
+  const controller = createCountryPickingController(map as unknown as MapLibreMap, {
+    onPick: () => {},
+    loadOverview: async () => {
+      loads += 1
+      return overview
+    },
+  })
+  context.after(() => controller.destroy())
+  controller.setEnabled(true)
+  await flush()
+  const darkPaint = structuredClone(map.layers.get(COUNTRY_PICK_LAYER)!.paint)
+  assert.equal(darkPaint?.['fill-color'], '#0960e1')
+  interfaceAccent = '#0960e1'
+  controller.setEnabled(false)
+  controller.setEnabled(true)
+  assert.deepEqual(map.layers.get(COUNTRY_PICK_LAYER)!.paint, darkPaint)
+  map.layers.clear()
+  map.sources.clear()
+  interfaceAccent = '#eafe07'
+  map.emit('style.load')
+  await flush()
+  assert.deepEqual(map.layers.get(COUNTRY_PICK_LAYER)!.paint, darkPaint)
+  assert.equal(themeReads, 0)
+  assert.equal(loads, 1)
+})
 
 test('hover hit testing uses only the picking layer and feature state changes only with the country', async (context) => {
   dom(context)

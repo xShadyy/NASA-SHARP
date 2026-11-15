@@ -33,6 +33,10 @@ from starlette.requests import ClientDisconnect
 
 from cache import BatchCache
 from area_analytics_summary import AreaAnalyticsSummary
+from observation_explorer import (
+    SelectionInvalid, cached_snapshot, has_snapshot, export_document, freeze_document,
+    observations_document as explorer_document, remember_snapshot, source_generation,
+)
 from harmonize import (
     CanonicalStore,
     observation_kept,
@@ -53,6 +57,9 @@ from harmonize import (
     time_series_document,
 )
 from query_time import query_window, timezone
+from global_store import GlobalStore
+from quota import QuotaGovernor, QuotaUnavailable, governed_csv, retry_seconds
+from global_ingestion import run_owner
 
 FIRMS_URL = "https://firms.modaps.eosdis.nasa.gov"
 VIIRS_RANKS = {"l": 0, "n": 1, "h": 2}
@@ -134,6 +141,8 @@ class FIRMSFailure(Exception):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     key = os.environ.get("FIRMS_MAP_KEY", "").strip()
+    app.state.global_store = await asyncio.to_thread(GlobalStore)
+    app.state.quota = QuotaGovernor(app.state.global_store.path, key)
     app.state.key = quote(key, safe="") if key else ""
     default_path = Path(tempfile.gettempdir()) / "firms-hotspots" / "cache.sqlite3"
     app.state.cache = await asyncio.to_thread(
@@ -149,16 +158,17 @@ async def lifespan(app: FastAPI):
     ) as client:
         app.state.firms = client
         app.state.slots = asyncio.Semaphore(8)
+        global_owner = asyncio.create_task(run_owner(app))
         try:
             yield
         finally:
+            global_owner.cancel()
+            await asyncio.gather(global_owner, return_exceptions=True)
             pending_fetches = [fetch.task for fetch in app.state.batch_fetches.values()]
             for task in pending_fetches:
                 task.cancel()
             if pending_fetches:
                 await asyncio.gather(*pending_fetches, return_exceptions=True)
-app = FastAPI(title="FIRMS Hotspots", lifespan=lifespan)
-
 app = FastAPI(title="FIRMS Hotspots", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
@@ -173,7 +183,15 @@ def require_firms_key(request: Request) -> None:
         raise HTTPException(503, "Set FIRMS_MAP_KEY before using FIRMS routes.")
 
 
-async def fetch_csv(
+def require_firms_or_global(request: Request) -> None:
+    if request.app.state.key:
+        return
+    stored = getattr(request.app.state, "global_store", None)
+    if stored is None or not stored.current_manifest().get("snapshot"):
+        require_firms_key(request)
+
+
+async def _fetch_csv_unchecked(
     app: FastAPI, path: str, started: asyncio.Event | None = None
 ) -> str:
     try:
@@ -184,7 +202,9 @@ async def fetch_csv(
                 if response.status_code in (401, 403):
                     raise FIRMSFailure("FIRMS rejected the map key or access.")
                 if response.status_code == 429:
-                    raise FIRMSFailure("FIRMS rate limit reached.")
+                    failure = FIRMSFailure("FIRMS rate limit reached.")
+                    failure.retry_after = retry_seconds(response.headers.get("retry-after"))
+                    raise failure
                 if response.status_code != 200:
                     raise FIRMSFailure(f"FIRMS returned HTTP {response.status_code}.")
                 body = bytearray()
@@ -197,6 +217,13 @@ async def fetch_csv(
         raise FIRMSFailure("FIRMS request failed or timed out.") from None
     except UnicodeError:
         raise FIRMSFailure("FIRMS returned invalid text encoding.") from None
+
+
+async def fetch_csv(app: FastAPI, path: str, started: asyncio.Event | None = None) -> str:
+    try:
+        return await governed_csv(app, path, started, _fetch_csv_unchecked)
+    except QuotaUnavailable as exc:
+        raise FIRMSFailure(str(exc)) from None
 
 
 def csv_rows(text: str, required: set[str]) -> csv.DictReader:
@@ -378,16 +405,9 @@ async def availability(request: Request):
     require_firms_key(request)
     app = request.app
     try:
-        text = await fetch_csv(app, f"/api/data_availability/csv/{app.state.key}/ALL")
-        products = []
         allowed = {source.value for source in Source}
-        for row in csv_rows(text, {"data_id", "min_date", "max_date"}):
-            if row["data_id"] in allowed:
-                products.append({
-                    "source": row["data_id"],
-                    "min_date": date.fromisoformat(row["min_date"]),
-                    "max_date": date.fromisoformat(row["max_date"]),
-                })
+        windows = await product_windows(app)
+        products = [{"source": source, "min_date": span[0], "max_date": span[1]} for source, span in windows.items() if source in allowed]
         return {"products": products}
     except FIRMSFailure as exc:
         raise HTTPException(502, str(exc)) from None
@@ -429,7 +449,54 @@ async def fetch_and_cache_batch(
     return features, fetched
 
 
+class GlobalFeatureBatch(list):
+    coverage_state = "complete"
+
+
+def global_source_partition(app, product, day):
+    stored = getattr(app.state, "global_store", None)
+    if stored is None:
+        return None
+    manifest = stored.current_manifest("7d")
+    if not manifest.get("snapshot"):
+        return None
+    from contextlib import closing
+    with closing(stored.connect()) as db:
+        partition = db.execute("SELECT p.* FROM global_partition_versions p JOIN global_snapshot_partitions s ON s.version=p.version WHERE s.snapshot=? AND p.source=? AND p.day=?", (manifest["snapshot"], product.value, day.isoformat())).fetchone()
+    return (stored, manifest, dict(partition)) if partition else None
+
+
+def global_source_batch(app, product, bounds, day):
+    retained = global_source_partition(app, product, day)
+    if retained is None:
+        return None
+    stored, manifest, partition = retained
+    bbox = None if bounds == "world" else tuple(float(value) for value in bounds.split(","))
+    result = GlobalFeatureBatch()
+    result.coverage_state = partition["coverage"]
+    classes = {"low": "l", "nominal": "n", "high": "h"}
+    from harmonize import detection_id
+    for row in stored.iter_observations(manifest["snapshot"], "7d", bbox):
+        if row.acquired_at.date() != day or row.source_product != product.value:
+            continue
+        modis = row.platform in {"aqua", "terra"}
+        identity = detection_id(row)
+        result.append({"type": "Feature", "id": identity, "geometry": {"type": "Point", "coordinates": [row.longitude, row.latitude]},
+                       "properties": {"id": identity, "source": row.source_product, "sensor": "MODIS" if modis else "VIIRS", "satellite": row.platform,
+                                      "processing": row.processing_tier, "nominal_resolution_m": row.nominal_resolution_m,
+                                      "acquired_at": row.acquired_at.isoformat().replace("+00:00", "Z"), "confidence": row.confidence_pct if modis else classes.get(row.confidence_class),
+                                      "confidence_scale": "0-100" if modis else "low/nominal/high", "confidence_class": row.confidence_class,
+                                      "frp_mw": row.frp_mw, "scan_km": row.scan_km, "track_km": row.track_km, "brightness_k": None, "brightness_band": None,
+                                      "daynight": row.day_night, "fire_type_code": None, "version": row.product_version, "snapshot": manifest["snapshot"]}})
+        if len(result) > MAX_CANONICAL_ACQUISITION_ROWS:
+            raise FIRMSFailure("Stored regional source/day exceeds the 200,000 observation budget; select a smaller region.")
+    return result, partition["retrieved"], True
+
+
 async def load_batch(app: FastAPI, product: Source, bounds: str, day: date, today: date, acquisition_started: asyncio.Event | None = None):
+    retained = await asyncio.to_thread(global_source_batch, app, product, bounds, day)
+    if retained is not None:
+        return retained
     key = app.state.cache.key(product.value, bounds, day.isoformat())
     lock = app.state.batch_locks[hash(key) % len(app.state.batch_locks)]
     async with lock:
@@ -440,6 +507,9 @@ async def load_batch(app: FastAPI, product: Source, bounds: str, day: date, toda
                 return features, fetched, True
         except (sqlite3.Error, ValueError, zlib.error):
             logging.warning("Could not read FIRMS cache; fetching from NASA.")
+
+        if not app.state.key:
+            raise FIRMSFailure("No stored global source/day is available. Set FIRMS_MAP_KEY for bounded regional acquisition.")
 
         fetch = app.state.batch_fetches.get(key)
         shared_fetch = fetch is not None
@@ -524,7 +594,7 @@ async def hotspots(
         str | None, Query(max_length=2_000_000, include_in_schema=False)
     ] = None,
 ):
-    require_firms_key(request)
+    require_firms_or_global(request)
     country_geometry = (
         NETHERLANDS_EUROPE_GEOMETRY if area.strip().lower() == "netherlands" else None
     )
@@ -573,6 +643,7 @@ async def hotspots(
         product_summary = AreaAnalyticsSummary() if summary else None
 
         async def load_summary_day(day: date):
+            global_partition = await asyncio.to_thread(global_source_partition, request.app, product, day)
             batch_keys = [
                 request.app.state.cache.key(product.value, bounds, day.isoformat())
                 for bounds in area_bounds
@@ -596,7 +667,7 @@ async def hotspots(
                 ],
                 separators=(",", ":"),
             )
-            if len(batch_keys) == 1:
+            if len(batch_keys) == 1 and global_partition is None:
                 try:
                     cached_summary = await asyncio.to_thread(
                         request.app.state.cache.get_summary, summary_key, batch_keys[0]
@@ -620,6 +691,8 @@ async def hotspots(
                     batch, fetched, batch_cached = await load_batch(
                         request.app, product, bounds, day, today
                     )
+                    if getattr(batch, "coverage_state", "complete") != "complete":
+                        failures.append({"date": day.isoformat(), "detail": "Stored global reporting window is partial; available observations are included."})
                 except FIRMSFailure as exc:
                     await report_day_processed(day, product)
                     return day, None, None, 0, str(exc)
@@ -643,7 +716,7 @@ async def hotspots(
                 VIIRS_RANKS[viirs_min_confidence],
                 selected_geometry,
             )
-            if len(batch_keys) == 1:
+            if len(batch_keys) == 1 and global_partition is None:
                 try:
                     await asyncio.to_thread(
                         request.app.state.cache.put_summary,
@@ -683,6 +756,8 @@ async def hotspots(
                         features, fetched, cached = await load_batch(
                             request.app, product, bounds, day, today
                         )
+                        if getattr(features, "coverage_state", "complete") != "complete":
+                            failures.append({"date": day.isoformat(), "detail": "Stored global reporting window is partial; available observations are included."})
                         day_features.extend(features)
                         day_fetched.append(fetched)
                         day_cache_hits += cached
@@ -781,7 +856,7 @@ async def stream_area_analytics_hotspots(
 ):
     if not query.summary:
         raise HTTPException(422, "Streaming Area Analytics requests require summary=true.")
-    require_firms_key(request)
+    require_firms_or_global(request)
     events: asyncio.Queue[dict | None] = asyncio.Queue()
 
     async def publish_progress(progress: dict):
@@ -844,11 +919,28 @@ async def stream_area_analytics_hotspots(
 def analysis_capabilities():
     try:
         store = store_from_environment()
+        from historical_activity import load_archive
+        from activity_outlook import TARGET
+        manifest, archive = load_archive()
+        historical_available = bool(manifest and archive and archive.coverage)
+        capabilities = capabilities_payload(store)
+        capabilities.update({
+            "summaries": True,
+            "exportFormats": ["csv", "geojson", "json"],
+            "seasonal": historical_available,
+            "historical": {"available": historical_available,
+                "datasetVersion": manifest.get("datasetVersion") if manifest else None,
+                "regionId": manifest.get("regionId") if manifest else None,
+                "coverageStart": min(item.day for item in archive.coverage).isoformat() if historical_available else None,
+                "coverageEndInclusive": max(item.day for item in archive.coverage).isoformat() if historical_available else None},
+            "forecast": {"target": TARGET, "horizonHours": 24,
+                "availability": "region-and-validation-dependent" if historical_available else "unavailable"},
+        })
     except ValueError as exc:
         return JSONResponse({"message": str(exc)}, status_code=422)
     except RuntimeError as exc:
         return JSONResponse({"message": str(exc)}, status_code=502)
-    return capabilities_payload(store)
+    return capabilities
 
 
 PLATFORM_PRODUCTS = {
@@ -957,6 +1049,30 @@ def validate_acquisition_longitudes(geometry: dict) -> None:
         raise RejectedQuery("This area crosses 180 degrees longitude. Live analysis currently supports one side of the date line per query.")
 
 
+def stored_global_aoi(app, query, bbox):
+    """Reuse durable source/day reporting partitions; never performs acquisition."""
+    global_store = getattr(app.state, "global_store", None)
+    if global_store is None:
+        return None
+    try:
+        manifest = global_store.current_manifest("7d")
+        interval = query.get("interval", {})
+        lower = datetime.fromisoformat(interval.get("start", "").replace("Z", "+00:00"))
+        upper = datetime.fromisoformat(interval.get("endExclusive", "").replace("Z", "+00:00"))
+        selected_window = manifest.get("interval", {})
+        anchor = datetime.fromisoformat(selected_window.get("endUtcExclusive", "").replace("Z", "+00:00"))
+        available_start = datetime.fromisoformat(selected_window.get("startUtc", "").replace("Z", "+00:00"))
+        current_day_end = datetime.combine(anchor.date() + timedelta(days=1), time.min, UTC)
+        if not manifest.get("snapshot") or not available_start <= lower < anchor or not lower < upper <= current_day_end:
+            return None
+        stored = global_store.canonical_store(manifest["snapshot"], "7d", bbox, {"platforms": acquisition_platforms(query)}, max_rows=MAX_CANONICAL_ACQUISITION_ROWS)
+        return stored if stored.coverage else None
+    except (ValueError, TypeError, KeyError) as exc:
+        if "budget" in str(exc).lower() or "canonical observations" in str(exc).lower():
+            raise RejectedQuery(str(exc)) from exc
+        return None
+
+
 async def firms_canonical_store(app: FastAPI, query: dict, bbox: tuple[float, float, float, float], started: asyncio.Event | None = None) -> CanonicalStore:
     validate_acquisition_longitudes(query.get("aoi", {}).get("geometry"))
     try:
@@ -966,7 +1082,10 @@ async def firms_canonical_store(app: FastAPI, query: dict, bbox: tuple[float, fl
     if (end - start).days > LIVE_ANALYSIS_DAYS:
         raise RejectedQuery("Live FIRMS analysis accepts at most 31 UTC days. Narrow the date range.")
     selected = acquisition_platforms(query)
-    windows = await product_windows(app)
+    stored = await asyncio.to_thread(stored_global_aoi, app, query, bbox)
+    already_covered = {(record.day, record.platform) for record in stored.coverage} if stored else set()
+    missing = [(platform, start + timedelta(days=offset)) for platform in selected for offset in range((end - start).days) if (start + timedelta(days=offset), platform) not in already_covered]
+    windows = await product_windows(app) if missing else {}
     bounds = ",".join(format(Decimal(str(value)), "f") for value in bbox)
     today = datetime.now(UTC).date()
     jobs: dict[tuple[Source, date], set[str]] = {}
@@ -974,6 +1093,9 @@ async def firms_canonical_store(app: FastAPI, query: dict, bbox: tuple[float, fl
     for platform in selected:
         cursor = start
         while cursor < end:
+            if (cursor, platform) in already_covered:
+                cursor += timedelta(days=1)
+                continue
             product = product_on(platform, cursor, windows)
             if product is not None:
                 jobs.setdefault((product, cursor), set()).add(platform)
@@ -998,9 +1120,9 @@ async def firms_canonical_store(app: FastAPI, query: dict, bbox: tuple[float, fl
         async with workers:
             return await run(product, day, covered)
     pending = [asyncio.create_task(bounded(product, day, covered)) for (product, day), covered in jobs.items()]
-    loaded = []
-    coverage = list(unavailable)
-    rows = {}
+    loaded = [(None, stored.coverage, None, stored.fetched_at, stored.expires_at, True)] if stored else []
+    coverage = [*stored.coverage, *unavailable] if stored else list(unavailable)
+    rows = {(row.platform, row.acquired_at, row.longitude, row.latitude): row for row in stored.rows} if stored else {}
     try:
         for completed in asyncio.as_completed(pending):
             features, records, error, fetched, expires, cached = await completed
@@ -1132,8 +1254,37 @@ async def analysis_document(request: Request, build):
     try:
         if not isinstance(query, dict):
             raise RejectedQuery("Analysis query identity is required.")
-        store = store_from_environment(bbox)
-        if request.app.state.key and not store.rows and not store.coverage and isinstance(bbox, tuple):
+        options = body.get("options") if isinstance(body.get("options"), dict) else {}
+        # Interaction with an already investigated source must not turn expiry
+        # into a new FIRMS acquisition. Refreshing the map is explicit.
+        interaction = request.url.path in {"/analysis/observations", "/analysis/observations/export", "/analysis/method", "/analysis/recurrence"}
+        frozen_request = (bool(options.get("selectionToken"))
+            or request.url.path in {"/analysis/selections", "/analysis/observations/export", "/analysis/recurrence"}
+            or interaction and has_snapshot(query)
+            or request.url.path == "/analysis/observations" and isinstance(options.get("page"), int) and options["page"] > 1)
+        store = cached_snapshot(query, options) if frozen_request else store_from_environment(bbox)
+        global_reused = False
+        if not frozen_request and not store.rows and not store.coverage and isinstance(bbox, tuple):
+            stored = await asyncio.to_thread(stored_global_aoi, request.app, query, bbox)
+            if stored is not None:
+                store = stored
+                global_reused = True
+        if not frozen_request and not store.rows and not store.coverage and os.environ.get("SHARP_HISTORY_PATH"):
+            from historical_activity import load_archive, supports_geometry
+            try:
+                manifest, archived = await asyncio.to_thread(load_archive)
+                first, last = parse_utc_interval(query.get("interval"))
+                covered_days = [record.day for record in archived.coverage] if archived is not None else []
+                if manifest is not None and covered_days and supports_geometry(manifest, geometry) and min(covered_days) <= first and last <= max(covered_days) + timedelta(days=1):
+                    store = archived
+            except ValueError as exc:
+                raise RejectedQuery(str(exc)) from exc
+        needs_supplement = False
+        if global_reused:
+            first, last = parse_utc_interval(query.get("interval"))
+            known = {(record.day, record.platform) for record in store.coverage}
+            needs_supplement = any((first + timedelta(days=offset), platform) not in known for platform in acquisition_platforms(query) for offset in range((last-first).days))
+        if not frozen_request and request.app.state.key and (not store.rows and not store.coverage or needs_supplement) and isinstance(bbox, tuple):
             validate_acquisition_longitudes(geometry)
             store = await shared_firms_store(request.app, query, bbox)
         interval = query.get("interval", {})
@@ -1160,6 +1311,10 @@ async def analysis_document(request: Request, build):
                 store.cache_hit,
             )
         document = await asyncio.to_thread(build, query, store, body)
+        if isinstance(document, StreamingResponse):
+            return document
+        if not frozen_request:
+            remember_snapshot(query, store)
         now = clock.time()
         as_utc = lambda value: datetime.fromtimestamp(value, UTC).isoformat().replace("+00:00", "Z") if value is not None else None
         metadata = document.setdefault("meta", {})
@@ -1168,6 +1323,7 @@ async def analysis_document(request: Request, build):
         focused_day = body.get("options", {}).get("day") if isinstance(body.get("options"), dict) else None
         newest = max((row.acquired_at for row in store.rows if lower <= row.acquired_at < upper and (focused_day is None or row.acquired_at.date().isoformat() == focused_day) and observation_kept(row, selected_filters) and selected_area.contains(row.longitude, row.latitude)), default=None)
         metadata.update({
+            "sourceGeneration": source_generation(store),
             "generatedAt": as_utc(now),
             "fetchedAt": as_utc(store.fetched_at),
             "expiresAt": as_utc(store.expires_at),
@@ -1175,7 +1331,12 @@ async def analysis_document(request: Request, build):
             "freshness": "unknown" if store.fetched_at is None else "fresh" if store.expires_at is not None and store.expires_at > now else "stale",
             "acquisitionCacheHit": store.cache_hit,
         })
+        if store.source.startswith("Regional archive "):
+            metadata["datasetVersion"] = store.source.removeprefix("Regional archive ")
+            metadata["freshness"] = "archived"
         return document
+    except SelectionInvalid as exc:
+        return JSONResponse({"message": str(exc), "code": "selection-invalid"}, status_code=409)
     except RejectedQuery as exc:
         return JSONResponse({"message": str(exc)}, status_code=422)
     except RuntimeError as exc:
@@ -1199,7 +1360,7 @@ async def analysis_time_series(request: Request):
 
 @app.post("/analysis/observations")
 async def analysis_observations(request: Request):
-    return await analysis_document(request, lambda query, store, body: observations_document(query, store, body))
+    return await analysis_document(request, explorer_document)
 
 
 @app.post("/analysis/observation")
@@ -1210,3 +1371,20 @@ async def analysis_observation(request: Request):
 @app.post("/analysis/map-source")
 async def analysis_map_source(request: Request):
     return await analysis_document(request, lambda query, store, body: map_source_document(query, store, body))
+
+
+@app.post("/analysis/selections")
+async def analysis_selection(request: Request):
+    return await analysis_document(request, freeze_document)
+
+
+@app.post("/analysis/observations/export")
+async def analysis_observations_export(request: Request):
+    return await analysis_document(request, export_document)
+
+
+from scientific_routes import register_scientific_routes
+from global_routes import register_global_routes
+
+register_scientific_routes(app, analysis_document)
+register_global_routes(app)

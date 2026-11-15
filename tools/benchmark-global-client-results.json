@@ -1,0 +1,9 @@
+{
+  "kind": "synthetic Node preparation fixture, not browser memory/frame-time or live-network measurements",
+  "tileCount": 24,
+  "sourceFeatures": 24576,
+  "prepareMs": 29.492,
+  "approximateNodeHeapDeltaBytes": 24310656,
+  "sourceJsonBytes": 10562553,
+  "sourceGzipBytes": 309052
+}

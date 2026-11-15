@@ -61,6 +61,10 @@ class FakeElement {
   append(...elements: FakeElement[]) {
     this.children.push(...elements)
   }
+  replaceChildren(...elements: FakeElement[]) {
+    this.children = elements
+    this.textContent = ''
+  }
   addEventListener(name: string, callback: () => void) {
     this.events.set(name, callback)
   }
@@ -75,6 +79,12 @@ class FakeElement {
 class FakeSource {
   updates: FeatureCollection[] = []
   clustering: boolean[] = []
+  leaves: FireFeature[] = []
+  leafCalls = 0
+  getClusterLeaves(_id: number, limit: number, offset: number) {
+    this.leafCalls++
+    return Promise.resolve(this.leaves.slice(offset, offset + limit))
+  }
   setData(data: FeatureCollection) {
     this.updates.push(data)
     return Promise.resolve()
@@ -93,6 +103,7 @@ class FakeMap {
   events = new Map<string, Set<() => void>>()
   canvas = { style: { cursor: '' }, addEventListener() {}, removeEventListener() {} }
   filters = new Map<string, unknown>()
+  cluster: unknown = null
   rendered: {
     id: string
     properties: { id: string }
@@ -153,7 +164,9 @@ class FakeMap {
   }
   queryRenderedFeatures(_point: unknown, options: { layers: string[] }) {
     return options.layers.length === 1 && options.layers[0] === FIRE_MAP_LAYERS.clusters
-      ? []
+      ? this.cluster
+        ? [this.cluster]
+        : []
       : this.rendered
   }
 }
@@ -347,5 +360,126 @@ test('overlapping world-copy hits deduplicate canonical IDs and popup navigation
   assert.deepEqual(popup.anchor, older.geometry.coordinates)
   assert.match(popup.root!.text(), /2 of 2, newest first/)
   assert.equal(popup.additions, 1)
+  assert.doesNotMatch(
+    popup.root!.text(),
+    /Footprint:|Processing tier \/ version:|Interpretation:|Source:/,
+  )
+  map.rendered = []
+  map.emit('click', { point: { x: 100, y: 100 } })
+  assert.equal(popup.isOpen(), false)
+  renderer.destroy()
+})
+
+test('observation filters reuse the complete source and survive style reload', () => {
+  const map = new FakeMap()
+  const renderer = controller(map)
+  const first = observation('first')
+  const second = observation('second')
+  second.properties.platform = 'aqua'
+  second.properties.sensor = 'MODIS'
+  renderer.setData([first, second])
+  const source = map.sources.get(FIRE_POINT_SOURCE)!
+  renderer.setDisplay({ observationFilters: { platform: 'aqua' } })
+  assert.deepEqual(map.filters.get(FIRE_MAP_LAYERS.observations), [
+    'all',
+    ['!', ['has', 'point_count']],
+    ['in', ['get', 'id'], ['literal', ['second']]],
+  ])
+  map.emit('moveend')
+  renderer.setDisplay({ observationFilters: { platform: 'aqua' } })
+  assert.equal(source.updates.length, 1)
+  map.sources.clear()
+  map.layers.clear()
+  map.images.clear()
+  map.emit('style.load')
+  const layer = map.layers.get(FIRE_MAP_LAYERS.observations) as unknown as { filter: unknown }
+  assert.deepEqual(layer.filter, [
+    'all',
+    ['!', ['has', 'point_count']],
+    ['in', ['get', 'id'], ['literal', ['second']]],
+  ])
+  renderer.setDisplay({
+    observationFilters: { platform: 'aqua' },
+    selectedObservationIds: ['first'],
+  })
+  assert.deepEqual(map.filters.get(FIRE_MAP_LAYERS.observations), [
+    'all',
+    ['!', ['has', 'point_count']],
+    ['in', ['get', 'id'], ['literal', []]],
+  ])
+  const retainedSource = map.sources.get(FIRE_POINT_SOURCE)!
+  renderer.setDisplay({ selectedObservationIds: ['first'] })
+  assert.deepEqual(map.filters.get(FIRE_MAP_LAYERS.observations), [
+    'all',
+    ['!', ['has', 'point_count']],
+    ['in', ['get', 'id'], ['literal', ['first']]],
+  ])
+  assert.equal(retainedSource.updates.length, 0)
+  renderer.destroy()
+})
+
+test('large aggregate freezes canonical membership in bounded batches across camera changes and invalidates source changes', async (context) => {
+  const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document')
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    value: {
+      createElement() {
+        return new FakeElement()
+      },
+      createTextNode(text: string) {
+        const node = new FakeElement()
+        node.textContent = text
+        return node
+      },
+    },
+  })
+  context.after(() => {
+    if (previousDocument) Object.defineProperty(globalThis, 'document', previousDocument)
+    else Reflect.deleteProperty(globalThis, 'document')
+  })
+  const map = new FakeMap()
+  const popup = new FakePopup()
+  let transferred: unknown
+  const renderer = createFireDotController(map as unknown as MapLibreMap, {
+    createPopup: () => popup as unknown as Popup,
+    onOpenAnalytics: (selection) => {
+      transferred = selection
+    },
+  })
+  const members = Array.from({ length: 1201 }, (_, index) =>
+    observation('group-' + String(index).padStart(4, '0')),
+  )
+  renderer.setData(members)
+  renderer.setDisplay({ sourceGeneration: 'first-generation' })
+  const source = map.sources.get(FIRE_POINT_SOURCE)!
+  source.leaves = members
+  map.cluster = {
+    properties: { cluster_id: 42, point_count: 1201 },
+    geometry: { type: 'Point', coordinates: [10, 20] },
+  }
+  map.emit('click', { point: { x: 10, y: 20 } })
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(source.leafCalls, 3)
+  assert.match(popup.root!.text(), /1201 matching out of 1201/)
+  map.cluster = {
+    properties: { cluster_id: 98, point_count: 2 },
+    geometry: { type: 'Point', coordinates: [30, 40] },
+  }
+  map.emit('moveend')
+  popup
+    .root!.flatten()
+    .find((node) => node.textContent === 'Next')!
+    .events.get('click')!()
+  assert.match(popup.root!.text(), /11–20 of 1201/)
+  assert.equal(source.leafCalls, 3)
+  assert.equal(source.updates.length, 1)
+  popup
+    .root!.flatten()
+    .find((node) => node.textContent === 'Open in Area Analytics')!
+    .events.get('click')!()
+  assert.equal((transferred as { observationIds: string[] }).observationIds.length, 1201)
+  assert.equal((transferred as { sourceGeneration: string }).sourceGeneration, 'first-generation')
+  renderer.setDisplay({ sourceGeneration: 'second-generation' })
+  assert.equal(popup.isOpen(), false)
   renderer.destroy()
 })

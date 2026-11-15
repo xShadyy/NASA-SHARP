@@ -1,0 +1,120 @@
+{
+  "kind": "synthetic test fixtures, not production measurements",
+  "historicalYears": 5,
+  "historicalObservations": 73920,
+  "forecastDomainCells": 1,
+  "multiYearSummaryMs": 160.417,
+  "offlineTrainingAndEvaluationMs": 227.273,
+  "fixtureModelPromoted": false,
+  "fixtureEvaluation": {
+    "kind": "retrospective chronological holdout",
+    "model": {
+      "examples": 364,
+      "positives": 245,
+      "negatives": 119,
+      "prevalence": 0.6730769230769231,
+      "prAuc": 0.8866379935243113,
+      "brier": 0.1695880317065795,
+      "calibrationError": 0.029743550573993336,
+      "reliability": [
+        {
+          "lower": 0.5,
+          "upper": 0.6,
+          "count": 246,
+          "predicted": 0.5437746561109701,
+          "observed": 0.516260162601626
+        },
+        {
+          "lower": 0.9,
+          "upper": 1.0,
+          "count": 118,
+          "predicted": 0.9656094321556362,
+          "observed": 1.0
+        }
+      ],
+      "highestRankedArea": {
+        "requestedFraction": 0.05,
+        "actualSelectedFraction": 1.0,
+        "scope": "Top area selected independently at each UTC issue",
+        "meanSelectedAreaKm2": 100.0,
+        "examples": 364,
+        "precision": 0.6730769230769231,
+        "positiveRecall": 1.0
+      }
+    },
+    "baselines": {
+      "seasonal": {
+        "examples": 364,
+        "positives": 245,
+        "negatives": 119,
+        "prevalence": 0.6730769230769231,
+        "prAuc": 0.677756769991191,
+        "brier": 0.21999911226236413,
+        "calibrationError": 0.0006486058615103873,
+        "reliability": [
+          {
+            "lower": 0.6,
+            "upper": 0.7,
+            "count": 364,
+            "predicted": 0.6737255289384335,
+            "observed": 0.6730769230769231
+          }
+        ],
+        "highestRankedArea": {
+          "requestedFraction": 0.05,
+          "actualSelectedFraction": 1.0,
+          "scope": "Top area selected independently at each UTC issue",
+          "meanSelectedAreaKm2": 100.0,
+          "examples": 364,
+          "precision": 0.6730769230769231,
+          "positiveRecall": 1.0
+        }
+      },
+      "persistence": {
+        "examples": 364,
+        "positives": 245,
+        "negatives": 119,
+        "prevalence": 0.6730769230769231,
+        "prAuc": 0.8305337519623235,
+        "brier": 0.1688066910688469,
+        "calibrationError": 0.004395217448260078,
+        "reliability": [
+          {
+            "lower": 0.5,
+            "upper": 0.6,
+            "count": 246,
+            "predicted": 0.5184638875711575,
+            "observed": 0.516260162601626
+          },
+          {
+            "lower": 0.9,
+            "upper": 1.0,
+            "count": 118,
+            "predicted": 0.9910360778926955,
+            "observed": 1.0
+          }
+        ],
+        "highestRankedArea": {
+          "requestedFraction": 0.05,
+          "actualSelectedFraction": 1.0,
+          "scope": "Top area selected independently at each UTC issue",
+          "meanSelectedAreaKm2": 100.0,
+          "examples": 364,
+          "precision": 0.6730769230769231,
+          "positiveRecall": 1.0
+        }
+      }
+    },
+    "chosenBaseline": "persistence",
+    "brierSkill": -0.004628611773533908,
+    "spatialHoldout": null,
+    "limitations": [
+      "Availability timestamps absent; conservative 24-hour publication assumption.",
+      "Reporting-window labels describe reports, not absence of fire.",
+      "No held-out geographic domain; use only within the training region.",
+      "No weather or fuel features; history-only model."
+    ]
+  },
+  "forecastServingMs": 7.637,
+  "cachedForecastServingMeanMs": 1.88
+}

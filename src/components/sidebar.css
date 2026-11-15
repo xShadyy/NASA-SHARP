@@ -343,8 +343,8 @@
   transition: none;
 }
 
-body:has(.app-body[data-analysis-open='false']) [data-sidebar='sidebar'][data-mobile='true'] {
-  width: min(234px, calc(100vw - 24px));
+[data-sidebar='sidebar'][data-mobile='true'] {
+  width: min(var(--sidebar-width), calc(100vw - 24px));
 }
 
 body:has([data-sidebar='sidebar'][data-mobile='true']) [data-slot='sheet-overlay'] {

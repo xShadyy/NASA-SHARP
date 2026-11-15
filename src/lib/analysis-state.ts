@@ -36,9 +36,13 @@ export type AnalysisAction =
   | { type: 'cancel' }
   | { type: 'clear' }
   | { type: 'fit' }
+  | { type: 'apply-investigation'; area: AnalysisArea }
 
 export function analysisReducer(state: AnalysisState, action: AnalysisAction): AnalysisState {
   switch (action.type) {
+    case 'apply-investigation':
+      // Analytics changes the confirmed scope explicitly; unfinished map edits stay intact.
+      return { ...state, confirmed: action.area }
     case 'country-loading':
       return {
         ...state,

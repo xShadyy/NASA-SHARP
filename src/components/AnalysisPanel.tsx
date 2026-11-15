@@ -14,7 +14,6 @@ import { Button } from '@/components/ui/button'
 import { AnalysisDatePicker } from '@/components/AnalysisDatePicker'
 import { Command, CommandItem, CommandList } from '@/components/ui/command'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { areaPolygons } from '@/lib/analysis-area'
 import { type AnalysisRange } from '@/lib/analysis-activity'
 import type { AnalysisActivityData, AnalysisMetadata } from '@/lib/analysis-api'
 import { FIRE_LEVELS } from '@/lib/fire-severity'
@@ -55,6 +54,7 @@ type AnalysisPanelProps = {
   fireStatus: AnalysisFireStatus
   fireCount: number
   fireMessage: string
+  onOpenAnalytics: () => void
   onRetryFires: () => void
 }
 
@@ -83,11 +83,11 @@ export function AnalysisPanel({
   focusedDay,
   onFocusDay,
   activity,
-  fireMeta,
   fireStatus,
   fireCount,
   fireMessage,
   onRetryFires,
+  onOpenAnalytics,
 }: AnalysisPanelProps) {
   const [tab, setTab] = useState<'area' | 'activity'>('area')
   const [method, setMethod] = useState<'country' | 'draw'>(() =>
@@ -178,7 +178,12 @@ export function AnalysisPanel({
               {
                 idle: 'Not loaded',
                 loading: 'Loading',
-                ready: fireCount ? 'Loaded' : 'No detections',
+                ready:
+                  activity?.summaryOnly && !focusedDay
+                    ? 'Stored activity'
+                    : fireCount
+                      ? 'Loaded'
+                      : 'No detections',
                 partial: 'Partial data',
                 unavailable: 'Unavailable',
                 stale: 'Stale data',
@@ -201,25 +206,6 @@ export function AnalysisPanel({
             </li>
           ))}
         </ul>
-        <details className="analysis-source-details">
-          <summary>
-            Source checked:{' '}
-            {fireMeta?.fetchedAt
-              ? fireMeta.fetchedAt.replace('T', ' ').replace(/(?:\.\d+)?Z$/, '') + ' UTC'
-              : 'not loaded'}
-          </summary>
-          {fireMeta?.newestObservationAt && (
-            <p>
-              Latest satellite observation:{' '}
-              {fireMeta.newestObservationAt.replace('T', ' ').replace(/(?:\.\d+)?Z$/, '')} UTC
-            </p>
-          )}
-          <p>
-            FRP is radiative power, not temperature or a danger rating. Squares show satellite
-            hotspots; close zoom shows approximate sensor footprints.
-          </p>
-          {fireMeta?.coverage && <p>{fireMeta.coverage}</p>}
-        </details>
       </section>
       <div className="analysis-panel-body">
         {tab === 'activity' && !state.confirmed && (
@@ -237,6 +223,7 @@ export function AnalysisPanel({
               onRetry={onRetryFires}
               focusedDay={focusedDay}
               onFocusDay={onFocusDay}
+              onOpenAnalytics={onOpenAnalytics}
             />
           </div>
         )}
@@ -287,11 +274,6 @@ export function AnalysisPanel({
               {method === 'country' ? (
                 <div className="analysis-country-section">
                   <span className="analysis-field-label">Country</span>
-                  {picking && (
-                    <p className="analysis-picking-hint" role="status">
-                      Click a highlighted country. Escape cancels selection.
-                    </p>
-                  )}
                   {catalogueLoading && (
                     <p className="analysis-notice" role="status">
                       Loading countries.
@@ -416,14 +398,18 @@ export function AnalysisPanel({
               <AnalysisDatePicker range={range} onChange={onRangeChange} />
               {fireStatus === 'loading' && (
                 <p className="analysis-notice" role="status">
-                  Loading observations for this period.
+                  {activity?.summaryOnly
+                    ? 'Loading stored activity.'
+                    : 'Loading observations for this period.'}
                 </p>
               )}
               {['ready', 'partial', 'stale'].includes(fireStatus) && (
                 <p className="analysis-notice" role="status">
-                  {fireCount === 1
-                    ? '1 satellite detection.'
-                    : `${fireCount} satellite detections.`}
+                  {activity?.summaryOnly && !focusedDay
+                    ? 'Stored daily activity for the selected interval.'
+                    : fireCount === 1
+                      ? '1 satellite detection.'
+                      : `${fireCount} satellite detections.`}
                 </p>
               )}
               {['error', 'unavailable', 'partial', 'stale'].includes(fireStatus) && (
@@ -437,11 +423,6 @@ export function AnalysisPanel({
                     </Button>
                   )}
                 </div>
-              )}
-              {fireStatus === 'idle' && (
-                <p className="analysis-period-note">
-                  Confirm the area to show satellite hotspots for this period.
-                </p>
               )}
             </section>
 
@@ -471,20 +452,9 @@ export function AnalysisPanel({
                     : 'Your boundary will appear here when the drawing is complete.'}
                 </p>
               ) : null}
-              {state.confirmed && activeDraft && (
-                <p className="analysis-confirmed-note">
-                  Confirmed area: {state.confirmed.name}. Escape restores it.
-                </p>
-              )}
               {state.error && method !== 'country' && (
                 <p className="analysis-error" role="alert">
                   {state.error}
-                </p>
-              )}
-              {area?.type === 'country' && areaPolygons(area.geometry).length > 1 && (
-                <p className="analysis-confirmed-note">
-                  Fit shows the main territory. Islands and distant territories remain in the
-                  analysis area.
                 </p>
               )}
               {area && (

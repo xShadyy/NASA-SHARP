@@ -96,7 +96,7 @@ box over California and surrounding areas.
 | `source`               | Optional and repeatable. Use `MODIS_NRT`, `VIIRS_NOAA20_NRT`, `VIIRS_NOAA21_NRT`, `VIIRS_SNPP_NRT`, or their `_SP` equivalents when available.                                                                                                                                                |
 | `modis_min_confidence` | Integer from 0 to 100, default 0.                                                                                                                                                                                                                                                             |
 | `viirs_min_confidence` | `l` (low), `n` (nominal), or `h` (high), default `l`.                                                                                                                                                                                                                                         |
-| `summary`              | Optional boolean. `true` returns exact interval-wide Area Analytics metrics and only the 500 newest matching detection records; omitted/false returns every matching feature.                                                                                                                      |
+| `summary`              | Optional boolean. `true` returns exact interval-wide Area Analytics metrics and only the 500 newest matching detection records; omitted/false returns every matching feature.                                                                                                                 |
 
 ### Confirmed Analysis geometry
 
@@ -222,6 +222,74 @@ When no local rows are available, a configured `FIRMS_MAP_KEY` enables
 live-area analysis for requests up to 31 UTC days. Local-data analysis does
 not require a FIRMS key; `/availability`, `/hotspots`, and
 `/hotspots/area` and `/hotspots/stream` always do.
+
+### Complete observation investigations
+
+The Burning Activity Calendar and Area Analytics share the canonical analysis
+query. `/analysis/observations` searches and filters the complete selected
+query before global sorting, grouping and pagination; the old 500-record
+recent sample is not used by this explorer. Observation-only controls live in
+`options` and do not change `afternoon-active-cells-2km-1`.
+
+```json
+{
+  "query": "the existing harmonized query object",
+  "options": {
+    "page": 1,
+    "pageSize": 25,
+    "search": "NOAA-20",
+    "groupBy": "hour",
+    "sort": "newest"
+  }
+}
+```
+
+`groupBy` accepts `none`, `date`, `hour`, or `satellite`. Hour groups include
+the UTC date. `sort` accepts `newest`, `oldest`, or `frp`; canonical observation
+ID breaks ties. Optional filters include `platform`, `sensor`, `source`,
+`dayNight` (`day`, `night`, `unknown`), focused UTC `day`, `acquiredStart` and
+`acquiredEndExclusive`, `frpMin`, `frpMax`, `frpMaxExclusive`, `frpUnknown`,
+`modisConfidenceMin`, `modisConfidenceMax`, `modisConfidenceUnknown`,
+`viirsConfidence` (native classes including `unknown`), and `observationId`.
+A MODIS native confidence condition selects MODIS records; VIIRS classes select
+VIIRS records. Unknown metadata stays unknown and is not converted to zero.
+The response includes whole-area, selected-group and matching counts, global
+group summaries and actionable chart facets. Page sizes are bounded to 1–100.
+
+`POST /analysis/selections` freezes canonical observation IDs from the cached
+map source, with `options.observationIds` (1–2,000 IDs per request), an optional
+`sourceGeneration` guard and an optional existing `selectionToken` for adding
+the next batch. Up to 100,000 members are accepted. The returned token is used
+in observation and export options. Membership expires after 30 minutes;
+bounded caches can evict it sooner. HTTP 409 explicitly requests a refresh if
+the selection expired or its canonical source generation changed. These calls
+and token-based browsing/export never initiate FIRMS acquisition. Camera state
+is not part of membership. Tokens are process-local; deployments with multiple
+API workers need sticky routing or a shared selection store.
+
+`POST /analysis/observations/export` accepts the same `query` and `options`,
+plus `format` (`csv`, `geojson`, `json`) and optional `investigation` scope
+metadata. It streams every matching record, ignoring pagination and the map's
+100,000-point rendering limit. CSV includes IDs, native metadata, query
+interval, area identity, source generation and method. GeoJSON and JSON also
+include full geometry, filters, provenance/version summaries and completeness.
+The JSON file is the reproducibility companion for CSV. Acquiring candidates
+uses the retained investigation source; run an analysis query first. Expired
+or evicted investigations require an explicit map refresh instead of acquiring
+new observations during pagination or export. Candidate acquisition
+remains bounded at 200,000 rows; exceeding this bound returns an explicit error
+without truncation. Existing local/archive datasets use their stored records.
+
+Configured historical archive intervals inside the imported regional domain
+reuse those canonical observations for daily detail, the map and exports.
+They do not fall back to a different recent interval. See
+[historical setup](../../HISTORICAL-ANALYSIS.md) for import and model commands.
+
+Run `src/backend_api/.venv/Scripts/python.exe tools/benchmark-analysis-acquisition.py`
+from the repository root to measure acquisition-cache reuse and complete-query,
+frozen-selection and streaming-export processing. Its generated CSV fixtures are
+explicitly synthetic benchmarks; timings do not measure NASA latency or browser
+frame rate.
 
 NASA documentation
 

@@ -1,5 +1,14 @@
 # Area Analytics: Feature Specification and Implementation Brief
 
+Implementation status: the original staged brief below predates the current
+scientific pipeline. `afternoon-active-cells-2km-1` is implemented in
+`src/backend_api/harmonize.py`. Regional historical import, server-side seasonal
+summaries, method evidence, recurrence and offline evaluated outlook tooling
+are implemented. Production historical coverage and a promoted forecast model
+remain data dependencies; see [Historical analysis setup](HISTORICAL-ANALYSIS.md).
+References below to future harmonization describe the original plan, not the
+current checkout's capabilities.
+
 ## Purpose
 
 Build a sidebar-accessible Area Analytics view for exploring satellite-observed burning
@@ -42,10 +51,11 @@ sources.
 
 ### Explicitly unfinished dependencies
 
-- **MODIS/VIIRS harmonization:** The harmonization script, harmonized data
-  product, quality assurance, and historical-query interface are not
-  implemented. Long-term calendars, year-over-year summaries, and
-  climatological anomalies must not be presented as complete until these exist.
+- **Historical inputs and independent validation:** The existing harmonization
+  method and historical-query implementation require genuine stored regional
+  observations and explicit reporting coverage. Independent scientific
+  validation and operational forecast promotion depend on those inputs; they
+  are not inferred from calibration-fit agreement.
 - The current FIRMS endpoint is a recent-data source, not a substitute for the
   full historical harmonized record. Its 31-day query cap does not support a
   multi-year Area Analytics request.

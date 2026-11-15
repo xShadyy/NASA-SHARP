@@ -1,4 +1,4 @@
-import { useId } from 'react'
+import { useId, type ReactNode } from 'react'
 import { CaretDownIcon, StackIcon, XIcon } from '@phosphor-icons/react'
 import { BackgroundSelector } from '@/components/BackgroundSelector'
 import { Button } from '@/components/ui/button'
@@ -11,6 +11,7 @@ import './LayerSettings.css'
 
 type ReferenceKey = keyof MapReferenceLayers
 export type MapLayersControlProps = {
+  investigationLayers?: ReactNode
   background: MapBackground
   onBackgroundChange: (background: MapBackground) => void
   referenceLayers: MapReferenceLayers
@@ -164,6 +165,7 @@ export function MapLayersControl({
   onSpaceChange,
   overlayStatus,
   onOverlayRetry,
+  investigationLayers,
 }: MapLayersControlProps) {
   const skyId = useId()
   const titleId = useId()
@@ -206,6 +208,7 @@ export function MapLayersControl({
           </PopoverClose>
         </header>
         <div className="map-layers-scroll">
+          {investigationLayers}
           <fieldset>
             <legend>Base map</legend>
             <BackgroundSelector

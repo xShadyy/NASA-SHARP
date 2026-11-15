@@ -3,6 +3,15 @@ import type { AreaBounds, AreaGeometry } from '@/lib/analysis-area'
 export const MODIS_START_DAY = '2000-11-01'
 export const VIIRS_START_DAY = '2012-01-20'
 export const MAX_ANALYSIS_DAYS = 31
+export const MAX_HISTORICAL_DAYS = 36_600
+export function customAnalysisRange(first: string, second: string): AnalysisRange {
+  const start = first < second ? first : second
+  const end = first < second ? second : first
+  const duration = (Date.parse(end) - Date.parse(start)) / 86_400_000 + 1
+  if (!Number.isInteger(duration) || duration < 1 || duration > MAX_HISTORICAL_DAYS)
+    throw new Error('Select a valid UTC interval shorter than 100 years.')
+  return { start, end }
+}
 export const ANALYSIS_PLATFORMS = ['aqua', 'suomi-npp', 'noaa-20', 'noaa-21'] as const
 
 const DAY_MS = 86_400_000
@@ -116,6 +125,13 @@ export function clampRange(anchor: string, focus: string): AnalysisRange {
   const limited = Math.max(-(MAX_ANALYSIS_DAYS - 1), Math.min(MAX_ANALYSIS_DAYS - 1, span))
   const other = addUtcDays(anchor, limited)
   return anchor <= other ? { start: anchor, end: other } : { start: other, end: anchor }
+}
+
+export function historicalUtcDays(start: string, end: string) {
+  const range = customAnalysisRange(start, end)
+  const days: string[] = []
+  for (let day = range.start; day <= range.end; day = addUtcDays(day, 1)) days.push(day)
+  return days
 }
 
 export function eachUtcDay(start: string, end: string) {

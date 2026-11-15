@@ -26,10 +26,15 @@ import { createScaleBar } from '@/map/scale-bar'
 import { createReferenceTileCache } from '@/map/reference-tile-cache'
 import { createAnalysisController, type AnalysisController } from '@/map/analysis-controller'
 import { createFireDotController } from '@/map/fire-dots'
+import { createGlobalFireController, type GlobalDisplayStatus } from '@/map/global-fire-controller'
+import { useGlobalFires, type GlobalWindow } from '@/hooks/use-global-fires'
+import { classifyMapResourceError } from '@/map/map-resource-errors'
 import type { FireFeature } from '@/lib/fire-severity'
 import { addUtcDays, type AnalysisRange } from '@/lib/analysis-activity'
 import type { AnalysisState } from '@/lib/analysis-state'
-import type { AnalysisArea } from '@/lib/analysis-area'
+import type { AnalysisArea, AreaGeometry } from '@/lib/analysis-area'
+import type { FrozenSelection, InvestigationScope } from '@/lib/investigation'
+import { useInvestigationLayers } from './InvestigationLayers'
 import {
   createMeasurementController,
   type MeasurementController,
@@ -121,6 +126,11 @@ type EarthMapProps = {
   fires: FireFeature[]
   focusedFireDay: string | null
   fireRange: AnalysisRange
+  fireQuery: InvestigationScope['query'] | null
+  fireSourceGeneration?: string
+  fireFilters: InvestigationScope['filters']
+  selectedObservationIds?: string[]
+  onOpenAnalytics: (selection?: FrozenSelection, cellGeometry?: AreaGeometry) => void
   measurementMode: 'orbit' | MeasurementMode
   measurementUnit: MeasurementUnit
   measurementColors: MeasurementColors
@@ -141,6 +151,9 @@ type EarthMapProps = {
 
 const SLOW_LOADING_NOTICE = 'Imagery is taking longer to load. You can keep navigating or retry.'
 const NASA_TILE_NOTICE = 'Some NASA tiles could not load. Base map detail fills gaps as it loads.'
+const REFERENCE_TILE_NOTICE =
+  'Some base-map tiles are unavailable. Available imagery and observations remain visible.'
+const LABEL_NOTICE = 'Some map labels are unavailable. Geographic observations remain visible.'
 type NasaTileRetry = { attempts: number; timer?: ReturnType<typeof setTimeout> }
 function cameraState(map: MapLibreMap, view: MapView): MapCameraState {
   const center = map.getCenter().wrap()
@@ -188,6 +201,11 @@ export function EarthMap({
   fires,
   focusedFireDay,
   fireRange,
+  fireQuery,
+  fireSourceGeneration,
+  fireFilters,
+  selectedObservationIds,
+  onOpenAnalytics,
   referenceLayers,
   showSpace,
   onSpaceChange,
@@ -217,12 +235,24 @@ export function EarthMap({
   const measurementsRef = useRef<MeasurementController | null>(null)
   const analysisRef = useRef<AnalysisController | null>(null)
   const firesRef = useRef<ReturnType<typeof createFireDotController> | null>(null)
+  const globalFiresRef = useRef<ReturnType<typeof createGlobalFireController> | null>(null)
+  const global = useGlobalFires()
+  const [globalObservations, setGlobalObservations] = useState<FireFeature[]>([])
+  const [globalDisplay, setGlobalDisplay] = useState<GlobalDisplayStatus>({
+    loading: false,
+    error: '',
+    visibleTiles: 0,
+    displayFeatures: 0,
+    decodedBytes: 0,
+  })
+  const globalEnabled = !analysis.confirmed
   const analysisFitRef = useRef(-1)
   const analysisUnitsRef = useRef({ distance: analysisDistanceUnit, area: analysisAreaUnit })
   const reportAnalysisChange = useEffectEvent(onAnalysisChange)
   const reportAnalysisFinish = useEffectEvent(onAnalysisFinish)
   const reportAnalysisCancel = useEffectEvent(onAnalysisCancel)
   const reportCountryPick = useEffectEvent(onCountryPick)
+  const reportOpenAnalytics = useEffectEvent(onOpenAnalytics)
   const skyRef = useRef<ReturnType<typeof createSkyBackgroundLayer> | null>(null)
   const graticuleRef = useRef<ReturnType<typeof createGraticuleController> | null>(null)
   const coordinatesRef = useRef<HTMLOutputElement>(null)
@@ -264,6 +294,13 @@ export function EarthMap({
   const [view, setView] = useState<MapView>(initialView)
   const [ready, setReady] = useState(false)
   const [mapInstance, setMapInstance] = useState<MapLibreMap | null>(null)
+  const investigationLayers = useInvestigationLayers({
+    map: mapInstance,
+    query: fireQuery,
+    sourceGeneration: fireSourceGeneration,
+    interactive: analysis.phase !== 'drawing' && analysis.phase !== 'editing',
+    onInspect: (filters, geometry) => onOpenAnalytics({ filters }, geometry),
+  })
   const [loading, setLoading] = useState(true)
   const [notice, setNotice] = useState('')
   const [fatal, setFatal] = useState(false)
@@ -292,7 +329,9 @@ export function EarthMap({
 
   useEffect(() => {
     if (!mapInstance) return
-    const controller = createFireDotController(mapInstance)
+    const controller = createFireDotController(mapInstance, {
+      onOpenAnalytics: (selection) => reportOpenAnalytics(selection),
+    })
     firesRef.current = controller
     return () => {
       controller.destroy()
@@ -303,19 +342,64 @@ export function EarthMap({
   useEffect(() => {
     const controller = firesRef.current
     if (!controller) return
-    controller.setData(fires)
-  }, [fires, mapInstance])
+    controller.setData(globalEnabled ? globalObservations : fires)
+  }, [fires, globalObservations, globalEnabled, mapInstance])
+
+  useEffect(() => {
+    if (!mapInstance) return
+    const controller = createGlobalFireController(mapInstance, {
+      onObservations: setGlobalObservations,
+      onStatus: setGlobalDisplay,
+    })
+    globalFiresRef.current = controller
+    return () => {
+      controller.destroy()
+      globalFiresRef.current = null
+    }
+  }, [mapInstance])
+  useEffect(() => {
+    globalFiresRef.current?.setManifest(global.manifest)
+  }, [global.manifest, mapInstance])
+  useEffect(() => {
+    globalFiresRef.current?.setEnabled(globalEnabled)
+  }, [globalEnabled, mapInstance])
 
   useEffect(() => {
     firesRef.current?.setInteractive(analysis.phase !== 'drawing' && analysis.phase !== 'editing')
+    globalFiresRef.current?.setInteractive(
+      analysis.phase !== 'drawing' && analysis.phase !== 'editing',
+    )
   }, [analysis.phase, mapInstance])
 
   useEffect(() => {
     firesRef.current?.setDisplay({
-      focusedDay: focusedFireDay,
-      endUtcExclusive: fireRange.endAt ?? `${addUtcDays(fireRange.end, 1)}T00:00:00.000Z`,
+      focusedDay: globalEnabled ? null : focusedFireDay,
+      endUtcExclusive: globalEnabled
+        ? global.manifest?.interval?.endExclusive
+        : (fireRange.endAt ?? `${addUtcDays(fireRange.end, 1)}T00:00:00.000Z`),
+      query: globalEnabled ? undefined : fireQuery,
+      queryIdentity: globalEnabled ? global.manifest?.snapshotId : fireQuery?.id,
+      sourceGeneration: globalEnabled ? global.manifest?.snapshotId : fireSourceGeneration,
+      observationFilters: globalEnabled ? {} : fireFilters,
+      disableClustering: globalEnabled,
+      selectedObservationId:
+        !globalEnabled && typeof fireFilters.observationId === 'string'
+          ? fireFilters.observationId
+          : null,
+      selectedObservationIds: globalEnabled ? undefined : selectedObservationIds,
     })
-  }, [focusedFireDay, fireRange.end, fireRange.endAt, mapInstance])
+  }, [
+    focusedFireDay,
+    fireRange.end,
+    fireRange.endAt,
+    fireQuery,
+    fireSourceGeneration,
+    fireFilters,
+    selectedObservationIds,
+    mapInstance,
+    globalEnabled,
+    global.manifest,
+  ])
 
   useEffect(() => {
     analysisUnitsRef.current = { distance: analysisDistanceUnit, area: analysisAreaUnit }
@@ -427,6 +511,7 @@ export function EarthMap({
     const referenceTiles = createReferenceTileCache()
     let active = true
     const nasaRetries = nasaRetriesRef.current
+    const resourceRetries = new Map<string, NasaTileRetry>()
     let map: MapLibreMap | undefined
     let observer: ResizeObserver | undefined
     let loadTimer: ReturnType<typeof setTimeout> | undefined
@@ -607,6 +692,13 @@ export function EarthMap({
           setNotice((current) => (current === SLOW_LOADING_NOTICE ? '' : current))
         })
         currentMap.on('sourcedata', (event) => {
+          if (active && event.sourceId && event.isSourceLoaded) {
+            const recovered = resourceRetries.get(event.sourceId)
+            if (recovered?.timer) clearTimeout(recovered.timer)
+            resourceRetries.delete(event.sourceId)
+            if (!resourceRetries.size)
+              setNotice((current) => (current === REFERENCE_TILE_NOTICE ? '' : current))
+          }
           if (
             !active ||
             event.sourceId !== NASA_SOURCE_ID ||
@@ -662,8 +754,28 @@ export function EarthMap({
             }
             return
           }
-          setNotice('Some map imagery could not load. Check your connection or retry.')
-          console.warn('Map resource error:', event.error.message)
+          const source =
+            typeof sourceId === 'string' ? currentMap.getStyle()?.sources[sourceId] : undefined
+          const kind = classifyMapResourceError(sourceId, source?.type, event.error.message)
+          if (kind === 'imagery' && typeof sourceId === 'string') {
+            const retry = resourceRetries.get(sourceId) ?? { attempts: 0 }
+            if (!retry.timer && retry.attempts < 2) {
+              retry.attempts += 1
+              retry.timer = setTimeout(
+                () => {
+                  retry.timer = undefined
+                  if (active && currentMap.getSource(sourceId)) currentMap.refreshTiles(sourceId)
+                },
+                700 * 2 ** (retry.attempts - 1),
+              )
+              resourceRetries.set(sourceId, retry)
+            } else if (retry.attempts >= 2) setNotice(REFERENCE_TILE_NOTICE)
+          } else if (kind === 'imagery') setNotice(REFERENCE_TILE_NOTICE)
+          else if (kind === 'labels') setNotice(LABEL_NOTICE)
+          else if (kind === 'observations')
+            setNotice('Satellite observations could not be rendered. Retry the observation layer.')
+          else setNotice('A map overlay could not be rendered. Retry the affected layer.')
+          console.warn(`Map ${kind} error:`, event.error.message)
         })
         const canvas = currentMap.getCanvas()
         canvas.addEventListener('mouseleave', clearCoordinates)
@@ -707,6 +819,8 @@ export function EarthMap({
       clearCoordinates()
       for (const retry of nasaRetries.values()) clearTimeout(retry.timer)
       nasaRetries.clear()
+      for (const retry of resourceRetries.values()) clearTimeout(retry.timer)
+      resourceRetries.clear()
       observer?.disconnect()
       clearTimeout(loadTimer)
       map?.getCanvas().removeEventListener('webglcontextlost', contextLost)
@@ -899,7 +1013,10 @@ export function EarthMap({
       const source = map.getSource(id)
       if (config.type === 'geojson' && typeof config.data === 'string') {
         ;(source as GeoJSONSource | undefined)?.setData(config.data)
-      } else if (source?.type !== 'geojson') {
+      } else if (
+        source &&
+        (config.type === 'raster' || config.type === 'vector' || config.type === 'raster-dem')
+      ) {
         map.refreshTiles(id)
       }
     })
@@ -911,8 +1028,91 @@ export function EarthMap({
         ref={containerRef}
         className="earth-map-canvas"
         onDragStart={(event) => event.preventDefault()}
-        onPointerDown={() => window.getSelection()?.removeAllRanges()}
+        onPointerDown={(event) => {
+          if (
+            event.button !== 0 ||
+            (event.target instanceof Element &&
+              event.target.closest('.maplibregl-popup, .destination-marker'))
+          )
+            return
+          window.getSelection()?.removeAllRanges()
+        }}
       />
+      {globalEnabled && (
+        <aside className="global-hotspot-status" aria-label="Worldwide satellite observations">
+          <div className="global-hotspot-heading">
+            <strong>Worldwide satellite hotspots</strong>
+            <select
+              aria-label="Global observation interval"
+              value={global.window}
+              onChange={(event) => global.setWindow(event.target.value as GlobalWindow)}
+            >
+              <option value="24h">Last 24 hours</option>
+              <option value="48h">Last 48 hours</option>
+              <option value="7d">Last 7 days</option>
+            </select>
+          </div>
+          {global.loading ? (
+            <p role="status">Loading published observations…</p>
+          ) : (
+            <p>
+              {global.manifest?.snapshotId
+                ? `${(global.manifest.count ?? 0).toLocaleString()} observations · ${global.manifest.status}`
+                : (global.manifest?.reason ?? global.error ?? 'The global dataset is unavailable.')}
+            </p>
+          )}
+          {global.manifest?.interval && (
+            <p>
+              {global.manifest.interval.start.replace('T', ' ').replace(/(?:\.\d+)?Z$/, '')} →{' '}
+              {global.manifest.interval.endExclusive.replace('T', ' ').replace(/(?:\.\d+)?Z$/, '')}{' '}
+              UTC
+            </p>
+          )}
+          <p className="global-frp-legend">
+            <span style={{ background: '#f5c518' }} />
+            &lt;10 <span style={{ background: '#f97316' }} />
+            10–&lt;50 <span style={{ background: '#dc2626' }} />
+            ≥50 <span style={{ background: '#9ca3af' }} />
+            Unknown · MW · aggregate maximum
+          </p>
+          {!!global.manifest?.polarCount && (
+            <p>
+              {global.manifest.polarCount.toLocaleString()} observations beyond ±85.051° are
+              retained in the dataset; this Mercator display does not render them.
+            </p>
+          )}
+          {global.manifest?.reason && global.manifest.snapshotId && <p>{global.manifest.reason}</p>}
+          {global.manifest?.snapshotId && (
+            <details className="global-dataset-timing">
+              <summary>Dataset timing</summary>
+              <p>Latest satellite acquisition: {global.manifest.latestAcquisition ?? 'Unknown'}</p>
+              <p>Retrieved from provider: {global.manifest.retrievedAt ?? 'Unknown'}</p>
+              <p>Published snapshot: {global.manifest.publishedAt ?? 'Unknown'}</p>
+              <p>
+                Freshness: {global.manifest.status}. Refresh cadence does not describe observation
+                age.
+              </p>
+            </details>
+          )}
+          {(globalDisplay.error || global.error) && (
+            <p role="status">
+              {globalDisplay.error || global.error}{' '}
+              {global.manifest?.snapshotId ? 'The last published snapshot remains selected.' : ''}{' '}
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  global.refresh()
+                  globalFiresRef.current?.retry()
+                }}
+              >
+                Retry
+              </Button>
+            </p>
+          )}
+          {globalDisplay.loading && <p role="status">Loading stored tiles…</p>}
+        </aside>
+      )}
       <MapContextMenu
         triggerRef={contextTriggerRef}
         coordinates={contextCoordinates}
@@ -952,6 +1152,7 @@ export function EarthMap({
       </div>
       <div className="map-background-control">
         <MapLayersControl
+          investigationLayers={investigationLayers}
           overlayStatus={overlayStatus}
           onOverlayRetry={() => overlaysRef.current?.retry()}
           background={background}

@@ -22,3 +22,8 @@ __pycache__/
 *.njsproj
 *.sln
 *.sw?
+
+# Durable runtime observations and SQLite/WAL/leases; never source artifacts.
+src/backend_api/data/
+data/*.sqlite*
+data/*Global*.csv
