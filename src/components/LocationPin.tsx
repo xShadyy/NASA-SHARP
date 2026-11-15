@@ -191,7 +191,7 @@ export function LocationPin({
               {formatCoordinates(location.coordinates)}
             </output>
             {location.country && (
-              <span className="destination-pin-country"> · {location.country}</span>
+              <span className="destination-pin-country"> - {location.country}</span>
             )}
           </div>
           {location.accuracy !== undefined && (

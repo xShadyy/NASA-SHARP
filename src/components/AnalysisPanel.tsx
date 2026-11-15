@@ -18,6 +18,7 @@ import { type AnalysisRange } from '@/lib/analysis-activity'
 import type { AnalysisActivityData, AnalysisMetadata } from '@/lib/analysis-api'
 import { FIRE_LEVELS } from '@/lib/fire-severity'
 import type { AnalysisFireStatus } from '@/hooks/use-analysis-fires'
+import { formatAnalysisRetrieval } from '@/lib/analysis-request-status'
 import type { AnalysisState } from '@/lib/analysis-state'
 import { matchLocalPlaces, type SearchPlace } from '@/lib/locations'
 import type { MapView } from '@/map/projection'
@@ -54,6 +55,7 @@ type AnalysisPanelProps = {
   fireStatus: AnalysisFireStatus
   fireCount: number
   fireMessage: string
+  onRetryFires: () => void
   onOpenAnalytics: () => void
 }
 
@@ -82,9 +84,11 @@ export function AnalysisPanel({
   focusedDay,
   onFocusDay,
   activity,
+  fireMeta,
   fireStatus,
   fireCount,
   fireMessage,
+  onRetryFires,
   onOpenAnalytics,
 }: AnalysisPanelProps) {
   const [tab, setTab] = useState<'area' | 'activity'>('area')
@@ -171,28 +175,48 @@ export function AnalysisPanel({
       <section className="analysis-data-context" aria-label="Map observations and status">
         <div className="analysis-context-row">
           <strong>{activity?.areaName ?? state.confirmed?.name ?? 'Select an area'}</strong>
-          <span className="analysis-query-state" data-state={fireStatus}>
-            {
+          {fireStatus !== 'partial' && (
+            <span className="analysis-query-state" data-state={fireStatus}>
               {
-                idle: 'Not loaded',
-                loading: 'Loading',
-                ready:
-                  activity?.summaryOnly && !focusedDay
-                    ? 'Stored activity'
-                    : fireCount
-                      ? 'Loaded'
-                      : 'No detections',
-                partial: 'Partial data',
-                unavailable: 'Unavailable',
-                stale: 'Stale data',
-                error: 'Request failed',
-              }[fireStatus]
-            }
-          </span>
+                {
+                  idle: 'Not loaded',
+                  loading: 'Loading',
+                  ready:
+                    activity?.summaryOnly && !focusedDay
+                      ? 'Stored activity'
+                      : fireCount
+                        ? 'Loaded'
+                        : 'No detections',
+                  partial: '',
+                  unavailable: 'Unavailable',
+                  stale: 'Stale data',
+                  error: 'Request failed',
+                }[fireStatus]
+              }
+            </span>
+          )}
         </div>
         <p className="analysis-query-dates">
           {(activity?.range ?? range).start} - {(activity?.range ?? range).end} UTC
         </p>
+        {state.confirmed && fireStatus !== 'idle' && (
+          <p className="analysis-query-dates">
+            Retrieved {formatAnalysisRetrieval(fireMeta?.fetchedAt)}
+          </p>
+        )}
+        {['error', 'unavailable', 'stale'].includes(fireStatus) && (
+          <div
+            className="analysis-request-status"
+            role={fireStatus === 'error' ? 'alert' : 'status'}
+          >
+            <p>{fireMessage || 'Observations are unavailable for this area and period.'}</p>
+            {(fireStatus === 'error' || fireStatus === 'unavailable') && (
+              <Button type="button" variant="outline" size="sm" onClick={onRetryFires}>
+                Retry observations
+              </Button>
+            )}
+          </div>
+        )}
         <div className="analysis-color-heading">
           <span>Fire radiative power (MW)</span>
         </div>

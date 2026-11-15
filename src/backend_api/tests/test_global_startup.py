@@ -1,4 +1,4 @@
-"""Offline acceptance for automatic shared last-24-hour loading."""
+
 import asyncio
 import json
 import os
@@ -58,7 +58,7 @@ class GlobalStartupTests(unittest.TestCase):
                     first_snapshot.append(partial["snapshotId"])
                     self.assertEqual(partial["count"], 1)
                     self.assertTrue(partial["refreshing"])
-                    self.assertEqual(partial["status"], "stale")  # fixed historical test anchor
+                    self.assertEqual(partial["status"], "stale")  
                     timing["firstSourceVisibleMs"] = round((time.perf_counter()-started)*1000, 3)
                     wider = self.service.manifest("7d")
                     self.assertEqual(wider["status"], "building")
@@ -144,7 +144,7 @@ class GlobalStartupTests(unittest.TestCase):
                     first = await refresh_global(self.store, client, ANCHOR)
                     cached = await refresh_global(self.store, client, ANCHOR + timedelta(minutes=1))
                     self.assertEqual(cached["state"], "cached")
-                    # Missing seven-day availability does not initiate a backfill.
+                    
                     self.assertIsNone(self.service.manifest("7d")["snapshotId"])
                     await refresh_global(self.store, client, ANCHOR + timedelta(minutes=65))
             self.assertEqual(first["successfulSources"], 3)

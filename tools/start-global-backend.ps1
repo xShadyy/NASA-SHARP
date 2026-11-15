@@ -1,7 +1,8 @@
 param(
     [string]$BindAddress = '127.0.0.1',
     [int]$Port = 8000,
-    [string]$Database = ''
+    [string]$Database = '',
+    [switch]$Reload
 )
 
 $ErrorActionPreference = 'Stop'
@@ -10,6 +11,16 @@ $backendPath = Join-Path $repositoryPath 'src/backend_api'
 $pythonPath = Join-Path $backendPath '.venv/Scripts/python.exe'
 if (-not (Test-Path -LiteralPath $pythonPath -PathType Leaf)) {
     throw 'Install the existing backend virtual environment first; see src/backend_api/README.md.'
+}
+$runningBackend = $null
+try {
+    $runningBackend = Invoke-RestMethod -Uri "http://${BindAddress}:$Port/health" -TimeoutSec 2 -ErrorAction Stop
+} catch {}
+if ($runningBackend -and $runningBackend.status -eq 'ok') {
+    if ($runningBackend.implementation -ne 'sharp-backend-2') {
+        throw "An older SHARP backend is still running on port $Port. Stop it in its original terminal, then run this command there so its existing server credentials are retained. The running service and stored observations have been preserved."
+    }
+    throw "SHARP is already running on port $Port. Stop it in its original terminal before starting a replacement. Use -Reload for a development server that reloads backend edits."
 }
 if ($Database) {
     $env:SHARP_GLOBAL_DB_PATH = [System.IO.Path]::GetFullPath($Database)
@@ -22,9 +33,11 @@ if (-not $env:SHARP_GLOBAL_RETAIN_SNAPSHOTS) { $env:SHARP_GLOBAL_RETAIN_SNAPSHOT
 if (-not $env:SHARP_FIRMS_HEADROOM) { $env:SHARP_FIRMS_HEADROOM = '1000' }
 if (-not $env:SHARP_FIRMS_LOCAL_BUDGET) { $env:SHARP_FIRMS_LOCAL_BUDGET = '3000' }
 
-# Existing FIRMS_MAP_KEY is inherited server-side; its value is never printed.
+
 Write-Host "Starting SHARP from $backendPath"
 Write-Host "Global observations database: $env:SHARP_GLOBAL_DB_PATH"
 Write-Host 'Stop an older backend on this port with Ctrl+C before starting this one.'
-& $pythonPath -m uvicorn app:app --app-dir $backendPath --host $BindAddress --port $Port
+$serverArguments = @('-m', 'uvicorn', 'app:app', '--app-dir', $backendPath, '--host', $BindAddress, '--port', $Port)
+if ($Reload) { $serverArguments += @('--reload', '--reload-dir', $backendPath) }
+& $pythonPath @serverArguments
 exit $LASTEXITCODE

@@ -1,4 +1,4 @@
-"""Offline native point-tile regressions; never acquire NASA observations."""
+
 import concurrent.futures
 import gzip
 import json
@@ -70,7 +70,7 @@ def packed(data):
 
 
 def decode_points(body):
-    """Independent small MVT reader; the Chrome integration uses MapLibre's parser."""
+    
     layers = []
     for number, layer in fields(body):
         if number != 3:
@@ -247,8 +247,8 @@ class GlobalPointTileTests(unittest.TestCase):
             def execute(self, statement, parameters=()):
                 cursor = self.connection.execute(statement, parameters)
                 if statement.startswith("SELECT 1 FROM global_snapshots"):
-                    # WAL permits the writer to commit after this reader's
-                    # SQLite version is pinned, before it reads membership.
+                    
+                    
                     with closing(original_connect()) as writer, writer:
                         writer.execute("DELETE FROM global_snapshot_observations WHERE snapshot=?", (snapshot,))
                         writer.execute("DELETE FROM global_snapshots WHERE snapshot=?", (snapshot,))

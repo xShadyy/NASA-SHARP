@@ -8,7 +8,7 @@ import {
   queryObservationSelection,
 } from '../src/lib/observation-selection'
 
-// Python canonical queries and SQLite global queries consume this same offline contract.
+
 const fixture = JSON.parse(
   readFileSync(
     new URL('./fixtures/observation-filter-parity.json', import.meta.url),

@@ -37,7 +37,7 @@ def archive(start=date(2020, 1, 1), end=date(2025, 1, 1), missing=()):
     while day < end:
         if day not in missing:
             coverage.append(Coverage(day, "suomi-npp", "complete"))
-            # Deterministic fixture only; explicit observed cells and valid zeros.
+            
             if day.day % 3:
                 rows.append(row(day))
         day += timedelta(days=1)
@@ -222,18 +222,15 @@ class OutlookTests(unittest.TestCase):
 
 
 class ScientificRoutesTests(unittest.TestCase):
-    def test_outlook_fallback_maps_real_cached_activity_without_probabilities(self):
-        from scientific_routes import selected_interval_outlook
+    def test_explicit_recurrence_keeps_reported_activity_distinct_from_forecasts(self):
         from observation_explorer import remember_snapshot
         selected = query('2024-01-01', '2024-01-03')
         fixture = CanonicalStore((row(date(2024, 1, 1)), row(date(2024, 1, 2))), (Coverage(date(2024, 1, 1), 'suomi-npp', 'complete'), Coverage(date(2024, 1, 2), 'suomi-npp', 'complete')), 'cached test fixture')
         remember_snapshot(selected, fixture)
-        result = selected_interval_outlook(selected, {'state': 'unavailable', 'evaluation': None, 'modelVersion': None})
-        self.assertEqual(result['state'], 'historical-activity')
-        self.assertIsNone(result['horizonHours'])
-        self.assertEqual(len(result['features']['features']), 1)
-        self.assertEqual(result['features']['features'][0]['properties']['historicalReportedDates'], 2)
-        self.assertIsNone(result['features']['features'][0]['properties']['probability'])
+        result = recurrence_document(selected, fixture)
+        self.assertEqual(len(result['features']), 1)
+        self.assertEqual(result['features'][0]['properties']['distinctDates'], 2)
+        self.assertNotIn('probability', result['features'][0]['properties'])
 
     def test_imported_history_flows_into_calendar_map_and_full_observation_routes(self):
         from fastapi.testclient import TestClient
@@ -271,18 +268,19 @@ class ScientificRoutesTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 409)
         network.assert_not_called()
 
-    def test_history_outlook_do_not_use_network_and_reject_malformed_scope(self):
+    def test_history_is_read_only_and_removed_forecast_routes_stay_unavailable(self):
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
         from scientific_routes import register_scientific_routes
         app = FastAPI()
         network = __import__("unittest.mock").mock.AsyncMock()
         register_scientific_routes(app, network)
-        with TestClient(app) as client, patch("historical_activity.load_archive", return_value=(None, None)), patch("activity_outlook.load_archive", return_value=(None, None)):
-            for path in ("/analysis/history", "/analysis/outlook"):
+        with TestClient(app) as client, patch("historical_activity.load_archive", return_value=(None, None)), patch("scientific_routes.prepare_history", side_effect=AssertionError("History reads must not start acquisition")):
+            for path in ("/analysis/history", "/analysis/history/status"):
                 response = client.post(path, json={"query": query()})
                 self.assertEqual(response.status_code, 200)
                 self.assertEqual(client.post(path, json={"query": None}).status_code, 422)
+            self.assertEqual(client.post("/analysis/outlook", json={"query": query()}).status_code, 404)
         network.assert_not_called()
 
 

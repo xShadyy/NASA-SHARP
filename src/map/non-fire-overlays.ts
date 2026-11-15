@@ -25,11 +25,11 @@ export type OverlayStatus = Partial<
 const HBASE_SOURCE = 'context-hbase'
 const EUROPE_SOURCE = 'context-europe-protected'
 export const OVERLAY_CREDITS = {
-  showBuiltUp: 'NASA GIBS / SEDAC · HBASE, Landsat (2010)',
+  showBuiltUp: 'NASA GIBS / SEDAC - HBASE, Landsat (2010)',
   showEuropeanProtectedAreas:
-    '© European Environment Agency, Copenhagen (2025) · Natura 2000 (2024)',
-  showLandsat8Swaths: 'NASA CMR / LP DAAC / USGS · Landsat 8 HLS L30 v2.0 MGRS scene footprints',
-  showLandsat9Swaths: 'NASA CMR / LP DAAC / USGS · Landsat 9 HLS L30 v2.0 MGRS scene footprints',
+    '© European Environment Agency, Copenhagen (2025) - Natura 2000 (2024)',
+  showLandsat8Swaths: 'NASA CMR / LP DAAC / USGS - Landsat 8 HLS L30 v2.0 MGRS scene footprints',
+  showLandsat9Swaths: 'NASA CMR / LP DAAC / USGS - Landsat 9 HLS L30 v2.0 MGRS scene footprints',
 } as const
 let nextId = 0
 const empty: FeatureCollection = { type: 'FeatureCollection', features: [] }
@@ -192,7 +192,7 @@ export function createNonFireOverlayController(
     const abort = new AbortController()
     footprintRequests.set(id, abort)
     const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(20_000)])
-    status(key, `${date} UTC · loading scene outlines.`)
+    status(key, `${date} UTC - loading scene outlines.`)
     const features: Feature<Polygon>[] = []
     const seen = new Set<string>()
     let truncated = false
@@ -252,7 +252,7 @@ export function createNonFireOverlayController(
       ;(map.getSource(id) as GeoJSONSource).setData({ type: 'FeatureCollection', features })
       status(
         key,
-        `${selectedDate} UTC · ${features.length} HLS L30 MGRS scene footprints in this view.${truncated ? ' Partial results; zoom in for all scene footprints.' : ''}${!features.length ? ' No archived scene was returned for this place and day; no alternate date is used.' : ' These are granule footprints, not orbit swath boundaries.'}`,
+        `${selectedDate} UTC - ${features.length} HLS L30 MGRS scene footprints in this view.${truncated ? ' Partial results; zoom in for all scene footprints.' : ''}${!features.length ? ' No archived scene was returned for this place and day; no alternate date is used.' : ' These are granule footprints, not orbit swath boundaries.'}`,
       )
     } catch (error) {
       if (!destroyed && !abort.signal.aborted)
@@ -276,7 +276,7 @@ export function createNonFireOverlayController(
       if (key === 'showBuiltUp' && map.getZoom() < 4) {
         status(key, 'Zoom in to see this overlay.')
       } else if (key === 'showEuropeanProtectedAreas' && !viewIntersects(EUROPE_BOUNDS)) {
-        status(key, 'Europe only · outside this view.')
+        status(key, 'Europe only - outside this view.')
       } else if (key === 'showBuiltUp' && !viewIntersects(HBASE_BOUNDS)) {
         status(key, 'Outside the mapped HBASE extent.')
       } else if (!map.getSource(id) || !map.isSourceLoaded(id)) {
@@ -285,8 +285,8 @@ export function createNonFireOverlayController(
         status(
           key,
           key === 'showBuiltUp'
-            ? '2010 HBASE settlement class · requested tiles loaded.'
-            : 'Europe only · Natura 2000 (2024) · requested tiles loaded.',
+            ? '2010 HBASE settlement class - requested tiles loaded.'
+            : 'Europe only - Natura 2000 (2024) - requested tiles loaded.',
         )
       }
     }

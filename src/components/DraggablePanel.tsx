@@ -44,7 +44,7 @@ const EDGE_GAP = 12
 const TOOLBAR_CLEARANCE = 80
 const DRAG_THRESHOLD = 5
 
-/** A nonmodal tool window that leaves the globe available for interaction. */
+
 export function DraggablePanel({
   id,
   title,
@@ -117,7 +117,7 @@ export function DraggablePanel({
     movePanel()
     dragHandleRef.current?.focus({ preventScroll: true })
     const dragHandle = dragHandleRef.current
-    // Cancel native touch gestures so a rapid drag does not consume the next tap.
+    
     const preventTouchGesture = (event: TouchEvent) => event.preventDefault()
     dragHandle?.addEventListener('touchstart', preventTouchGesture, { passive: false })
     let resizeFrame: number | undefined

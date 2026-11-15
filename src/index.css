@@ -1,4 +1,15 @@
 @import 'tailwindcss';
+@import 'tw-animate-css';
+
+@media (prefers-reduced-motion: reduce) {
+  [data-slot='popover-content'],
+  [data-slot='sheet-content'],
+  [data-slot='sheet-overlay'] {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
 
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 

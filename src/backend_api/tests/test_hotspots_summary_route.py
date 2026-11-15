@@ -42,8 +42,8 @@ def feature(day: date, frp: float, longitude=-68.1, latitude=-13.1):
 
 class HotspotsSummaryRouteTest(unittest.TestCase):
     def setUp(self):
-        # A developer's populated worldwide store must not alter isolated cache
-        # fixtures or make tests read/write production observation state.
+        
+        
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         environment = patch.dict(os.environ, {"SHARP_GLOBAL_DB_PATH": str(Path(directory.name) / "global.sqlite")})

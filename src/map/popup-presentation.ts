@@ -67,7 +67,6 @@ export function appendObservationScience(parent: HTMLElement, record: Record<str
   parent.append(details)
 }
 
-/** Refresh results without closing advanced filters or throwing away keyboard editing focus. */
 export function preservePopupInteraction(root: HTMLElement) {
   const open = Array.from(root.querySelectorAll?.('details') ?? []).map((element) => element.open)
   const active = root.ownerDocument?.activeElement as HTMLInputElement | null
@@ -87,7 +86,7 @@ export function preservePopupInteraction(root: HTMLElement) {
       try {
         ;(next as HTMLInputElement).setSelectionRange(start, end)
       } catch {
-        /* Native numeric/date inputs have no text selection API. */
+        return
       }
     }
   }

@@ -1,10 +1,4 @@
-"""Bounded, seam-safe presentation and exact inspection of immutable global snapshots.
 
-Tiles are versioned gzip GeoJSON rather than raw global downloads. A fixed
-global Web Mercator hierarchy owns every observation once, including seams.
-All records remain inspectable/exportable, including polar records outside the
-declared Mercator rendering extent. No function in this module acquires data.
-"""
 from __future__ import annotations
 
 import base64
@@ -81,8 +75,8 @@ def published_freshness(manifest):
 
 def canonical_record(row, store):
     record = observation_record(row, store)
-    # A canonical source's missing metadata stays unknown, rather than inheriting
-    # the legacy local-store fallback version or processing-tier label.
+    
+    
     record["productVersion"] = row.product_version
     record["processingTier"] = row.processing_tier
     if row.frp_mw is not None and (not math.isfinite(row.frp_mw) or row.frp_mw < 0):
@@ -111,7 +105,7 @@ def decode_group(value, snapshot, window):
 
 
 def _filter_sql(options, _depth=0):
-    """Native observation filters shared with the existing explorer contract."""
+    
     if not isinstance(options, dict):
         raise RejectedQuery("Observation filters must be an object.")
     clauses, parameters = [], []
@@ -278,8 +272,8 @@ class GlobalPresentation:
         last_day_end = last_instant.replace(hour=0, minute=0, second=0, microsecond=0)
         if last_instant != last_day_end:
             last_day_end += timedelta(days=1)
-        # Calendar boundary days may be partial. Keep the requested full UTC day
-        # and describe missing hours; never crop it back to a rolling window.
+        
+        
         if (lower < first_day or upper > last_day_end or
                 not any(partition["start"] < upper.timestamp() and partition["end"] > lower.timestamp() for partition in partitions)):
             raise IntervalUnavailable(
@@ -382,7 +376,7 @@ class GlobalPresentation:
                 north = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * y / scale))))
                 south = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (y + 1) / scale))))
                 clauses.append("o.id IN (SELECT id FROM global_spatial WHERE max_lon>=? AND min_lon<=? AND max_lat>=? AND min_lat<=?)")
-                # +180 is the wrapped -180 column; query both canonical endpoints.
+                
                 if x == 0:
                     clauses[-1] = "(o.id IN (SELECT id FROM global_spatial WHERE max_lon>=? AND min_lon<=? AND max_lat>=? AND min_lat<=?) OR o.longitude=180)"
                 params.extend([west, east, south, north])
@@ -475,7 +469,7 @@ class GlobalPresentation:
 
     @staticmethod
     def _analytics(db, canonical, where, params):
-        """Exact SQL summaries; records pages are never used to derive cards."""
+        
         count = db.execute("SELECT COUNT(o.frp)" + where + " AND o.frp>=0", params).fetchone()[0]
         middle = [item[0] for item in db.execute("SELECT o.frp" + where + " AND o.frp>=0 ORDER BY o.frp LIMIT ? OFFSET ?", [*params, 2 if count % 2 == 0 else 1, max(0, (count - 1)//2)])] if count else []
         def record(order, condition=""):

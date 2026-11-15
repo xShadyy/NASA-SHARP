@@ -15,9 +15,10 @@ import {
   fetchObservationPage,
   exportInvestigation,
   observationPageMatchesScope,
-  ObservationRequestError,
+  requiresObservationReselection,
 } from '@/lib/observation-client'
 import { firePlatformLabel, formatFireTime } from '@/lib/fire-severity'
+import { recordFilterDelay, validateObservationFilters } from '@/lib/observation-filter-validation'
 
 export function RecordsExplorer({
   scope,
@@ -34,7 +35,7 @@ export function RecordsExplorer({
   onHighlight?: (scope: InvestigationScope) => void
   onResponse: (page: ObservationPage) => void
   onReturnToMap: () => void
-  onStatus?: (loading: boolean, error: string) => void
+  onStatus?: (loading: boolean, error: string, issue?: unknown) => void
 }) {
   const [page, setPage] = useState(1),
     [pageSize, setPageSize] = useState(25)
@@ -44,6 +45,16 @@ export function RecordsExplorer({
   const [exporting, setExporting] = useState(''),
     [exportError, setExportError] = useState('')
   const [copyStatus, setCopyStatus] = useState('')
+  const [filters, setFilters] = useState(scope.filters)
+  const appliedFilterIdentity = JSON.stringify(scope.filters)
+  const [previousFilters, setPreviousFilters] = useState(appliedFilterIdentity)
+  if (previousFilters !== appliedFilterIdentity) {
+    setPreviousFilters(appliedFilterIdentity)
+    setFilters(scope.filters)
+  }
+  const validation = validateObservationFilters(filters)
+  const invalidFilters = Object.keys(validation).length > 0
+  const filtersPending = JSON.stringify(filters) !== appliedFilterIdentity
   const exportAbort = useRef<AbortController | null>(null)
   const identity = investigationKey(scope)
   const [previousIdentity, setPreviousIdentity] = useState(identity)
@@ -69,14 +80,15 @@ export function RecordsExplorer({
     refetchOnReconnect: false,
     refetchOnMount: false,
   })
-  const reportStatus = useEffectEvent((loading: boolean, error: string) =>
-    onStatus?.(loading, error),
+  const reportStatus = useEffectEvent((loading: boolean, error: string, issue: unknown) =>
+    onStatus?.(loading, error, issue),
   )
   useEffect(
     () =>
       reportStatus(
         query.isFetching || query.isPending,
         query.error instanceof Error ? query.error.message : '',
+        query.error,
       ),
     [query.isFetching, query.isPending, query.error],
   )
@@ -88,10 +100,19 @@ export function RecordsExplorer({
   }, [query.data, query.isSuccess, query.isFetching])
   useEffect(() => () => exportAbort.current?.abort(), [identity, sort, groupBy])
   const data = query.data?.data
-  const patch = (filters: ObservationFilters) => {
-    onScopeChange({ ...scope, filters: { ...scope.filters, ...filters } })
+  const commitFilters = useEffectEvent((next: ObservationFilters) => {
+    onScopeChange({ ...scope, filters: next })
     setPage(1)
-  }
+  })
+  useEffect(() => {
+    if (invalidFilters || !filtersPending) return
+    const timer = setTimeout(
+      () => commitFilters(filters),
+      recordFilterDelay(scope.filters, filters),
+    )
+    return () => clearTimeout(timer)
+  }, [filters, scope.filters, invalidFilters, filtersPending])
+  const patch = (next: ObservationFilters) => setFilters((current) => ({ ...current, ...next }))
   const inputNumber = (
     key: 'frpMin' | 'frpMax' | 'modisConfidenceMin' | 'modisConfidenceMax',
     value: string,
@@ -125,7 +146,6 @@ export function RecordsExplorer({
     setCopyStatus('')
     onHighlight?.({ ...scope, filters: { ...scope.filters, observationId: row.id } })
   }
-  const filters = scope.filters
   const platforms = scope.selection?.global
     ? ['terra', 'aqua', 'suomi-npp', 'noaa-20', 'noaa-21']
     : [...scope.query.filters.platforms]
@@ -140,7 +160,7 @@ export function RecordsExplorer({
           <h2>Detection records</h2>
           <p>
             {data
-              ? `${data.total.toLocaleString()} matching observations out of ${data.summary.selectedCount.toLocaleString()} selected · ${data.summary.wholeAreaCount.toLocaleString()} in whole area`
+              ? `${data.total.toLocaleString()} matching observations out of ${data.summary.selectedCount.toLocaleString()} selected - ${data.summary.wholeAreaCount.toLocaleString()} in whole area`
               : 'Complete query-wide observations'}
           </p>
           <p className="area-analytics-footnote">
@@ -148,6 +168,21 @@ export function RecordsExplorer({
           </p>
         </div>
       </div>
+      {invalidFilters && (
+        <div className="analytics-filter-validation" role="alert" id="record-filter-errors">
+          <strong>These filters have not been applied.</strong>
+          <ul>
+            {Object.entries(validation).map(([key, message]) => (
+              <li key={key}>{message}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {filtersPending && !invalidFilters && (
+        <p role="status" className="area-analytics-footnote">
+          Applying filters…
+        </p>
+      )}
       <div className="analytics-record-controls">
         <label className="analytics-record-search">
           Search
@@ -197,6 +232,8 @@ export function RecordsExplorer({
           <input
             type="datetime-local"
             value={filters.acquiredStart?.slice(0, 16) ?? ''}
+            aria-invalid={!!validation.acquiredStart}
+            aria-describedby={validation.acquiredStart ? 'record-filter-errors' : undefined}
             onChange={(e) =>
               patch({
                 acquiredStart: e.currentTarget.value ? `${e.currentTarget.value}:00Z` : undefined,
@@ -209,6 +246,8 @@ export function RecordsExplorer({
           <input
             type="datetime-local"
             value={filters.acquiredEndExclusive?.slice(0, 16) ?? ''}
+            aria-invalid={!!validation.acquiredEndExclusive}
+            aria-describedby={validation.acquiredEndExclusive ? 'record-filter-errors' : undefined}
             onChange={(e) =>
               patch({
                 acquiredEndExclusive: e.currentTarget.value
@@ -224,6 +263,8 @@ export function RecordsExplorer({
             type="number"
             min={0}
             value={filters.frpMin ?? ''}
+            aria-invalid={!!validation.frpMin}
+            aria-describedby={validation.frpMin ? 'record-filter-errors' : undefined}
             onChange={(e) => inputNumber('frpMin', e.currentTarget.value)}
           />
         </label>
@@ -233,6 +274,8 @@ export function RecordsExplorer({
             type="number"
             min={0}
             value={filters.frpMax ?? ''}
+            aria-invalid={!!validation.frpMax}
+            aria-describedby={validation.frpMax ? 'record-filter-errors' : undefined}
             onChange={(e) =>
               patch({
                 frpMax: e.currentTarget.value === '' ? undefined : Number(e.currentTarget.value),
@@ -249,6 +292,8 @@ export function RecordsExplorer({
             min={0}
             max={100}
             value={filters.modisConfidenceMin ?? ''}
+            aria-invalid={!!validation.modisConfidenceMin}
+            aria-describedby={validation.modisConfidenceMin ? 'record-filter-errors' : undefined}
             onChange={(e) =>
               patch({
                 modisConfidenceMin:
@@ -266,6 +311,8 @@ export function RecordsExplorer({
             min={0}
             max={100}
             value={filters.modisConfidenceMax ?? ''}
+            aria-invalid={!!validation.modisConfidenceMax}
+            aria-describedby={validation.modisConfidenceMax ? 'record-filter-errors' : undefined}
             onChange={(event) => inputNumber('modisConfidenceMax', event.currentTarget.value)}
           />
         </label>
@@ -356,17 +403,23 @@ export function RecordsExplorer({
       {query.error && (
         <div role="alert" className="area-analytics-alert">
           <p>{query.error instanceof Error ? query.error.message : 'Observation query failed.'}</p>
-          {!(
-            query.error instanceof ObservationRequestError &&
-            query.error.code === 'analysis-source-unavailable'
-          ) && /expir|snapshot|source changed|no longer cached/i.test(String(query.error)) ? (
+          {requiresObservationReselection(query.error) ? (
             <Button variant="outline" onClick={onReturnToMap}>
-              Return to map and refresh selection
+              {scope.selection?.global
+                ? 'Refresh worldwide observations'
+                : 'Refresh selected group'}
             </Button>
           ) : (
             <Button variant="outline" onClick={() => void query.refetch()}>
               Retry
             </Button>
+          )}
+          {requiresObservationReselection(query.error) && (
+            <p>
+              {scope.selection?.global
+                ? 'Refresh the current worldwide snapshot to start a new investigation.'
+                : 'Select the group again on the map to create current membership.'}
+            </p>
           )}
         </div>
       )}
@@ -395,7 +448,7 @@ export function RecordsExplorer({
                   heading ? (
                     <tr className="analytics-record-group" key={`group-${row.groupKey}`}>
                       <th colSpan={5}>
-                        {group?.label ?? row.groupKey} · {group?.count} observations
+                        {group?.label ?? row.groupKey} - {group?.count} observations
                       </th>
                     </tr>
                   ) : null,
@@ -533,7 +586,14 @@ export function RecordsExplorer({
             key={format}
             variant="outline"
             size="sm"
-            disabled={!data || !!exporting || query.isFetching}
+            disabled={
+              !data ||
+              !!exporting ||
+              query.isFetching ||
+              query.isError ||
+              invalidFilters ||
+              filtersPending
+            }
             onClick={() => void download(format)}
           >
             {exporting === format

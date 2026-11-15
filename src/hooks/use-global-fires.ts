@@ -89,7 +89,7 @@ export async function fetchGlobalManifest(window: GlobalWindow, signal: AbortSig
   })
   if (response.status === 404)
     throw new GlobalManifestError(
-      'The running backend does not provide the global hotspot API. Restart the SHARP backend with tools/start-global-backend.ps1 and check the API proxy target.',
+      'Satellite hotspot data is temporarily unavailable. Please retry.',
       404,
     )
   const body: unknown = await response.json()
@@ -103,7 +103,7 @@ export async function fetchGlobalManifest(window: GlobalWindow, signal: AbortSig
   return validateGlobalManifest(body, window)
 }
 
-/** A lightweight stored manifest poll; no browser operation initiates ingestion. */
+
 export function useGlobalFires() {
   const window: GlobalWindow = '24h'
   const query = useQuery({
@@ -120,6 +120,6 @@ export function useGlobalFires() {
     manifest: query.data ?? null,
     loading: query.isPending || (query.data?.status === 'building' && !query.data.snapshotId),
     error: query.error instanceof Error ? query.error.message : '',
-    refresh: () => void query.refetch(),
+    refresh: () => query.refetch(),
   }
 }

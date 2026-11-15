@@ -1,7 +1,7 @@
 import { resolve } from 'node:path'
 import original from '../vite.config.ts'
 
-/** Test-only build alias. The shipped application has no legacy rendering toggle. */
+
 export default async function browserProductionConfig(environment) {
   const configuration = typeof original === 'function' ? await original(environment) : original
   if (process.env.SHARP_LEGACY_GLOBAL_BENCHMARK !== '1') return configuration

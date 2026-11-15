@@ -2,7 +2,7 @@ import { resolve, sep } from 'node:path'
 import { existsSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 
-/** Build and preview the same production bundle, using an isolated output directory. */
+
 export async function productionPreview({
   launch,
   apiUrl,

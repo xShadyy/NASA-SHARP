@@ -18,7 +18,6 @@ function parsePoint(latitudeText: string, longitudeText: string): SharedCoordina
   return { latitude, longitude }
 }
 
-/** The shared URL contains only the map center, in latitude, longitude order. */
 export function readShareHash(hash: string): SharedCoordinates | null {
   const value = hash.replace(/^#/, '')
   const coordinates = value.split(',')
@@ -26,8 +25,6 @@ export function readShareHash(hash: string): SharedCoordinates | null {
     return parsePoint(coordinates[0], coordinates[1])
   }
 
-  // Open older links, but use only their coordinates. The next camera report
-  // replaces the old state-heavy hash with the new coordinates-only form.
   const legacy = new URLSearchParams(value)
   const camera = legacy.get('v') === '1' ? legacy.get('map')?.split('/') : undefined
   return camera?.length === 3 && DECIMAL.test(camera[0]) ? parsePoint(camera[1], camera[2]) : null
@@ -43,6 +40,6 @@ export function writeShareHash({ latitude, longitude }: SharedCoordinates) {
       `${window.location.pathname}${window.location.search}${hash}`,
     )
   } catch {
-    /* Browsing still works if URL mutation is restricted by the host. */
+    return
   }
 }

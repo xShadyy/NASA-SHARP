@@ -21,9 +21,9 @@ import {
   subscribeAnalysisSourceRecovery,
   type AnalysisSourceRecovery,
 } from '@/lib/observation-client'
+import { analysisRequestStatus, type AnalysisRequestStatus } from '@/lib/analysis-request-status'
 
-export type AnalysisFireStatus =
-  'idle' | 'loading' | 'ready' | 'partial' | 'unavailable' | 'stale' | 'error'
+export type AnalysisFireStatus = AnalysisRequestStatus
 const EMPTY_FEATURES: FireFeature[] = []
 const CACHE_LIMIT = 4
 const CACHE_BYTES = 64 * 1024 * 1024
@@ -105,6 +105,7 @@ export function useAnalysisFires(
       (!Array.isArray(value) || value.length > 0),
   )
   const historicalFocus = historical && !!mapDay
+  const frozenMembership = !!selection?.selectionToken || !!selection?.observationIds?.length
   const scopedMap =
     historicalFocus ||
     !!selection?.selectionToken ||
@@ -113,8 +114,11 @@ export function useAnalysisFires(
   const mapOptions = {
     ...filters,
     day: mapDay ?? undefined,
-    sourceGeneration:
-      selection?.sourceGeneration ?? (historicalFocus ? undefined : data?.meta.sourceGeneration),
+    sourceGeneration: frozenMembership
+      ? selection?.sourceGeneration
+      : historicalFocus
+        ? undefined
+        : (data?.meta.sourceGeneration ?? selection?.sourceGeneration),
     selectionToken: selection?.selectionToken,
     observationIds: selection?.selectionToken ? undefined : selection?.observationIds,
   }
@@ -160,13 +164,8 @@ export function useAnalysisFires(
     )
       void focusedMap.refetch({ cancelRefetch: false })
   })
-  useEffect(
-    () => subscribeAnalysisSourceRecovery((recovery) => restoreMapSource(recovery)),
-    [],
-  )
-  const meta = scopedMap
-    ? (focusedMap.data?.meta ?? data?.meta ?? null)
-    : (data?.meta ?? null)
+  useEffect(() => subscribeAnalysisSourceRecovery((recovery) => restoreMapSource(recovery)), [])
+  const meta = scopedMap ? (focusedMap.data?.meta ?? data?.meta ?? null) : (data?.meta ?? null)
   const expires = Date.parse(meta?.expiresAt ?? '')
   useEffect(() => {
     if (!Number.isFinite(expires)) return
@@ -182,19 +181,14 @@ export function useAnalysisFires(
   const focusedError = scopedMap && focusedMap.isError
   const loading =
     !!area && !dateline && !invalidRange && (query.isFetching || query.isPending || focusedLoading)
-  const status: AnalysisFireStatus = !area
-    ? 'idle'
-    : dateline || invalidRange || query.isError || focusedError
-      ? 'error'
-      : loading
-        ? 'loading'
-        : meta?.completeness === 'unavailable'
-          ? 'unavailable'
-          : meta?.completeness === 'partial'
-            ? 'partial'
-            : stale
-              ? 'stale'
-              : 'ready'
+  const status = analysisRequestStatus({
+    hasArea: !!area,
+    invalid: !!dateline || !!invalidRange,
+    failed: query.isError || !!focusedError,
+    loading,
+    stale,
+    completeness: meta?.completeness,
+  })
   const message = dateline
     ? 'This area crosses 180 degrees longitude. Select an area on one side of the date line.'
     : invalidRange
@@ -212,7 +206,7 @@ export function useAnalysisFires(
             : status === 'unavailable'
               ? data?.meta.coverage || 'No source coverage is available for the selected period.'
               : status === 'partial'
-                ? 'Some source data is unavailable. Counts reflect loaded observations.'
+                ? ''
                 : status === 'stale'
                   ? 'Cached observations are stale. Refresh to check for updated source data.'
                   : data && !meta?.freshness && !meta?.expiresAt
@@ -235,7 +229,16 @@ export function useAnalysisFires(
     appliedAreaName: data?.activity.areaName ?? area?.name ?? '',
     retry: () => {
       if (area && !dateline && !invalidRange) {
-        if (scopedMap) void focusedMap.refetch()
+        if (scopedMap && !frozenMembership) {
+          const previousGeneration = data?.meta.sourceGeneration
+          void query.refetch().then((result) => {
+            if (
+              !result.isError &&
+              (historicalFocus || result.data?.meta.sourceGeneration === previousGeneration)
+            )
+              void focusedMap.refetch()
+          })
+        } else if (scopedMap) void focusedMap.refetch()
         else void query.refetch()
       }
     },

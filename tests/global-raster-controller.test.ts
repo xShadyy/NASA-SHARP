@@ -434,7 +434,8 @@ test('unsupported backend status and snapshot expiry stay actionable; destructio
   const unsupported = manifest()
   delete unsupported.rasterTiles
   controller.setManifest(unsupported)
-  assert.match(statuses.at(-1)?.error ?? '', /backend.*raster.*restart/i)
+  assert.match(statuses.at(-1)?.error ?? '', /hotspot.*unavailable.*retry/i)
+  assert.doesNotMatch(statuses.at(-1)?.error ?? '', /backend|\.ps1|127\.0\.0\.1/)
   controller.setManifest(manifest())
   const [id] = rasterIds(map)
   map.emit('error', {

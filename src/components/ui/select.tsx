@@ -3,7 +3,7 @@ import * as SelectPrimitive from '@radix-ui/react-select'
 import { CaretDownIcon, CaretUpIcon, CheckIcon } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 
-// Adapted from the official shadcn/ui Select registry component.
+
 function Select(props: React.ComponentProps<typeof SelectPrimitive.Root>) {
   return <SelectPrimitive.Root data-slot="select" {...props} />
 }

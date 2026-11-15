@@ -61,7 +61,7 @@ test('a raster-only manifest preserves its exact rolling 24-hour UTC window and 
   )
 })
 
-test('missing global route identifies a stale backend instead of an empty dataset', async (context) => {
+test('missing global route remains unavailable without exposing developer setup instructions', async (context) => {
   const signal = new AbortController().signal
   context.mock.method(globalThis, 'fetch', async (_input: unknown, options: RequestInit) => {
     assert.equal(options.signal, signal)
@@ -71,8 +71,8 @@ test('missing global route identifies a stale backend instead of an empty datase
   await assert.rejects(fetchGlobalManifest('24h', signal), (error: unknown) => {
     assert.ok(error instanceof GlobalManifestError)
     assert.equal(error.status, 404)
-    assert.match(error.message, /running backend/)
-    assert.match(error.message, /start-global-backend\.ps1/)
+    assert.match(error.message, /temporarily unavailable.*retry/i)
+    assert.doesNotMatch(error.message, /backend|\.ps1|127\.0\.0\.1/)
     return true
   })
 })

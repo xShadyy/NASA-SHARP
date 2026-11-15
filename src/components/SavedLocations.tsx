@@ -180,7 +180,7 @@ export function SavedLocations({ locations, onSelect, onRemove, onEdit }: SavedL
                 <span className="saved-location-coordinate-line">
                   <span>{formatCoordinates(location.coordinates)}</span>
                   {location.country && (
-                    <span className="saved-location-country"> · {location.country}</span>
+                    <span className="saved-location-country"> - {location.country}</span>
                   )}
                 </span>
               </span>

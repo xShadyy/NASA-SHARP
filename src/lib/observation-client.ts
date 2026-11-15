@@ -24,6 +24,7 @@ export class ObservationRequestError extends Error {
   readonly status: number
   readonly code: string
   readonly recoverable: boolean
+  readonly action: string
 
   constructor(response: Response, body: Record<string, unknown> | null) {
     super(
@@ -37,7 +38,35 @@ export class ObservationRequestError extends Error {
     this.status = response.status
     this.code = typeof body?.code === 'string' ? body.code : ''
     this.recoverable = body?.recoverable === true
+    this.action = typeof body?.action === 'string' ? body.action : ''
   }
+}
+
+export function requiresObservationReselection(error: unknown) {
+  return (
+    error instanceof ObservationRequestError &&
+    (error.action === 'refresh-selected-group' ||
+      ['selection-expired', 'selection-source-changed', 'selection-scope-mismatch'].includes(
+        error.code,
+      ) ||
+      ((error.status === 409 || error.status === 410) &&
+        /expired|snapshot|source changed|no longer cached/i.test(error.message)))
+  )
+}
+
+export function investigationExportFilename(
+  scope: InvestigationScope,
+  format: 'csv' | 'geojson' | 'json',
+) {
+  const area =
+    scope.area.name
+      .normalize('NFKD')
+      .replace(/\p{M}/gu, '')
+      .replace(/[^\p{L}\p{N}]+/gu, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 80)
+      .toLowerCase() || 'selected-area'
+  return `sharp-${area}-${scope.range.start}-${scope.range.end}.${format}`
 }
 
 function requestBody(scope: InvestigationScope, options: Record<string, unknown>) {
@@ -206,7 +235,7 @@ export async function exportInvestigation(
     if (response.ok) {
       const blob = await response.blob()
       signal?.throwIfAborted()
-      downloadBlob(blob, `sharp-${exportScope.range.start}-${exportScope.range.end}.${format}`)
+      downloadBlob(blob, investigationExportFilename(exportScope, format))
       if (recoveryPage) publishRecovery(scope, recoveryPage)
       return
     }

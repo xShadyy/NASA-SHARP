@@ -54,8 +54,8 @@ export function loadCountryPolygons(): Promise<CountryPolygon[]> {
         }
       }
       if (!polygons.length) throw new Error('Country lookup has no polygons.')
-      // Overview polygons can cover a microstate omitted at that scale. Prefer its
-      // smaller detailed polygon when both sources contain the same point.
+      
+      
       return polygons.sort(
         (a, b) =>
           (a.bounds[2] - a.bounds[0]) * (a.bounds[3] - a.bounds[1]) -
@@ -69,7 +69,7 @@ export function loadCountryPolygons(): Promise<CountryPolygon[]> {
   return countryPromise
 }
 
-/** Boundary-inclusive ray casting in the source's WGS84 coordinates. */
+
 function pointInRing([longitude, latitude]: Coordinate, ring: Ring): boolean {
   let inside = false
   for (let index = 0, previous = ring.length - 1; index < ring.length; previous = index++) {
@@ -93,7 +93,7 @@ function pointInRing([longitude, latitude]: Coordinate, ring: Ring): boolean {
   return inside
 }
 
-/** Local generalized country lookup. No coordinates leave the browser. */
+
 export async function lookupCountry(coordinates: Coordinate): Promise<string | undefined> {
   if (!coordinates.every(Number.isFinite) || Math.abs(coordinates[1]) > 90) return undefined
   const longitude = ((((coordinates[0] + 180) % 360) + 360) % 360) - 180

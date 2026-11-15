@@ -1,10 +1,4 @@
-"""Native vector tiles containing individual immutable satellite observations.
 
-Every matching record is encoded at every zoom; there is no clustering, sampling,
-or replacement by a cell centre. Only presentation coordinates are quantized.
-Canonical coordinates, IDs, provenance and inspection remain in GlobalStore.
-This reader never imports or invokes the upstream acquisition service.
-"""
 from __future__ import annotations
 
 import gzip
@@ -24,8 +18,8 @@ POINT_SCHEMA = "global-observation-points-1"
 POINT_LAYER = "observations"
 POINT_EXTENT = 65536
 POINT_MAX_ZOOM = 18
-# MapLibre uses 512 screen pixels per native vector tile. Eight pixels extend
-# symbols across seams without transferring footprints or full record metadata.
+
+
 POINT_BUFFER = 1024
 MAX_CACHE_BYTES = 32 * 1024 * 1024
 MAX_CACHE_ENTRIES = 128
@@ -39,7 +33,7 @@ _SEVERITY_INDEX = {value: index for index, value in enumerate(_SEVERITIES)}
 
 
 class PointTileTooLarge(RejectedQuery):
-    """An explicit serving bound, never a silently truncated point collection."""
+    pass
 
 
 def point_cache_statistics():
@@ -66,8 +60,8 @@ def _zigzag(value):
 
 
 def _feature(row_id, power, points):
-    # MVT 2.1 Point geometry consists solely of MoveTo commands. A wrapped
-    # dateline copy is another point in the SAME feature, preserving its ID.
+    
+    
     geometry = bytearray(_varint((len(points) << 3) | 1))
     previous_x = previous_y = 0
     for x, y in points:
@@ -91,7 +85,7 @@ def _tile_bounds(z, x, y):
 
 
 def _spatial_predicate(bounds):
-    """Use the existing RTree, including both canonical dateline endpoints."""
+    
     west, north, east, south = bounds
     if east - west >= 1:
         intervals = [(0., 1.)]
@@ -103,8 +97,8 @@ def _spatial_predicate(bounds):
         intervals = [(west, east)]
     longitude = " OR ".join("(max_lon>=? AND min_lon<=?)" for _ in intervals)
     values = [coordinate * 360 - 180 for interval in intervals for coordinate in interval]
-    # The latitude check against canonical coordinates below excludes polar
-    # records; clamped Mercator coordinates must never imply polar support.
+    
+    
     values.extend([_latitude(south), _latitude(north)])
     return ("o.id IN (SELECT id FROM global_spatial WHERE (" + longitude +
             ") AND max_lat>=? AND min_lat<=?)", values)
@@ -123,8 +117,8 @@ class GlobalPointPresentation(GlobalPresentation):
         _manifest, snapshot, source, clauses, parameters, _filters, _interval = self._base(
             snapshot, window, aggregate=aggregate, display_filters=filters)
         if aggregate:
-            # Frozen membership and temporary filters intersect, as in the
-            # complete local explorer. A later filter must never widen a group.
+            
+            
             additional, values = _filter_sql(temporary_filters)
             clauses.extend(additional)
             parameters.extend(values)
@@ -166,9 +160,9 @@ class GlobalPointPresentation(GlobalPresentation):
         scale = 2 ** z
         bounds = _tile_bounds(z, x, y)
         if z > 0:
-            # At z0 the entire indexed archive would satisfy the RTree bounds.
-            # Walk only the snapshot/time index rather than materializing IDs
-            # belonging to unrelated archived generations.
+            
+            
+            
             spatial, values = _spatial_predicate(bounds)
             clauses.append(spatial)
             parameters.extend(values)
@@ -176,14 +170,14 @@ class GlobalPointPresentation(GlobalPresentation):
         parameters.extend([-MERCATOR_LIMIT, MERCATOR_LIMIT])
         statement = ("SELECT o.id,o.mx,o.my,o.frp FROM " + source +
                      " WHERE " + " AND ".join(clauses) + " ORDER BY o.id")
-        # Layer version first, per MVT 2.1. The only dictionary has four values,
-        # so working memory does not grow with canonical provenance strings.
+        
+        
         layer = bytearray(b"\x78\x02" + _message(1, POINT_LAYER.encode()))
         features = core_count = geometries = 0
         with closing(self.store.connect()) as db:
-            # Validation in _base uses a different connection. Snapshot pruning
-            # may run between that validation and this reader, so establish one
-            # SQLite read version for both existence and exact membership.
+            
+            
+            
             db.execute("BEGIN")
             if db.execute("SELECT 1 FROM global_snapshots WHERE snapshot=?", (snapshot,)).fetchone() is None:
                 raise SnapshotUnavailable("Global snapshot expired before its point tile could load; refresh the dataset manifest.")
@@ -196,8 +190,8 @@ class GlobalPointPresentation(GlobalPresentation):
                              if bounds[0] <= mx + shift <= bounds[2]]
                 if not positions:
                     continue
-                # Half-open core ownership is deterministic at seams, including
-                # +180/-180. Buffer copies are never analytical observations.
+                
+                
                 if x / scale <= mx < (x + 1) / scale and y / scale <= my < (y + 1) / scale:
                     core_count += 1
                 points = [(round((position * scale - x) * POINT_EXTENT),

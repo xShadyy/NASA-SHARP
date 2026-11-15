@@ -171,12 +171,12 @@ export function createAnalysisController(
         : '',
       values.areaKm2 !== null
         ? state?.error
-          ? 'Invalid area · Move or remove a point'
+          ? 'Invalid area - Move or remove a point'
           : `Area ${formatMeasurement(values.areaKm2, units.area)}`
         : '',
     ]
       .filter(Boolean)
-      .join(' · ')
+      .join(' - ')
     if (!text) {
       readout.hidden = true
       return
@@ -343,7 +343,7 @@ export function createAnalysisController(
     container.dataset.analysisArea = next?.id ?? ''
     container.dataset.analysisCredits =
       next?.type === 'country' && next.source
-        ? `${next.source.name} · ${next.source.dataset}${next.source.version ? ` · ${next.source.version}` : ''}`
+        ? `${next.source.name} - ${next.source.dataset}${next.source.version ? ` - ${next.source.version}` : ''}`
         : ''
     if (!next) {
       setAnalysisZoomFloor(map, null)

@@ -1,4 +1,4 @@
-"""Compact, exact summaries for Area Analytics."""
+
 
 import heapq
 import json

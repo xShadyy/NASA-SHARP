@@ -1,4 +1,4 @@
-"""Explicit software timing of identified scientific test fixtures, not validation."""
+
 import sys
 import tempfile
 import time
@@ -17,7 +17,7 @@ from test_historical_activity import archive, query
 
 
 def benchmark_scientific():
-    """The fixture helper is shared with regression tests; no production input ships."""
+    
     tracemalloc.start()
     fixture = archive()
     manifest, store = fixture

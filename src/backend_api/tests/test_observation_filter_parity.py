@@ -1,4 +1,4 @@
-"""One offline filter contract consumed by the TypeScript, Python and SQL paths."""
+
 import json
 import os
 import sys
@@ -48,7 +48,7 @@ class ObservationFilterParityTest(unittest.TestCase):
                     python_rows = list(rows)
                     python_rows.sort(key=lambda row: (row.frp_mw is None, -(row.frp_mw or 0), detection_id(row)) if sort == "frp" else ((-1 if sort == "newest" else 1)*row.acquired_at.timestamp(), detection_id(row)))
                     self.assertEqual([detection_id(row) for row in python_rows], case["expectedIds"])
-                    # Two-row pages verify stable global ordering, including ties.
+                    
                     pages = [service.observations(snapshot, "24h", options={**options, "pageSize": 2, "page": page})["data"]["rows"] for page in range(1, 5)]
                     self.assertEqual([row["id"] for page in pages for row in page], case["expectedIds"])
 

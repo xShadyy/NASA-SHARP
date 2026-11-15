@@ -33,7 +33,7 @@ const SELECTED_SOURCE = 'global-hotspot-selected'
 const SELECTED_LAYER = 'global-hotspot-selected-square'
 const EMPTY: FeatureCollection = { type: 'FeatureCollection', features: [] }
 
-/** Only native image sources; no point queries, record requests or pointer handlers. */
+
 export function createGlobalRasterController(
   map: MapLibreMap,
   options: { onStatus: (status: GlobalRasterDisplayStatus) => void },
@@ -145,12 +145,11 @@ export function createGlobalRasterController(
       report()
       return
     }
-    // After a style reload the old source object no longer belongs to the map.
+    
     if (active && map.getSource(active.sourceId) !== active.source) active = null
     if (pending && map.getSource(pending.sourceId) !== pending.source) pending = null
     if (!manifest.rasterTiles) {
-      error =
-        'The running backend has no raster hotspot service. Restart the SHARP backend to load the updated routes.'
+      error = 'The hotspot map is temporarily unavailable. Please retry.'
       report()
       return
     }
@@ -168,7 +167,7 @@ export function createGlobalRasterController(
     const obsolete = pending
     pending = null
     remove(obsolete)
-    // Stage the new generation while the previous snapshot remains visible.
+    
     const name = active?.sourceId.endsWith('a') ? 'b' : 'a'
     const sourceId = `${GLOBAL_RASTER_PREFIX}${name}`
     const layerId = `${sourceId}-pixels`
@@ -244,7 +243,7 @@ export function createGlobalRasterController(
       map.triggerRepaint()
       return
     }
-    // This render has drawn the replacement. Only now discard the old source.
+    
     const previous = active
     active = pending
     pending = null

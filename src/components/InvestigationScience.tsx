@@ -1,10 +1,16 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import { Button } from './ui/button'
 import {
   investigationRequest,
   createInvestigation,
   type InvestigationScope,
 } from '@/lib/investigation'
+import {
+  readHistoricalSummary,
+  readHistoricalPreparation,
+  startHistoricalPreparation,
+  type HistoricalPreparation,
+} from '@/lib/history-client'
 
 type Evidence = {
   name: string
@@ -34,7 +40,7 @@ type History = {
   sourceGeneration?: string
   importedAt?: string
   coverage?: { start: string; endInclusive: string }
-  preparation?: { state: string; completed?: number; total?: number; message?: string }
+  preparation?: HistoricalPreparation
   months: {
     year: number
     month: number
@@ -99,6 +105,10 @@ export function InvestigationScience({
   const [year, setYear] = useState(Number(scope.range.end.slice(0, 4)))
   const [month, setMonth] = useState<number | null>(null)
   const [errors, setErrors] = useState<Record<string, string>>({})
+  const [preparation, setPreparation] = useState<HistoricalPreparation | null>(null)
+  const [starting, setStarting] = useState(false)
+  const [readAttempt, setReadAttempt] = useState(0)
+  const preparationAbort = useRef<AbortController | null>(null)
   const query = scope.query
   const [previousQuery, setPreviousQuery] = useState(query)
   const [previousGeneration, setPreviousGeneration] = useState(sourceGeneration)
@@ -108,26 +118,91 @@ export function InvestigationScience({
     setHistory(null)
     setEvidence(null)
     setErrors({})
+    setPreparation(null)
   }
   useEffect(() => {
+    if ((section && section !== 'history') || scope.selection?.global) return
     const controller = new AbortController()
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const load = () => {
-      investigationRequest<History>('history', query, { month: month ?? undefined, year }, controller.signal).then((data) => {
+    readHistoricalSummary<History>(
+      query,
+      { month: month ?? undefined, year },
+      controller.signal,
+    ).then(
+      (data) => {
         if (!controller.signal.aborted) {
           setHistory(data)
           setErrors((current) => ({ ...current, history: '' }))
           if (data.evidence) setEvidence(data.evidence)
-          if (data.preparation && ['queued', 'loading', 'waiting', 'partial'].includes(data.preparation.state))
-            timer = setTimeout(load, data.preparation.state === 'partial' ? 5000 : 2000)
+          if (data.preparation) setPreparation(data.preparation)
         }
-      }, (error: Error) => {
-        if (!controller.signal.aborted) setErrors((current) => ({ ...current, history: error.message }))
-      })
+      },
+      (error: Error) => {
+        if (!controller.signal.aborted)
+          setErrors((current) => ({ ...current, history: error.message }))
+      },
+    )
+    return () => controller.abort()
+  }, [query, sourceGeneration, section, month, year, readAttempt, scope.selection?.global])
+  const preparationActive = preparation?.active === true
+  const refreshHistory = useEffectEvent(() => setReadAttempt((value) => value + 1))
+  useEffect(() => {
+    if (!preparationActive || (section && section !== 'history') || scope.selection?.global) return
+    const controller = new AbortController()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let lastSummary = Date.now()
+    const poll = () => {
+      void readHistoricalPreparation(query, {}, controller.signal).then(
+        (status) => {
+          if (controller.signal.aborted) return
+          setPreparation(status)
+          if (!status.active || Date.now() - lastSummary >= 10_000) {
+            lastSummary = Date.now()
+            refreshHistory()
+          }
+          if (status.active) timer = setTimeout(poll, 3000)
+        },
+        (error: Error) => {
+          if (!controller.signal.aborted)
+            setErrors((current) => ({ ...current, history: error.message }))
+        },
+      )
     }
-    load()
-    return () => { controller.abort(); clearTimeout(timer) }
-  }, [query, sourceGeneration, section, month, year])
+    timer = setTimeout(poll, 1500)
+    return () => {
+      controller.abort()
+      clearTimeout(timer)
+    }
+  }, [preparationActive, query, section, scope.selection?.global, readAttempt])
+  useEffect(() => () => preparationAbort.current?.abort(), [query])
+  async function loadHistoricalData() {
+    preparationAbort.current?.abort()
+    const controller = new AbortController()
+    preparationAbort.current = controller
+    setStarting(true)
+    setErrors((current) => ({ ...current, history: '' }))
+    try {
+      const status = await startHistoricalPreparation(
+        query,
+        { month: month ?? undefined, year },
+        controller.signal,
+      )
+      if (!controller.signal.aborted) {
+        setPreparation(status)
+        setReadAttempt((value) => value + 1)
+      }
+    } catch (error) {
+      if (!controller.signal.aborted)
+        setErrors((current) => ({
+          ...current,
+          history: error instanceof Error ? error.message : 'Historical data could not be loaded.',
+        }))
+    } finally {
+      if (preparationAbort.current === controller) {
+        preparationAbort.current = null
+        setStarting(false)
+      }
+    }
+  }
   useEffect(() => {
     if (!sourceGeneration || (section && section !== 'method') || scope.selection?.global) return
     const controller = new AbortController()
@@ -158,7 +233,7 @@ export function InvestigationScience({
     selected: history?.months?.find((item) => item.year === year && item.month === i + 1),
     baseline: history?.baseline?.months.find((item) => item.month === i + 1),
   }))
-  // Leap day is retained in monthly totals, but excluded on both sides of seasonal comparisons.
+
   const seasonalValue = (index: number) => {
     if (season[index].selected?.value == null) return null
     const values =
@@ -177,35 +252,65 @@ export function InvestigationScience({
     ...season.map((item, i) => Math.max(seasonalValue(i) ?? 0, item.baseline?.q75 ?? 0)),
   )
   const openHistoricalPeriod = (start: string, end: string, focusedDay: string | null = null) =>
-    onScopeChange(createInvestigation(
-      scope.area,
-      { start, end },
-      null,
-      focusedDay,
-      {
-        ...scope.filters,
-        day: undefined,
-        acquiredStart: undefined,
-        acquiredEndExclusive: undefined,
-        observationId: undefined,
-      },
-      history?.sourceGeneration ? { sourceGeneration: history.sourceGeneration } : undefined,
-    ))
+    onScopeChange(
+      createInvestigation(
+        scope.area,
+        { start, end },
+        null,
+        focusedDay,
+        {
+          ...scope.filters,
+          day: undefined,
+          acquiredStart: undefined,
+          acquiredEndExclusive: undefined,
+          observationId: undefined,
+        },
+        history?.sourceGeneration ? { sourceGeneration: history.sourceGeneration } : undefined,
+      ),
+    )
   return (
     <>
       {(!section || section === 'history') && (
         <section className="investigation-section area-analytics-card">
           <h2>Historical calendar and seasons</h2>
           <p>Compare the selected period with the same seasonal dates in past years.</p>
-          {errors.history && <p role="alert">{errors.history}</p>}
-          {!history && !errors.history && <p role="status">Preparing historical activity…</p>}
-          {history?.preparation && history.preparation.state !== 'complete' && (
+          {errors.history && (
+            <div role="alert">
+              <p>{errors.history}</p>
+              <Button variant="outline" onClick={() => setReadAttempt((value) => value + 1)}>
+                Retry stored history
+              </Button>
+            </div>
+          )}
+          {!scope.selection?.global && (
+            <div className="history-preparation-actions">
+              <Button
+                variant="outline"
+                disabled={starting || preparationActive}
+                onClick={() => void loadHistoricalData()}
+              >
+                {starting || preparationActive
+                  ? 'Loading historical data…'
+                  : preparation?.explicitRetry
+                    ? 'Retry historical loading'
+                    : 'Load historical data'}
+              </Button>
+              <span>Selected seasonal months and three prior years - this area only</span>
+            </div>
+          )}
+          {scope.selection?.global && <p>Select a regional area to load historical data.</p>}
+          {!scope.selection?.global && !history && !errors.history && (
+            <p role="status">Loading stored history…</p>
+          )}
+          {preparation && !['complete', 'partial'].includes(preparation.state) && (
             <p role="status">
-              {history.preparation.message}
-              {history.preparation.total ? ` ${history.preparation.completed ?? 0}/${history.preparation.total} reporting windows.` : ''}
+              {preparation.message}
+              {preparation.total
+                ? ` ${preparation.completed ?? 0}/${preparation.total} reporting windows.`
+                : ''}
             </p>
           )}
-          {history?.status === 'unavailable' && (!history.preparation || history.preparation.state === 'complete') && (
+          {history?.status === 'unavailable' && !preparationActive && (
             <p>
               {history.reason ??
                 'Stored historical reporting coverage is unavailable for this region.'}
@@ -213,15 +318,15 @@ export function InvestigationScience({
           )}
           {history?.coverage && (
             <p className="area-analytics-footnote">
-              Stored coverage: {history.coverage.start} – {history.coverage.endInclusive} ·{' '}
-              {history.datasetVersion} · Imported {history.importedAt}
+              Stored coverage: {history.coverage.start} – {history.coverage.endInclusive} -{' '}
+              {history.datasetVersion} - Imported {history.importedAt}
             </p>
           )}
           {!!years.length && (
             <>
               <div className="history-heatmap">
                 <table>
-                  <caption>Monthly activity · active-cell-days</caption>
+                  <caption>Monthly activity - active-cell-days</caption>
                   <thead>
                     <tr>
                       <th>Year</th>
@@ -264,10 +369,10 @@ export function InvestigationScience({
                                   setYear(item)
                                   setMonth(i + 1)
                                 }}
-                                title={`${item}-${i + 1}: ${cell?.value ?? 'Unavailable'} active-cell-days; ${cell?.coveredDays ?? 0}/${cell?.expectedDays ?? '?'} covered days${cell?.state === 'partial' ? `; available partial sum ${cell.observedSum ?? 'unknown'}` : ''}`}
+                                title={`${item}-${i + 1}: ${cell?.value ?? 'Unavailable'} active-cell-days; ${cell?.coveredDays ?? 0}/${cell?.expectedDays ?? '?'} covered days${cell?.state === 'partial' ? `; stored sum ${cell.observedSum ?? 'unknown'}` : ''}`}
                               >
                                 {cell?.value == null
-                                  ? '—'
+                                  ? '-'
                                   : Math.round(cell.value).toLocaleString()}
                               </button>
                             </td>
@@ -280,8 +385,8 @@ export function InvestigationScience({
               </div>
               <h3>{year} seasonal comparison</h3>
               <p className="area-analytics-footnote">
-                Selected year (solid), historical median (line), and interquartile range (band) ·
-                active-cell-days · leap day excluded
+                Selected year (solid), historical median (line), and interquartile range (band) -
+                active-cell-days - leap day excluded
               </p>
               <svg
                 viewBox="0 0 720 180"
@@ -315,7 +420,7 @@ export function InvestigationScience({
                       }}
                     >
                       <title>
-                        {monthName(item.month)} · {observed ?? 'Unavailable'} ·{' '}
+                        {monthName(item.month)} - {observed ?? 'Unavailable'} -{' '}
                         {b?.eligibleYears.length ?? 0} eligible historical years
                       </title>
                       {b?.q25 != null && b.q75 != null && (
@@ -356,16 +461,19 @@ export function InvestigationScience({
                 })}
               </svg>
               <h3>
-                Daily detail · {year}
+                Daily detail - {year}
                 {month ? `-${String(month).padStart(2, '0')}` : ''}
               </h3>
               {month != null && daily.some((day) => day.value != null) && (
-                <Button variant="outline" onClick={() => {
-                  const start = `${year}-${String(month).padStart(2, '0')}-01`
-                  const last = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10)
-                  const today = new Date().toISOString().slice(0, 10)
-                  openHistoricalPeriod(start, last < today ? last : today)
-                }}>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    const start = `${year}-${String(month).padStart(2, '0')}-01`
+                    const last = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10)
+                    const today = new Date().toISOString().slice(0, 10)
+                    openHistoricalPeriod(start, last < today ? last : today)
+                  }}
+                >
                   Inspect month observations
                 </Button>
               )}
@@ -374,11 +482,11 @@ export function InvestigationScience({
                   <button
                     key={day.date}
                     disabled={day.value == null}
-                    title={`${day.date} UTC · ${day.value ?? 'Unavailable'} harmonized active cells · ${day.coverage}`}
+                    title={`${day.date} UTC - ${day.value ?? 'Unavailable'} harmonized active cells${day.state === 'partial' ? '' : ` - ${day.coverage}`}`}
                     onClick={() => openHistoricalPeriod(day.date, day.date, day.date)}
                   >
                     {day.date.slice(5)}
-                    <strong>{day.value == null ? '—' : Math.round(day.value)}</strong>
+                    <strong>{day.value == null ? '-' : Math.round(day.value)}</strong>
                   </button>
                 ))}
               </div>
@@ -468,7 +576,7 @@ export function InvestigationScience({
                           <td>{row.date}</td>
                           <td>{row.aquaCells}</td>
                           <td>{row.viirsCells}</td>
-                          <td>{row.scaledAquaCells ?? '—'}</td>
+                          <td>{row.scaledAquaCells ?? '-'}</td>
                           <td>{row.commonCells}</td>
                         </tr>
                       ))}

@@ -47,7 +47,7 @@ export const MAP_BACKGROUND_OPTIONS: {
   },
   { value: 'dark-gray', label: 'Dark Gray', description: 'Quiet monochrome cartography' },
   { value: 'light-gray', label: 'Light Gray', description: 'Light monochrome cartography' },
-  { value: 'firefly', label: 'Firefly', description: 'Muted NASA imagery · Firefly-inspired' },
+  { value: 'firefly', label: 'Firefly', description: 'Muted NASA imagery - Firefly-inspired' },
   { value: 'blue-marble', label: 'Blue Marble', description: 'NASA Earth imagery' },
 ]
 
@@ -59,10 +59,10 @@ export const NASA_BLUE_MARBLE_URL =
   'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/BlueMarble_ShadedRelief_Bathymetry/default/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpeg'
 
 export const NASA_ATTRIBUTION =
-  '<a href="https://nasa-gibs.github.io/gibs-api-docs/" target="_blank" rel="noopener">NASA GIBS</a> · <a href="https://science.nasa.gov/earth/earth-observatory/blue-marble-next-generation/base-topography-bathymetry/" target="_blank" rel="noopener">Blue Marble / NASA Earth Observatory</a>'
+  '<a href="https://nasa-gibs.github.io/gibs-api-docs/" target="_blank" rel="noopener">NASA GIBS</a> - <a href="https://science.nasa.gov/earth/earth-observatory/blue-marble-next-generation/base-topography-bathymetry/" target="_blank" rel="noopener">Blue Marble / NASA Earth Observatory</a>'
 
 export const DETAIL_ATTRIBUTION =
-  '<a href="https://openfreemap.org/" target="_blank" rel="noopener">OpenFreeMap</a> · <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener">© OpenMapTiles</a> · <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap contributors</a> · <a href="https://www.naturalearthdata.com/about/terms-of-use/" target="_blank" rel="noopener">Natural Earth</a> · <a href="/map-data/STYLE-NOTICES.md" target="_blank" rel="noopener">Style credits</a>'
+  '<a href="https://openfreemap.org/" target="_blank" rel="noopener">OpenFreeMap</a> - <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener">© OpenMapTiles</a> - <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap contributors</a> - <a href="https://www.naturalearthdata.com/about/terms-of-use/" target="_blank" rel="noopener">Natural Earth</a> - <a href="https://github.com/openmaptiles/openmaptiles/blob/master/LICENSE.md" target="_blank" rel="noopener">Schema and cartography licenses</a>'
 
 export const DETAIL_LAYER_IDS = [
   'detail-land',

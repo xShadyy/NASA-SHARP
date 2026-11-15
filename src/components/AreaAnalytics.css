@@ -91,6 +91,37 @@
   outline: 2px solid var(--text);
   outline-offset: 2px;
 }
+.analytics-record-controls [aria-invalid='true'] {
+  border-color: #b91c1c;
+}
+.analytics-filter-validation,
+.analytics-global-scope-note {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.analytics-filter-validation ul {
+  margin: 6px 0 0;
+  padding-left: 20px;
+}
+.analytics-global-scope-note p {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.history-preparation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-block: 12px;
+}
+.history-preparation-actions span {
+  color: var(--muted);
+  font-size: 12px;
+}
 .analytics-record-link {
   color: var(--text);
   text-decoration: underline;
@@ -316,6 +347,12 @@
     visibility: visible;
   }
   .area-analytics {
+    --text: #111111;
+    --muted: #444444;
+    --surface: #ffffff;
+    --surface-soft: #f7f7f7;
+    --border: #cccccc;
+    color-scheme: light;
     position: absolute !important;
     inset: 0 !important;
     width: 100% !important;
@@ -358,6 +395,15 @@
   }
   .area-analytics-card {
     break-inside: avoid;
+    background: #ffffff !important;
+    color: #111111 !important;
+    box-shadow: none !important;
+  }
+  .area-analytics svg text {
+    fill: #111111 !important;
+  }
+  .area-analytics :is(p, strong, span, dt, dd, th, td, small, h1, h2, h3, summary) {
+    color: #111111 !important;
   }
 }
 .area-analytics-header {

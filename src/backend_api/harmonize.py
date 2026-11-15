@@ -1,18 +1,4 @@
-"""Harmonized daily burning activity for MODIS Aqua and VIIRS.
 
-Each value is a count of 2 km equal-area cells on the afternoon orbit.
-Aqua, Suomi NPP, NOAA-20, and NOAA-21 are kept. Terra is omitted because its
-morning orbit has no VIIRS counterpart across the record. Several detections
-in one cell count once, and several afternoon satellites on that cell still
-count once.
-
-On a day with stored VIIRS coverage the value is the VIIRS cell union. Aqua
-is not added on top. On an earlier Aqua day the value is the Aqua cell count
-times one scale: the median of daily VIIRS cells / Aqua cells on stored
-overlap days for the same area and filters. The scale uses the whole stored
-overlap, not only the dates in the request. Raw pixel counts are never added
-across sensors.
-"""
 
 from __future__ import annotations
 
@@ -123,7 +109,7 @@ class ActivityResult:
 
 
 def cell_id(longitude: float, latitude: float) -> tuple[int, int]:
-    """Equal-area cylindrical cell. Longitude is radians times Earth radius."""
+    
     x = EARTH_RADIUS_M * math.radians(longitude)
     y = EARTH_RADIUS_M * math.sin(math.radians(latitude))
     return math.floor(x / CELL_SIZE_M), math.floor(y / CELL_SIZE_M)
@@ -136,11 +122,7 @@ def _ring_closed(ring: list) -> list:
 
 
 def _unwrapped_ring(ring: list) -> list[tuple[float, float]]:
-    """Open the ring and remove 360 degree jumps between neighbouring vertices.
-
-    A ring that crosses the antimeridian becomes continuous in longitude. The
-    first vertex keeps its own longitude.
-    """
+    
     points = _ring_closed(ring)
     previous = points[0][0]
     unwrapped = [(float(previous), float(points[0][1]))]
@@ -151,11 +133,7 @@ def _unwrapped_ring(ring: list) -> list[tuple[float, float]]:
 
 
 class _RingIndex:
-    """Ring edges grouped into latitude bands.
-
-    A country boundary has tens of thousands of edges. A point is tested only
-    against the edges whose latitude range reaches its own latitude.
-    """
+    
 
     __slots__ = ("anchor", "south", "north", "height", "bands")
 
@@ -178,10 +156,10 @@ class _RingIndex:
         return max(0, min(len(self.bands) - 1, int((latitude - self.south) / self.height)))
 
     def locate(self, longitude: float, latitude: float) -> int:
-        """Return 1 inside the ring, 0 on it, and -1 outside."""
+        
         if latitude < self.south - EDGE_TOLERANCE or latitude > self.north + EDGE_TOLERANCE:
             return -1
-        # Bring the point to the ring's side of the antimeridian by whole turns.
+        
         longitude -= round((longitude - self.anchor) / 360) * 360
         inside = False
         for start_x, start_y, end_x, end_y in self.bands[self._band(latitude)]:
@@ -199,12 +177,7 @@ class _RingIndex:
 
 
 class PreparedArea:
-    """Point-in-area test for one analysis geometry.
-
-    A point on the outer boundary is inside. A point in a hole, or on a hole's
-    edge, is outside. Answers are remembered because every analysis endpoint
-    asks about the same detections.
-    """
+    
 
     __slots__ = ("polygons", "known")
 
@@ -215,6 +188,19 @@ class PreparedArea:
             groups = geometry["coordinates"]
         else:
             raise ValueError("Analysis geometry must be a Polygon or MultiPolygon.")
+        if not isinstance(groups, (list, tuple)) or not groups:
+            raise ValueError("Analysis geometry needs at least one polygon.")
+        for rings in groups:
+            if not isinstance(rings, (list, tuple)) or not rings:
+                raise ValueError("Analysis polygons need a closed outer ring.")
+            for ring in rings:
+                if not isinstance(ring, (list, tuple)) or len(ring) < 4 or ring[0] != ring[-1]:
+                    raise ValueError("Analysis polygon rings must be closed and contain at least four coordinates.")
+                for point in ring:
+                    if (not isinstance(point, (list, tuple)) or len(point) < 2
+                            or any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) for value in point[:2])
+                            or not -180 <= point[0] <= 180 or not -90 <= point[1] <= 90):
+                        raise ValueError("Analysis coordinates must be finite longitude/latitude values within -180..180 and -90..90.")
         self.polygons = [
             (_RingIndex(rings[0]), [_RingIndex(hole) for hole in rings[1:] if len(hole) >= 4])
             for rings in groups
@@ -244,7 +230,7 @@ _PREPARED_LOCK = threading.Lock()
 
 
 def prepared_area(geometry: dict) -> PreparedArea:
-    """Reuse one index per geometry across requests and threads."""
+    
     shape = json.dumps([geometry.get("type"), geometry.get("coordinates")], separators=(",", ":"))
     key = hashlib.sha256(shape.encode()).hexdigest()
     with _PREPARED_LOCK:
@@ -259,7 +245,7 @@ def prepared_area(geometry: dict) -> PreparedArea:
 
 
 def geometry_contains(longitude: float, latitude: float, geometry: dict) -> bool:
-    """Test one point. A loop over many points should call prepared_area once."""
+    
     return prepared_area(geometry).contains(longitude, latitude)
 
 
@@ -287,12 +273,7 @@ def _boxes_overlap(left: tuple[float, float, float, float], right: tuple[float, 
 
 
 def geometry_supports_area(support: dict, selected: dict) -> bool:
-    """Conservative whole-geometry support; never infer coverage from detections.
-
-    Exact registered geometries and contained rectangles are fast paths. For
-    irregular domains, crossing boundaries or an enclosed hole exclude support.
-    Boundary-touching irregular candidates may be excluded conservatively.
-    """
+    
     if support == selected:
         return True
     domain_box, selected_box = geometry_bbox(support), geometry_bbox(selected)
@@ -403,7 +384,7 @@ def coverage_from_rows(rows: tuple[Detection, ...] | list[Detection]) -> tuple[C
         if key in seen:
             continue
         seen.add(key)
-        coverage.append(Coverage(key[0], key[1], "complete"))
+        coverage.append(Coverage(key[0], key[1], "unknown"))
     return tuple(coverage)
 
 
@@ -438,7 +419,7 @@ def load_csv_store(detection_path: Path, coverage_path: Path | None = None) -> C
     rows = load_detection_csv(detection_path)
     if coverage_path is None:
         coverage = coverage_from_rows(rows)
-        source = f"Canonical CSV {detection_path.name}. Days with no row are unavailable."
+        source = f"Canonical CSV {detection_path.name}. Reporting coverage is unknown without an explicit coverage file."
     else:
         coverage = load_coverage_csv(coverage_path)
         source = f"Canonical CSV {detection_path.name} with coverage {coverage_path.name}."
@@ -484,7 +465,7 @@ def load_database_store(database_url: str, bbox: tuple[float, float, float, floa
     return CanonicalStore(
         tuple(rows),
         coverage_from_rows(rows),
-        "fire_detection. A platform-day is covered when the table has any row for it inside the area bounds.",
+        "fire_detection. Reporting coverage is unknown without an explicit platform-day coverage record.",
     )
 
 
@@ -743,7 +724,7 @@ def _aqua_day(state: str | None, cells: int, scale: float | None) -> tuple[float
 
 
 class RejectedQuery(ValueError):
-    """The analysis request does not match the harmonized contract."""
+    pass
 
 
 COMPANION_NOTE = (
@@ -1184,6 +1165,8 @@ def capabilities_payload(store: CanonicalStore, today: date | None = None) -> di
 
 
 def filters_from_query(payload: dict) -> Filters:
+    if not isinstance(payload, dict):
+        raise ValueError("Analysis filters must be an object.")
     platforms = payload.get("platforms")
     if not isinstance(platforms, list) or not platforms or not all(isinstance(item, str) for item in platforms):
         raise ValueError("Select at least one platform.")
@@ -1197,14 +1180,14 @@ def filters_from_query(payload: dict) -> Filters:
     if not isinstance(minimum, int) or isinstance(minimum, bool) or not 0 <= minimum <= 100:
         raise ValueError("MODIS confidence must be a native value from 0 to 100.")
     viirs = payload.get("viirsConfidence", ["low", "nominal", "high"])
-    if not isinstance(viirs, list) or any(item not in CONFIDENCE_RANK for item in viirs):
+    if not isinstance(viirs, list) or any(not isinstance(item, str) or item not in CONFIDENCE_RANK for item in viirs):
         raise ValueError("Choose native VIIRS confidence categories.")
     if any(platform in VIIRS_IDS for platform in platforms) and not viirs:
         raise ValueError("Select at least one native VIIRS confidence category.")
     frp_min = payload.get("frpMin")
     frp_max = payload.get("frpMax")
     for name, value in (("frpMin", frp_min), ("frpMax", frp_max)):
-        if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0):
+        if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0):
             raise ValueError(f"{name} must be a non-negative number of MW.")
     if frp_min is not None and frp_max is not None and frp_min > frp_max:
         raise ValueError("Minimum FRP cannot exceed maximum FRP.")

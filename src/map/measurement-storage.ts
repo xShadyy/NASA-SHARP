@@ -85,7 +85,7 @@ export function loadFinishedMeasurements(): { records: StoredMeasurement[]; fail
   }
 }
 
-/** Save the full collection. Storage quota failures never discard older records. */
+
 export function persistFinishedMeasurements(records: StoredMeasurement[]): boolean {
   try {
     localStorage.setItem(MEASUREMENT_STORAGE_KEY, JSON.stringify(records.map(clean)))

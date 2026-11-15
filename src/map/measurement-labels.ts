@@ -18,10 +18,10 @@ const SIZE_ZOOM_STOPS = [
   [18, 1.08],
 ] as const
 
-/** A shape's real ground span, rather than its selected display unit, controls
- * label prominence. The square root of area gives a comparable linear span.
- * Fade from roughly 10 to 40 nominal ground pixels, keeping local measurements
- * out of global views and hiding even continental labels at full-Earth scale. */
+
+
+
+
 export function measurementLabelScale(value: number, area: boolean): MeasurementLabelScale {
   const spanKm = Math.max(0.000_001, area ? Math.sqrt(Math.abs(value)) : Math.abs(value))
   const magnitude = Math.max(0, Math.min(4, Math.log10(spanKm)))
@@ -68,9 +68,9 @@ export function measurementLabelOpacity(scale: MeasurementLabelScale, zoom: numb
   )
 }
 
-/** Zoom must be the top-level interpolation input in MapLibre expressions.
- * Half-zoom stops let the same feature-dependent clamp fade smoothly in paint
- * and layout, without rewriting GeoJSON or using a render loop while zooming. */
+
+
+
 const zoomStops = Array.from({ length: 41 }, (_, index) => index / 2)
 export const measurementLabelSizeExpression: ExpressionSpecification = [
   'interpolate',

@@ -1,4 +1,4 @@
-"""Deterministic fixture coverage; no upstream data is downloaded by tests."""
+
 import asyncio
 import json
 import os
@@ -15,8 +15,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-# All application lifespans in this discovered suite intentionally disable the
-# independent real ingestion service. Tests below invoke refresh with MockTransport.
+
+
 os.environ["SHARP_GLOBAL_INGEST_ENABLED"] = "0"
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 

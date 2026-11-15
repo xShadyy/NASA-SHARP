@@ -1,8 +1,4 @@
-"""Complete canonical observation queries, bounded frozen membership and exports.
 
-Observation options are deliberately separate from the harmonized query filters.
-Tokens retain canonical membership, never a temporary map cluster identifier.
-"""
 from __future__ import annotations
 
 import csv
@@ -39,20 +35,29 @@ _snapshots: OrderedDict = OrderedDict()
 
 
 class SelectionInvalid(RejectedQuery):
-    """A frozen investigation needs an explicit refresh from the map."""
+    
+
+    def __init__(self, message, code="selection-invalid", current=None, expected=None):
+        super().__init__(message)
+        self.code = code
+        self.action = "refresh-selected-group"
+        self.recoverable = False
+        self.current_generation = current
+        self.expected_generation = expected
 
 
 class SourceUnavailable(SelectionInvalid):
     def __init__(self, message, expected=None, current=None, recoverable=True):
         super().__init__(message)
         self.code = "analysis-source-unavailable"
+        self.action = "refresh-investigation"
         self.expected_generation = expected
         self.current_generation = current
         self.recoverable = recoverable
 
 
 def freshness_metadata(store: CanonicalStore, now: float | None = None) -> dict:
-    """Publication cannot reset the retrieval age of a failed source."""
+    
     now = time.time() if now is None else now
     states = []
     for state in store.source_states:
@@ -83,23 +88,25 @@ def scope_key(query: dict) -> str:
 
 
 def source_generation(store: CanonicalStore) -> str:
-    """Changes include canonical metadata and coverage, but not cache-read time."""
+    
     if store.generation:
         return store.generation
-    key = (id(store.rows), id(store.coverage), store.source)
+    geometry = json.dumps(store.coverage_geometry, sort_keys=True, separators=(",", ":"))
+    key = (id(store.rows), id(store.coverage), store.source, geometry)
     with _lock:
         remembered = _generations.get(key)
         if remembered is not None:
             _generations.move_to_end(key)
             return remembered[0]
     digest = hashlib.sha256(store.source.encode())
+    digest.update(geometry.encode())
     for row in store.rows:
         digest.update(repr(row).encode())
     for record in store.coverage:
         digest.update(repr(record).encode())
     generation = digest.hexdigest()
     with _lock:
-        # Retaining tuples prevents Python object ID reuse.
+        
         if len(store.rows) <= MAX_RETAINED_MEMBERS:
             _generations[key] = (generation, store.rows, store.coverage)
         while len(_generations) > 4:
@@ -108,7 +115,7 @@ def source_generation(store: CanonicalStore) -> str:
 
 
 def remember_snapshot(query: dict, store: CanonicalStore) -> CanonicalStore:
-    """Map/summary work makes its existing source available without acquisition."""
+    
     store = scoped_snapshot(query, store)
     generation = source_generation(store)
     with _lock:
@@ -121,7 +128,7 @@ def remember_snapshot(query: dict, store: CanonicalStore) -> CanonicalStore:
 
 
 def scoped_snapshot(query: dict, store: CanonicalStore) -> CanonicalStore:
-    """Retain query members and fitted calibration, never unrelated archive rows."""
+    
     result, filters, start, end, _updated = evaluate_query(query, store)
     rows = tuple(kept_detections(query, store, filters, start, end))
     if len(rows) > MAX_RETAINED_MEMBERS:
@@ -141,7 +148,7 @@ def has_snapshot(query: dict) -> bool:
 
 
 def cached_snapshot(query: dict, options: dict) -> CanonicalStore:
-    """Never acquire FIRMS observations from a popup or frozen investigation."""
+    
     with _lock:
         snapshot = _snapshots.get(scope_key(query))
         token = options.get("selectionToken")
@@ -175,12 +182,15 @@ def _selection(query: dict, token: str) -> FrozenSelection:
         raise SelectionInvalid("The selected group token is invalid. Select the group again on the map.")
     with _lock:
         selection = _selections.get(token)
-        if selection is None or time.monotonic() - selection.created > SELECTION_TTL:
+        if selection is None or time.monotonic() - selection.created >= SELECTION_TTL:
             _selections.pop(token, None)
-            raise SelectionInvalid("The selected group expired. Select it again on the map.")
+            raise SelectionInvalid("The selected group expired after 30 minutes or was evicted. Select it again on the map.", "selection-expired")
         if selection.scope != scope_key(query):
-            raise SelectionInvalid("This selected group belongs to a different region or interval. Return to the whole area or select the group again.")
-        selection.created = time.monotonic()
+            raise SelectionInvalid("This selected group belongs to a different region or interval. Return to the whole area or select the group again.", "selection-scope-mismatch")
+        current = _snapshots.get(selection.scope)
+        if current is not None and current[0] != selection.generation:
+            _selections.pop(token, None)
+            raise SelectionInvalid("The observation source changed. Refresh the selected group from the map.", "selection-source-changed", current[0], selection.generation)
         _selections.move_to_end(token)
         return selection
 
@@ -239,13 +249,15 @@ def freeze_document(query: dict, store: CanonicalStore, body: dict) -> dict:
         members = frozenset(selected_ids) | (old.ids if old else frozenset())
         if len(members) > MAX_SELECTION_IDS:
             raise RejectedQuery(f"Frozen groups support at most {MAX_SELECTION_IDS:,} observations; no records were truncated.")
-        _selections[token] = FrozenSelection(scope_key(query), generation, members, store, time.monotonic())
+        created = old.created if old is not None else time.monotonic()
+        _selections[token] = FrozenSelection(scope_key(query), generation, members, store, created)
         _selections.move_to_end(token)
         while (len(_selections) > MAX_SELECTIONS
             or sum(len(item.ids) for item in _selections.values()) > MAX_RETAINED_MEMBERS
             or sum(len(item.rows) for item in {id(value.store): value.store for value in _selections.values()}.values()) > MAX_RETAINED_MEMBERS):
             _selections.popitem(last=False)
-    return {"data": {"selectionToken": token, "total": len(members), "sourceGeneration": generation},
+    expires = datetime.fromtimestamp(time.time() + max(0, SELECTION_TTL - (time.monotonic() - created)), UTC).isoformat().replace("+00:00", "Z")
+    return {"data": {"selectionToken": token, "total": len(members), "sourceGeneration": generation, "expiresAt": expires},
         "meta": _meta(query["id"], result, updated, {"time": "UTC"})}
 
 
@@ -327,7 +339,7 @@ def _matching(rows: list[Detection], store: CanonicalStore, options: dict) -> li
             continue
         if frp_end is not None and (row.frp_mw is None or row.frp_mw >= frp_end):
             continue
-        # Selecting a native confidence condition selects that sensor explicitly.
+        
         if confidence_min is not None or confidence_max is not None or options.get("modisConfidenceUnknown"):
             if not modis:
                 continue
@@ -440,7 +452,7 @@ def query_rows(query: dict, store: CanonicalStore, body: dict | None = None):
         return ((-1 if sort == "newest" else 1) * row.acquired_at.timestamp(), detection_id(row))
     rows.sort(key=sort_key)
     if grouping != "none":
-        # Group the full result before taking a page. Each group keeps global sort.
+        
         rows.sort(key=lambda row: _group(row, grouping)[0], reverse=grouping != "satellite" and sort != "oldest")
     groups = defaultdict(list)
     if grouping != "none":
@@ -467,11 +479,13 @@ def query_rows(query: dict, store: CanonicalStore, body: dict | None = None):
         "frpReported": len(powers), "latest": observation_record(max(rows, key=lambda row: (row.acquired_at, detection_id(row))), store) if rows else None,
         "highestFrp": observation_record(max((row for row in rows if row.frp_mw is not None), key=lambda row: (row.frp_mw, detection_id(row))), store) if powers else None,
         "topCells": [{"label": f"{lon}–{lon+2}°, {lat}–{lat+2}°", "longitude": lon+1, "latitude": lat+1, "count": count} for (lon, lat), count in sorted(cells.items(), key=lambda item: (-item[1], item[0]))[:10]]}
+    selection_remaining = max(0, math.ceil(SELECTION_TTL - (time.monotonic() - _selection(query, token).created))) if token else None
     meta = {**_meta(query["id"], result, updated, {"count": "satellite observations", "frp": "MW", "time": "UTC"},
         completeness=reporting.get(focused, "unavailable") if focused else _overall(list(reporting.values())), extra_notes=(COMPANION_NOTE,)),
         "sourceGeneration": source_generation(store), "source": store.source,
         "fetchedAt": datetime.fromtimestamp(store.fetched_at, UTC).isoformat().replace("+00:00", "Z") if store.fetched_at else None,
-        "selectionToken": token, "selectionExpiresInSeconds": SELECTION_TTL if token else None,
+        "selectionToken": token, "selectionExpiresInSeconds": selection_remaining,
+        "selectionExpiresAt": datetime.fromtimestamp(time.time() + selection_remaining, UTC).isoformat().replace("+00:00", "Z") if token else None,
         "generatedAt": updated, "newestObservationAt": summary["latestAcquisition"],
         "expiresAt": datetime.fromtimestamp(store.expires_at, UTC).isoformat().replace("+00:00", "Z") if store.expires_at else None,
         "freshness": "archived" if store.source.startswith("Regional archive ") else "unknown" if store.fetched_at is None else "fresh" if store.expires_at is not None and store.expires_at > time.time() else "stale"}
@@ -523,7 +537,7 @@ def export_document(query: dict, store: CanonicalStore, body: dict) -> Streaming
                 confidence = record["confidence"]
                 record.update(confidenceKind=confidence["kind"], confidenceValue=confidence["value"], confidenceNativeValue=confidence.get("nativeValue"), confidenceUnit=confidence.get("unit"), queryId=query["id"], sourceGeneration=meta["sourceGeneration"])
                 record.update(areaId=reproducibility.get("area", {}).get("id"), areaName=reproducibility.get("area", {}).get("name"), queryStartUtc=query["interval"]["start"], queryEndExclusiveUtc=query["interval"]["endExclusive"], methodVersion=METHOD_VERSION, selectionToken=_options(body).get("selectionToken"), observationFiltersJson=json.dumps(_options(body), separators=(",", ":")), completeness=meta.get("completeness"), fetchedAt=meta.get("fetchedAt"))
-                # Prevent a source/product string from becoming a spreadsheet formula.
+                
                 for key, value in record.items():
                     if isinstance(value, str) and value.startswith(("=", "+", "-", "@", "\t", "\r")):
                         record[key] = "'" + value

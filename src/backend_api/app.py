@@ -1,4 +1,4 @@
-"""Serve NASA FIRMS MODIS and VIIRS active-fire detections as GeoJSON."""
+
 
 import asyncio
 import csv
@@ -20,7 +20,7 @@ from decimal import Decimal
 from enum import Enum
 from pathlib import Path
 from typing import Annotated, Literal
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -87,7 +87,7 @@ NETHERLANDS_EUROPE_GEOMETRY = {
     ]],
 }
 NETHERLANDS_EUROPE_BOUNDS = "3.315,50.8037,7.0921,53.5104"
-# The upstream API places the credential in the URL.
+
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
@@ -137,7 +137,7 @@ LIVE_SOURCES = [Source.MODIS_NRT, Source.VIIRS_NOAA20_NRT, Source.VIIRS_NOAA21_N
 
 
 class FIRMSFailure(Exception):
-    """A sanitized upstream error safe to return to the caller."""
+    pass
 
 
 @asynccontextmanager
@@ -177,9 +177,30 @@ async def lifespan(app: FastAPI):
             if pending_fetches:
                 await asyncio.gather(*pending_fetches, return_exceptions=True)
 app = FastAPI(title="FIRMS Hotspots", lifespan=lifespan)
+
+
+def cors_origins(value=None):
+    configured = os.environ.get("SHARP_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173") if value is None else value
+    origins = []
+    for origin in configured.split(","):
+        origin = origin.strip().rstrip("/")
+        if not origin:
+            continue
+        parsed = urlsplit(origin)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment or "*" in origin or any(character.isspace() for character in origin):
+            raise ValueError("SHARP_CORS_ORIGINS requires comma-separated exact HTTP(S) origins.")
+        try:
+            parsed.port
+        except ValueError as exc:
+            raise ValueError("SHARP_CORS_ORIGINS contains an invalid port.") from exc
+        if origin not in origins:
+            origins.append(origin)
+    return origins
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins(),
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
@@ -236,7 +257,7 @@ async def fetch_csv(app: FastAPI, path: str, started: asyncio.Event | None = Non
 def csv_rows(text: str, required: set[str]) -> csv.DictReader:
     rows = csv.DictReader(io.StringIO(text, newline=""), strict=True)
     if not required.issubset(rows.fieldnames or []):
-        # FIRMS can return an error message as text with HTTP 200.
+        
         raise FIRMSFailure("FIRMS did not return the expected CSV. Check your map key, quota and product dates.")
     return rows
 
@@ -370,7 +391,7 @@ def parse_features(text: str, source: Source) -> list[dict]:
             else:
                 confidence = None
 
-            # Drop identical rows within this product and keep separate satellite observations.
+            
             if None in row or any(value is None for value in row.values()):
                 raise ValueError("Incomplete CSV row")
             row_key = tuple(row.items())
@@ -408,7 +429,9 @@ def parse_features(text: str, source: Source) -> list[dict]:
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "implementation": "sharp-backend-2",
+            "mapSource": {"representation": "individuals-or-bounded-display-aggregates",
+                          "individualLimit": 100_000, "aggregateLimit": 25_000}}
 
 
 @app.get("/availability")
@@ -447,7 +470,7 @@ async def fetch_and_cache_batch(
     text = await fetch_csv(app, path, started)
     fetched = clock.time()
     features = await asyncio.to_thread(parse_features, text, product)
-    # Keep a rolling-day request made across midnight out of the wrong cache entry.
+    
     if any(feature["properties"]["acquired_at"][:10] != day.isoformat() for feature in features):
         raise FIRMSFailure("FIRMS returned data outside the requested UTC day; retry the query.")
     if day == today and datetime.fromtimestamp(fetched, UTC).date() != today:
@@ -1095,7 +1118,7 @@ def analysis_acquisition_boxes(geometry: dict, limit=8) -> list[str]:
 
 
 def stored_global_aoi(app, query, bbox):
-    """Reuse durable source/day reporting partitions; never performs acquisition."""
+    
     global_store = getattr(app.state, "global_store", None)
     if global_store is None:
         return None
@@ -1108,8 +1131,8 @@ def stored_global_aoi(app, query, bbox):
         anchor = datetime.fromisoformat(selected_window.get("endUtcExclusive", "").replace("Z", "+00:00"))
         available_start = datetime.fromisoformat(selected_window.get("startUtc", "").replace("Z", "+00:00"))
         current_day_end = datetime.combine(anchor.date() + timedelta(days=1), time.min, UTC)
-        # Analytical UTC days belong to immutable source partitions; the rolling
-        # presentation's first partial day is not their acquisition boundary.
+        
+        
         if not manifest.get("snapshot") or not lower < upper <= current_day_end:
             return None
         stored = global_store.canonical_store(manifest["snapshot"], "7d", bbox, {"platforms": acquisition_platforms(query)}, max_rows=MAX_CANONICAL_ACQUISITION_ROWS, interval=(lower, upper), geometry=query["aoi"]["geometry"])
@@ -1421,23 +1444,28 @@ async def analysis_document(request: Request, build):
         body = {}
     query = body.get("query")
     geometry = query.get("aoi", {}).get("geometry") if isinstance(query, dict) and isinstance(query.get("aoi"), dict) else None
-    bbox = geometry_bbox(geometry) if isinstance(geometry, dict) else None
     try:
         if not isinstance(query, dict):
             raise RejectedQuery("Analysis query identity is required.")
+        from scientific_routes import validate_query
+        try:
+            validate_query(body)
+            bbox = geometry_bbox(geometry)
+        except (ValueError, KeyError, TypeError) as exc:
+            raise RejectedQuery(str(exc)) from exc
         options = body.get("options") if isinstance(body.get("options"), dict) else {}
         selected_membership = bool(options.get("selectionToken")) or bool(options.get("observationIds")) or request.url.path == "/analysis/selections"
         source_recovery = None
-        # Interaction with an already investigated source must not turn expiry
-        # into a new FIRMS acquisition. Refreshing the map is explicit.
+        
+        
         interaction = request.url.path in {"/analysis/observations", "/analysis/observation", "/analysis/observations/export", "/analysis/method", "/analysis/recurrence"}
         recovery_requested = body.get("recoverSource") is True and interaction and not selected_membership
         frozen_request = selected_membership or bool(options.get("sourceGeneration")) or interaction
         if frozen_request:
-            # Historical day/month navigation can legitimately change the scope
-            # while retaining its exact archive generation. This local-only
-            # reader validates registered geometry, dates and generation and
-            # never replaces an expired frozen group or acquires NASA records.
+            
+            
+            
+            
             from scientific_routes import stored_diagnostic_snapshot
             lookup_options = options
             display_filters = options.get("displayFilters")
@@ -1526,7 +1554,7 @@ async def analysis_document(request: Request, build):
             metadata["freshness"] = "archived"
         return document
     except SelectionInvalid as exc:
-        return JSONResponse({"message": str(exc), "code": getattr(exc, "code", "selection-invalid"),
+        return JSONResponse({"message": str(exc), "code": getattr(exc, "code", "selection-invalid"), "action": getattr(exc, "action", None),
                              "recoverable": getattr(exc, "recoverable", False),
                              "sourceGeneration": getattr(exc, "current_generation", None),
                              "expectedSourceGeneration": getattr(exc, "expected_generation", None)}, status_code=409)

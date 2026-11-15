@@ -241,7 +241,7 @@ export function DestinationSearch({ onSelect }: DestinationSearchProps) {
                   <span>{location.name}</span>
                   <span className="destination-result-detail">
                     {location.description ||
-                      `${location.kind === 'coordinates' ? 'Latitude, longitude' : location.kind[0].toUpperCase() + location.kind.slice(1)} · ${formatCoordinates(location.coordinates)}`}
+                      `${location.kind === 'coordinates' ? 'Latitude, longitude' : location.kind[0].toUpperCase() + location.kind.slice(1)} - ${formatCoordinates(location.coordinates)}`}
                   </span>
                 </span>
               </CommandItem>
@@ -300,7 +300,7 @@ export function CurrentLocationButton({ onSelect, className = '' }: CurrentLocat
     if (pending.current) return
     setMessage('')
     if (!window.isSecureContext) {
-      setMessage('Current location requires HTTPS or localhost.')
+      setMessage('Current location requires a secure HTTPS connection.')
       return
     }
     if (!navigator.geolocation) {

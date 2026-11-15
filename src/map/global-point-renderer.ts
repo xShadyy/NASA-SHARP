@@ -58,14 +58,14 @@ function validTile(tile: Tile | undefined): tile is Tile {
   )
 }
 
-/** One uploaded position per observation. Tile-local coordinates retain close-zoom precision. */
+
 export function prepareGlobalPointBatches(features: readonly QueriedPoint[], fallbackZoom = 0) {
   const started = performance.now()
   const unique = new Map<string | number, QueriedPoint>()
   for (const feature of features) {
     if (feature.id === undefined || feature.id === null) continue
     const previous = unique.get(feature.id)
-    // Prefer the most precise loaded child when parent tiles temporarily coexist.
+    
     if (!previous || (feature.tile?.z ?? -1) > (previous.tile?.z ?? -1))
       unique.set(feature.id, feature)
   }
@@ -74,8 +74,8 @@ export function prepareGlobalPointBatches(features: readonly QueriedPoint[], fal
   for (const feature of unique.values()) {
     const geometry = feature.geometry
     if (geometry?.type !== 'Point' && geometry?.type !== 'MultiPoint') continue
-    // Dateline MultiPoint members are copies of this same immutable observation.
-    // World wrapping below supplies the appropriate visible map copies.
+    
+    
     const coordinate = geometry.type === 'Point' ? geometry.coordinates : geometry.coordinates[0]
     if (!coordinate) continue
     const [longitude, latitude] = coordinate
@@ -187,11 +187,11 @@ void main() { fragColor = vec4(1.0, 0.0, 0.0, 1.0); }`,
   }
 }
 
-/**
- * Native source tiles remain managed by MapLibre. This layer draws their queried
- * positions with GL_POINTS, bypassing label placement, icon quads and collision
- * structures. Camera frames update only projection uniforms, never point arrays.
- */
+
+
+
+
+
 export function createGlobalPointRenderer(
   options: {
     id?: string
@@ -243,7 +243,7 @@ export function createGlobalPointRenderer(
     map?.triggerRepaint()
   }
   function contextLost() {
-    // Lost-context object handles must not be reused after restoration.
+    
     gpu = []
     programs.clear()
     pendingUpload = true
@@ -367,8 +367,8 @@ export function createGlobalPointRenderer(
     },
     setFeatures(features) {
       const prepared = prepareGlobalPointBatches(features, map?.getZoom() ?? 0)
-      // Source-idle notifications can repeat an identical loaded tile set.
-      // Keep the uploaded buffers and completed frame revision in that case.
+      
+      
       if (hasData && !failed && sameBatches(batches, prepared.batches)) return { ...stats }
       hasData = true
       batches = prepared.batches

@@ -65,7 +65,7 @@ export type ObservationDay = { date: string; count: number | null; coverage: str
 export function fullIntervalObservationScope(scope: InvestigationScope): InvestigationScope {
   return { ...scope, focusedDay: null, filters: { ...scope.filters, day: undefined } }
 }
-/** Reporting coverage, rather than hotspot presence, determines reported zeroes. */
+
 export function observationDays(
   page: ObservationPage,
   scope: InvestigationScope,
@@ -103,6 +103,7 @@ export function scopeObservationOptions(
     day: scope.focusedDay ?? scope.filters.day,
     sourceGeneration: scope.selection?.sourceGeneration ?? scope.metadata?.sourceGeneration,
     selectionToken: scope.selection?.selectionToken,
+    observationIds: scope.selection?.selectionToken ? undefined : scope.selection?.observationIds,
     page,
     pageSize,
     sort,
@@ -197,11 +198,17 @@ export function canonicalToHotspot(row: CanonicalObservation): HotspotDetection 
   }
 }
 
-/** Adapter preserves the established cards and charts using complete server summaries. */
+
 export function canonicalDashboard(
   page: ObservationPage,
   scope: InvestigationScope,
-): HotspotResponse {
+): HotspotResponse | null {
+  if (
+    page.data.total === 0 &&
+    page.meta.completeness !== 'complete' &&
+    !(page.data.summary.selectedCount > 0 || page.data.summary.wholeAreaCount > 0)
+  )
+    return null
   const { summary } = page.data
   const facets = summary.facets ?? {}
   const stats = summary.statistics

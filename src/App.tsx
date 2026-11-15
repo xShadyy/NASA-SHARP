@@ -42,7 +42,6 @@ import { AreaAnalytics } from '@/components/AreaAnalytics'
 import { AnalysisPanel } from '@/components/AnalysisPanel'
 import { analysisReducer, initialAnalysisState } from '@/lib/analysis-state'
 import {
-  utcToday,
   focusRange,
   rangePreset,
   MAX_ANALYSIS_DAYS,
@@ -459,9 +458,7 @@ function App() {
   const mapFocusedDay = compatibleMapHighlight?.focusedDay ?? analysisFocusedDay
   const fires = useAnalysisFires(analysis.confirmed, analysisRange, mapFocusedDay, {
     filters: compatibleMapHighlight?.filters ?? mapFilters,
-    selection: compatibleMapHighlight
-      ? compatibleMapHighlight.selection
-      : mapSelection?.selection,
+    selection: compatibleMapHighlight ? compatibleMapHighlight.selection : mapSelection?.selection,
   })
   const [analyticsScope, setAnalyticsScope] = useState<InvestigationScope | null>(null)
   const [globalMapScope, setGlobalMapScope] = useState<InvestigationScope | null>(null)
@@ -539,7 +536,7 @@ function App() {
     } else transferred = globalMapScope ?? latestGlobalScope
     setAnalyticsScope(transferred ? structuredClone(transferred) : null)
     setAnalyticsSnapshot(undefined)
-    // A brief image is captured only after explicitly applying and checking its source version.
+    
     snapshotRequest.current++
     setAnalyticsTab('analytics')
     setActiveNav('Area Analytics')
@@ -560,6 +557,22 @@ function App() {
       )
     }
     setAnalyticsTab('map')
+  }
+  function refreshAnalyticsSelection() {
+    if (analyticsScope?.selection?.global) {
+      const refreshed = mapRef.current?.refreshGlobalObservations()
+      setGlobalMapScope(null)
+      setHighlightScope(null)
+      setAnalyticsSnapshot(undefined)
+      const requestId = ++snapshotRequest.current
+      void refreshed
+        ?.then((scope) => {
+          setLatestGlobalScope(scope)
+          if (snapshotRequest.current === requestId) setAnalyticsScope(scope)
+        })
+        .catch(() => undefined)
+    }
+    setActiveNav('Saved locations')
   }
   async function captureAnalyticsScope(scope: InvestigationScope) {
     const requestId = ++snapshotRequest.current
@@ -585,35 +598,32 @@ function App() {
     setAnalyticsSnapshot({ url, scopeKey: investigationKey(scope) })
     setAnalyticsTab('analytics')
   }
-  const fireQuery = useMemo(
-    () => {
-      const selectedQuery = compatibleMapHighlight
-        ? compatibleMapHighlight.selection?.query
-        : mapSelectionCurrent
-          ? mapSelection?.selection.query
-          : undefined
-      return (
-        selectedQuery ??
-        (analysis.confirmed
-          ? createInvestigation(
-              analysis.confirmed,
-              (Date.parse(analysisRange.end) - Date.parse(analysisRange.start)) / 86_400_000 >=
-                MAX_ANALYSIS_DAYS && mapFocusedDay
-                ? focusRange(analysisRange, mapFocusedDay)
-                : analysisRange,
-            ).query
-          : null)
-      )
-    },
-    [
-      analysis.confirmed,
-      analysisRange,
-      mapFocusedDay,
-      compatibleMapHighlight,
-      mapSelectionCurrent,
-      mapSelection,
-    ],
-  )
+  const fireQuery = useMemo(() => {
+    const selectedQuery = compatibleMapHighlight
+      ? compatibleMapHighlight.selection?.query
+      : mapSelectionCurrent
+        ? mapSelection?.selection.query
+        : undefined
+    return (
+      selectedQuery ??
+      (analysis.confirmed
+        ? createInvestigation(
+            analysis.confirmed,
+            (Date.parse(analysisRange.end) - Date.parse(analysisRange.start)) / 86_400_000 >=
+              MAX_ANALYSIS_DAYS && mapFocusedDay
+              ? focusRange(analysisRange, mapFocusedDay)
+              : analysisRange,
+          ).query
+        : null)
+    )
+  }, [
+    analysis.confirmed,
+    analysisRange,
+    mapFocusedDay,
+    compatibleMapHighlight,
+    mapSelectionCurrent,
+    mapSelection,
+  ])
   const countrySelection = useAnalysisCountrySelection(analysisOpen, analysis, dispatchAnalysis)
   const diagnosticQuery = useMemo(
     () =>
@@ -1127,6 +1137,7 @@ function App() {
                   fireStatus={fires.status}
                   fireCount={fires.count}
                   fireMessage={fires.message}
+                  onRetryFires={fires.retry}
                   onOpenAnalytics={() => openAnalytics()}
                 />
               )}
@@ -1138,11 +1149,7 @@ function App() {
                 }
                 data-capture-selecting={selectingCapture || undefined}
                 data-investigation-layout={
-                  areaAnalyticsOpen
-                    ? analyticsMobile
-                      ? 'mobile'
-                      : 'split'
-                    : undefined
+                  areaAnalyticsOpen ? (analyticsMobile ? 'mobile' : 'split') : undefined
                 }
                 data-investigation-tab={analyticsTab}
                 style={{ '--map-share': `${mapShare}%` } as CSSProperties}
@@ -1173,9 +1180,7 @@ function App() {
                 )}
                 <div
                   className="map-workspace"
-                  inert={
-                    areaAnalyticsOpen && analyticsMobile && analyticsTab !== 'map'
-                  }
+                  inert={areaAnalyticsOpen && analyticsMobile && analyticsTab !== 'map'}
                 >
                   <Suspense
                     fallback={
@@ -1418,7 +1423,7 @@ function App() {
                   <div className="map-investigation-selection">
                     <span>
                       {mapSelectionCurrent
-                        ? `Selected group · ${mapSelection.selection.observationIds?.length ?? 0} observations`
+                        ? `Selected group - ${mapSelection.selection.observationIds?.length ?? 0} observations`
                         : 'Source changed. Select the group again to refresh its membership.'}
                     </span>
                     <Button
@@ -1494,6 +1499,9 @@ function App() {
                         onHighlight={setHighlightScope}
                         snapshot={analyticsSnapshot}
                         onCapture={captureAnalyticsScope}
+                        onChooseArea={() => setActiveNav('Burning Activity Calendar')}
+                        onRefreshSelection={refreshAnalyticsSelection}
+                        onScopeChange={setAnalyticsScope}
                         onClose={() => setActiveNav('Saved locations')}
                       />
                     </div>

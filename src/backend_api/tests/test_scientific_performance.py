@@ -1,4 +1,4 @@
-"""Repeatable local synthetic-fixture timings, never scientific validation."""
+
 import json
 import sys
 import tempfile
@@ -42,8 +42,8 @@ class ScientificPerformanceTests(unittest.TestCase):
             for _ in range(30):
                 outlook_document(selected, archive=fixture, now=datetime(2025, 1, 1, tzinfo=UTC), model_path=model_path)
             results["cachedForecastServingMeanMs"] = round((time.perf_counter() - started) * 1000 / 30, 3)
-        # Unit tests exercise the bounded pipeline but never modify tracked
-        # benchmark artifacts. Explicit tools commands own published reports.
+        
+        
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "benchmark-scientific-results.json"
             output.write_text(json.dumps(results, indent=2), encoding="utf-8")

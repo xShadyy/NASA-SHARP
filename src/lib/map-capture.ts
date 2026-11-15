@@ -18,7 +18,8 @@ export type CaptureResult = {
 
 export type CaptureRegion = { x: number; y: number; width: number; height: number }
 
-const BASE_CREDITS = 'OpenFreeMap · © OpenMapTiles · © OpenStreetMap contributors · Natural Earth'
+const BASE_CREDITS =
+  'NASA FIRMS active-fire observations (MODIS/VIIRS) - OpenFreeMap - © OpenMapTiles - © OpenStreetMap contributors - Natural Earth'
 
 function clampRegion(map: MapLibreMap, requested?: CaptureRegion | null): CaptureRegion {
   const width = map.getContainer().clientWidth
@@ -268,7 +269,7 @@ function annotate(
   const overlayCredits = container.dataset.overlayCredits?.split(' | ').filter(Boolean) ?? []
   const credits = [
     BASE_CREDITS,
-    ...(nasaVisible ? ['NASA GIBS · Blue Marble / NASA Earth Observatory'] : []),
+    ...(nasaVisible ? ['NASA GIBS - Blue Marble / NASA Earth Observatory'] : []),
     ...overlayCredits,
     ...(container.dataset.analysisCredits ? [container.dataset.analysisCredits] : []),
     ...(map.getZoom() >= 4 &&
@@ -280,7 +281,7 @@ function annotate(
     ...(map.getLayer('context-volcanoes') &&
     map.getLayoutProperty('context-volcanoes', 'visibility') !== 'none' &&
     map.getSource(VOLCANO_SOURCE)
-      ? ['Smithsonian / GVP · Volcanoes of the World v5.4.0 (Venzke, 2026)']
+      ? ['Smithsonian / GVP - Volcanoes of the World v5.4.0 (Venzke, 2026)']
       : []),
     ...(includeSkyCredit ? [SKY_BACKGROUND_CAPTURE_CREDIT] : []),
   ].flatMap((credit) => wrappedLines(context, credit, Math.max(12, width - padding * 2)))

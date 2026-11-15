@@ -1,9 +1,4 @@
-"""Read-only local native-point serving benchmark; never fetches or imports data.
 
-Usage: python tools/benchmark-analysis-acquisition.py --global-points --database PATH [--window 24h]
-Results go to stdout unless --output is explicitly supplied. The database is
-opened with mode=ro; construction bypasses GlobalStore's schema initializer.
-"""
 from __future__ import annotations
 
 import argparse
@@ -62,9 +57,9 @@ def run(database, window="24h", viewers=100):
     result["concurrentWarmReaders"] = {"readers": viewers, "wallMs": round((time.perf_counter() - started) * 1000, 3),
                                         "consistentCount": len(set(records)) == 1}
     result["cache"] = point_cache_statistics()
-    # Allocation tracing magnifies this small-per-record encoder's CPU cost.
-    # Measure it separately, rebuilding exactly the same tile without evicting
-    # the immutable warm-cache sample or mislabeling traced time as serving time.
+    
+    
+    
     _manifest, _snapshot, source, clauses, parameters, _filters, _interval = service._base(snapshot, window)
     tracemalloc.start()
     started = time.perf_counter()

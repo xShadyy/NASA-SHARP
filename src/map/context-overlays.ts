@@ -6,13 +6,13 @@ const PHOSPHOR_MOUNTAINS_PATH =
 
 export const VOLCANO_SOURCE = 'smithsonian-holocene-volcanoes'
 export const VOLCANO_ATTRIBUTION =
-  '<a href="https://doi.org/10.5479/si.GVP.VOTW5-2026.5.4" target="_blank" rel="noopener">Global Volcanism Program / Smithsonian Institution · Volcanoes of the World v5.4.0</a>'
+  '<a href="https://doi.org/10.5479/si.GVP.VOTW5-2026.5.4" target="_blank" rel="noopener">Global Volcanism Program / Smithsonian Institution - Volcanoes of the World v5.4.0</a>'
 export const WDPA_SOURCE = 'unep-wcmc-wdpa-protected-areas'
 export const WDPA_SERVICE =
   'https://data-gis.unep-wcmc.org/server/rest/services/ProtectedSites/The_World_Database_of_Protected_Areas/MapServer'
-export const WDPA_RELEASE = 'October 2026'
-export const WDPA_ATTRIBUTION = `<a href="https://www.protectedplanet.net/" target="_blank" rel="noopener">UNEP-WCMC and IUCN (2026), Protected Planet: WDPCA · protected areas only (${WDPA_RELEASE})</a>`
-export const WDPA_CAPTURE_CREDIT = `UNEP-WCMC and IUCN (2026), Protected Planet: The World Database on Protected and Conserved Areas (WDPCA) [On-line], [${WDPA_RELEASE}], Cambridge, UK: UNEP-WCMC and IUCN · protectedplanet.net`
+export const WDPA_RELEASE = 'November 2026'
+export const WDPA_ATTRIBUTION = `<a href="https://www.protectedplanet.net/" target="_blank" rel="noopener">UNEP-WCMC and IUCN (2026), Protected Planet: WDPCA - protected areas only (${WDPA_RELEASE})</a>`
+export const WDPA_CAPTURE_CREDIT = `UNEP-WCMC and IUCN (2026), Protected Planet: The World Database on Protected and Conserved Areas (WDPCA) [On-line], [${WDPA_RELEASE}], Cambridge, UK: UNEP-WCMC and IUCN - protectedplanet.net`
 export const CONTEXT_LAYER_IDS = {
   showProtectedAreas: ['context-protected-areas'],
   showVolcanoes: ['context-volcanoes', 'context-volcano-labels'],

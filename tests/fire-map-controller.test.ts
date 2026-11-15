@@ -19,6 +19,15 @@ class FakePopup {
   root: FakeElement | null = null
   open = false
   additions = 0
+  maxWidth = ''
+  element = new FakeElement()
+  setMaxWidth(value: string) {
+    this.maxWidth = value
+    return this
+  }
+  getElement() {
+    return this.element
+  }
   on(name: string, callback: () => void) {
     this.events.set(name, callback)
     return this
@@ -52,14 +61,44 @@ class FakePopup {
 
 class FakeElement {
   children: FakeElement[] = []
+  parent: FakeElement | null = null
   textContent = ''
   className = ''
   type = ''
   disabled = false
   style: Record<string, string> = {}
+  attributes = new Map<string, string>()
+  classList = {
+    contains: (value: string) => this.className.split(/\s+/).includes(value),
+    toggle: (value: string, force?: boolean) => {
+      const names = new Set(this.className.split(/\s+/).filter(Boolean))
+      const enabled = force ?? !names.has(value)
+      if (enabled) names.add(value)
+      else names.delete(value)
+      this.className = [...names].join(' ')
+      return enabled
+    },
+  }
   events = new Map<string, () => void>()
+  setAttribute(name: string, value: string) {
+    this.attributes.set(name, value)
+  }
+  getAttribute(name: string) {
+    return this.attributes.get(name) ?? null
+  }
+  contains(element: FakeElement) {
+    return this.flatten().includes(element)
+  }
   append(...elements: FakeElement[]) {
+    for (const element of elements) {
+      element.remove()
+      element.parent = this
+    }
     this.children.push(...elements)
+  }
+  remove() {
+    if (this.parent) this.parent.children = this.parent.children.filter((child) => child !== this)
+    this.parent = null
   }
   replaceChildren(...elements: FakeElement[]) {
     this.children = elements
@@ -343,7 +382,11 @@ test('dense overview aggregation disables for a focused day without resending ob
   assert.deepEqual(map.filters.get(FIRE_MAP_LAYERS.observations), [
     'all',
     ['!', ['has', 'point_count']],
-    ['==', ['get', 'utcDay'], '2026-11-14'],
+    [
+      'any',
+      ['==', ['get', 'displayFiltersApplied'], true],
+      ['==', ['get', 'utcDay'], '2026-11-14'],
+    ],
   ])
   renderer.setDisplay({ focusedDay: null })
   assert.deepEqual(source.clustering, [true, false, true])
@@ -423,10 +466,9 @@ test('overlapping world-copy hits deduplicate canonical IDs and popup navigation
   assert.deepEqual(popup.anchor, older.geometry.coordinates)
   assert.match(popup.root!.text(), /2 of 2, newest first/)
   assert.equal(popup.additions, 1)
-  assert.doesNotMatch(
-    popup.root!.text(),
-    /Footprint:|Processing tier \/ version:|Interpretation:|Source:/,
-  )
+  assert.match(popup.root!.text(), /Scientific observation details/)
+  assert.match(popup.root!.text(), /Footprint interpretation: Approximate sensor footprint/)
+  assert.equal(popup.maxWidth, '320px')
   map.rendered = []
   map.emit('click', { point: { x: 100, y: 100 } })
   assert.equal(popup.isOpen(), false)
@@ -534,17 +576,17 @@ test('large aggregate freezes canonical membership in bounded batches across cam
     await new Promise((resolve) => setTimeout(resolve, 10))
   }
   assert.equal(source.leafCalls, 3)
-  assert.match(popup.root!.text(), /1201 matching out of 1201/)
+  assert.match(popup.root!.text(), /Satellite hotspots/)
+  assert.equal(popup.maxWidth, '240px')
+  assert.equal(
+    popup.root!.flatten().some((node) => node.textContent === 'Next'),
+    false,
+  )
   map.cluster = {
     properties: { cluster_id: 98, point_count: 2 },
     geometry: { type: 'Point', coordinates: [30, 40] },
   }
   map.emit('moveend')
-  popup
-    .root!.flatten()
-    .find((node) => node.textContent === 'Next')!
-    .events.get('click')!()
-  assert.match(popup.root!.text(), /11–20 of 1201/)
   assert.equal(source.leafCalls, 3)
   assert.equal(source.updates.length, 1)
   popup
@@ -552,6 +594,10 @@ test('large aggregate freezes canonical membership in bounded batches across cam
     .find((node) => node.textContent === 'Open in Area Analytics')!
     .events.get('click')!()
   assert.equal((transferred as { observationIds: string[] }).observationIds.length, 1201)
+  assert.deepEqual(
+    (transferred as { observationIds: string[] }).observationIds,
+    members.map((member) => member.properties.id),
+  )
   assert.equal((transferred as { sourceGeneration: string }).sourceGeneration, 'first-generation')
   renderer.setDisplay({ sourceGeneration: 'second-generation' })
   assert.equal(popup.isOpen(), false)

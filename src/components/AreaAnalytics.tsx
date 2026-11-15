@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { CheckCircleIcon, CircleNotchIcon } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import type { AnalysisArea } from '@/lib/analysis-area'
@@ -8,7 +8,6 @@ import {
   createInvestigation,
   createGlobalInvestigation,
   investigationKey,
-  investigationRequest,
   type InvestigationScope,
   type ObservationFilters,
 } from '@/lib/investigation'
@@ -23,7 +22,12 @@ import {
 } from '@/lib/analytics-investigation'
 import { RecordsExplorer } from './RecordsExplorer'
 import type { AnalysisRange } from '@/lib/analysis-activity'
-import { exportInvestigation, fetchObservationPage } from '@/lib/observation-client'
+import {
+  exportInvestigation,
+  fetchObservationPage,
+  requiresObservationReselection,
+} from '@/lib/observation-client'
+import { formatAnalysisRetrieval } from '@/lib/analysis-request-status'
 const InvestigationScience = lazy(() =>
   import('./InvestigationScience').then((module) => ({ default: module.InvestigationScience })),
 )
@@ -165,7 +169,7 @@ async function fetchHotspots(
   } catch (error) {
     if (signal.aborted) throw error
     throw new Error(
-      'Cannot reach the hotspot API. Check that the Vite server and FIRMS backend are running.',
+      'Satellite observations could not be reached. Check your connection and retry.',
       { cause: error },
     )
   }
@@ -184,7 +188,7 @@ async function fetchHotspots(
       await response.text()
       if (response.status === 502 || response.status === 503 || response.status === 504) {
         throw new Error(
-          `The Vite API proxy cannot reach the FIRMS backend at 127.0.0.1:8000 (HTTP ${response.status}). Start the backend from src/backend_api; see its README for setup.`,
+          'Satellite observations are temporarily unavailable. Retry the selected area and UTC period.',
         )
       }
     }
@@ -290,7 +294,7 @@ function ActivityProgressBar({
         </span>
       </div>
       <span className="area-analytics-progress-label" aria-live="polite">
-        {complete ? `${description} · complete` : description}
+        {complete ? `${description} - complete` : description}
       </span>
     </div>
   )
@@ -319,7 +323,7 @@ function ActivityChart({
     <figure className="area-analytics-chart" aria-busy={busy}>
       <figcaption className="area-analytics-chart-caption">
         <span>Detections per day</span>
-        <span>UTC · {formatNumber(max)} max</span>
+        <span>UTC - {formatNumber(max)} max</span>
       </figcaption>
       <div className="area-analytics-chart-scroll">
         <div
@@ -348,8 +352,8 @@ function ActivityChart({
                   aria-pressed={date === focusedDay}
                   onClick={() => onSelect?.(date)}
                   style={{ height: `${count === null ? 100 : Math.max(2, (count / max) * 100)}%` }}
-                  aria-label={`${formatDay(date, { year: 'numeric' })}: ${count === null ? 'Reporting coverage unavailable' : `${formatNumber(count)} detections`}, ${coverage ?? 'reported'} coverage`}
-                  title={`${formatDay(date, { year: 'numeric' })}: ${count === null ? 'Reporting coverage unavailable' : `${formatNumber(count)} detections`}, ${coverage ?? 'reported'} coverage`}
+                  aria-label={`${formatDay(date, { year: 'numeric' })}: ${count === null ? 'Reporting coverage unavailable' : `${formatNumber(count)} detections`}${coverage && coverage !== 'partial' ? `, ${coverage} coverage` : ''}`}
+                  title={`${formatDay(date, { year: 'numeric' })}: ${count === null ? 'Reporting coverage unavailable' : `${formatNumber(count)} detections`}${coverage && coverage !== 'partial' ? `, ${coverage} coverage` : ''}`}
                 />
               </div>
               {index % labelStep === 0 || index === days.length - 1 ? (
@@ -464,7 +468,7 @@ function HourlyChart({
               className="area-analytics-hour-bar"
               onClick={() => onSelect?.(hour)}
               style={{ height: `${Math.max(2, (count / max) * 100)}%` }}
-              title={`${String(hour).padStart(2, '0')}:00 UTC · ${formatNumber(count)} detections`}
+              title={`${String(hour).padStart(2, '0')}:00 UTC - ${formatNumber(count)} detections`}
               aria-label={`${String(hour).padStart(2, '0')}:00 UTC: ${formatNumber(count)} detections`}
             />
             {hour % 4 === 0 && <span aria-hidden="true">{String(hour).padStart(2, '0')}</span>}
@@ -527,6 +531,8 @@ export type AreaAnalyticsProps = {
   onApply?: (scope: InvestigationScope) => void
   onHighlight?: (scope: InvestigationScope) => void
   onClose: () => void
+  onChooseArea?: () => void
+  onRefreshSelection?: () => void
   snapshot?: { url: string; scopeKey: string } | null
   onCapture?: (scope: InvestigationScope) => Promise<void>
 }
@@ -537,9 +543,12 @@ export function AreaAnalytics({
   onApply,
   onHighlight,
   onClose,
+  onChooseArea,
+  onRefreshSelection,
   snapshot,
   onCapture,
 }: AreaAnalyticsProps) {
+  const queryClient = useQueryClient()
   const [capturing, setCapturing] = useState(false)
   const [captureError, setCaptureError] = useState('')
   const [investigation, setInvestigation] = useState<InvestigationScope | null>(() =>
@@ -584,34 +593,6 @@ export function AreaAnalytics({
     setInvestigation(next)
     onScopeChange?.(next)
   }
-  const historyQuery = useMemo(() => {
-    if (investigation?.selection?.global) return null
-    if (investigation) return investigation.query
-    if (!analysisArea) return null
-    const end = new Date().toISOString().slice(0, 10)
-    return createInvestigation(analysisArea, { start: shiftUtcDate(end, 1-days), end }).query
-  }, [investigation, analysisArea, days])
-  useEffect(() => {
-    if (!historyQuery) return
-    const controller = new AbortController()
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const prepare = () => {
-      void investigationRequest<{ state: string }>(
-        'history/prepare',
-        historyQuery,
-        {},
-        controller.signal,
-      ).then((progress) => {
-        if (!controller.signal.aborted && ['queued', 'loading', 'waiting', 'partial'].includes(progress.state))
-          timer = setTimeout(prepare, 5000)
-      }, () => undefined)
-    }
-    prepare()
-    return () => {
-      controller.abort()
-      clearTimeout(timer)
-    }
-  }, [historyQuery])
   function setSensor(value: 'all' | 'MODIS' | 'VIIRS') {
     if (investigation)
       updateInvestigation({
@@ -629,6 +610,7 @@ export function AreaAnalytics({
     else setLegacyDaynight(value)
   }
   function setDays(value: number) {
+    if (investigation?.selection?.global) return
     if (investigation) {
       changeRange({
         start: shiftUtcDate(investigation.range.end, 1 - value),
@@ -637,7 +619,7 @@ export function AreaAnalytics({
     } else setLegacyDays(value)
   }
   function changeRange(range: AnalysisRange) {
-    if (!investigation) return
+    if (!investigation || investigation.selection?.global) return
     const filters = {
       ...investigation.filters,
       day: undefined,
@@ -646,24 +628,7 @@ export function AreaAnalytics({
       observationId: undefined,
     }
     const next = createInvestigation(investigation.area, range, null, null, filters)
-    const global = investigation.selection?.global
-    updateInvestigation(
-      global
-        ? {
-            ...createGlobalInvestigation(
-              {
-                ...global,
-                aggregateId: undefined,
-                bbox: undefined,
-                interval: next.query.interval,
-              },
-              filters,
-              { sourceGeneration: global.snapshotId },
-            ),
-            range,
-          }
-        : next,
-    )
+    updateInvestigation(next)
     setCanonicalPage(null)
     setCanonicalIdentity('')
     setData(null)
@@ -674,19 +639,28 @@ export function AreaAnalytics({
     investigation && canonicalIdentity !== investigationKey(investigation) ? null : storedData
   const currentPage =
     investigation && canonicalIdentity === investigationKey(investigation) ? canonicalPage : null
+  const globalSelection = investigation?.selection?.global
+  const selectedHours = globalSelection
+    ? Math.round(
+        (Date.parse(globalSelection.interval.endExclusive) -
+          Date.parse(globalSelection.interval.start)) /
+          360_000,
+      ) / 10
+    : null
+  const periodLabel = selectedHours === null ? `${days} days` : `${selectedHours} hours`
+  const periodAdjective = selectedHours === null ? `${days}-day` : `${selectedHours}-hour`
   const [legacyPreviousData, setPreviousData] = useState<HotspotResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [legacyComparisonLoading, setComparisonLoading] = useState(true)
   const [error, setError] = useState('')
+  const [recordIssue, setRecordIssue] = useState<unknown>(null)
+  const [retryAttempt, setRetryAttempt] = useState(0)
   const [activityProgressState, setActivityProgressState] = useState<ActivityProgressState | null>(
     null,
   )
   const areaLabel = analysisArea?.name ?? AREA_ANALYTICS_DEFAULT_AREA_LABEL
   const currentUtcDay = new Date().toISOString().slice(0, 10)
   const today = investigation?.range.end ?? currentUtcDay
-  const includesCurrentDay =
-    !investigation ||
-    (investigation.range.start <= currentUtcDay && investigation.range.end >= currentUtcDay)
   const currentQuery: ActivityQuery = {
     analysisArea,
     days,
@@ -749,7 +723,7 @@ export function AreaAnalytics({
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   })
-  // Day focus narrows records and map highlighting while the chart retains the full interval.
+
   const chartScope = useMemo(
     () =>
       investigation && (investigation.focusedDay || investigation.filters.day)
@@ -885,7 +859,7 @@ export function AreaAnalytics({
       window.clearTimeout(timer)
       controller.abort()
     }
-  }, [analysisArea, daynight, days, sensor, today, investigation])
+  }, [analysisArea, daynight, days, sensor, today, investigation, retryAttempt])
 
   const comparison =
     data &&
@@ -914,13 +888,13 @@ export function AreaAnalytics({
       investigation.selection?.sourceGeneration ?? investigation.metadata?.sourceGeneration
     const recovered = Boolean(
       recovery?.sourceGeneration &&
-        page.meta.sourceGeneration === recovery.sourceGeneration &&
-        (recovery.previousGeneration ?? null) === (requestedGeneration ?? null) &&
-        !investigation.selection?.global &&
-        !investigation.selection?.selectionToken &&
-        !investigation.selection?.observationIds?.length &&
-        (!investigation.selection?.query ||
-          JSON.stringify(investigation.selection.query) === JSON.stringify(investigation.query)),
+      page.meta.sourceGeneration === recovery.sourceGeneration &&
+      (recovery.previousGeneration ?? null) === (requestedGeneration ?? null) &&
+      !investigation.selection?.global &&
+      !investigation.selection?.selectionToken &&
+      !investigation.selection?.observationIds?.length &&
+      (!investigation.selection?.query ||
+        JSON.stringify(investigation.selection.query) === JSON.stringify(investigation.query)),
     )
     let next = investigation
     if (
@@ -968,7 +942,7 @@ export function AreaAnalytics({
   function focusDate(date: string) {
     if (!investigation) return
     if (date >= investigation.range.start && date <= investigation.range.end) chooseFilter({}, date)
-    else {
+    else if (!investigation.selection?.global) {
       const next = createInvestigation(
         investigation.area,
         { start: date, end: date },
@@ -1040,42 +1014,69 @@ export function AreaAnalytics({
             {(!investigation || investigation.selection?.global) && (
               <span className="area-analytics-control-note">
                 {investigation?.selection?.global
-                  ? `Immutable global snapshot · ${investigation.selection.global.window}${investigation.selection.global.aggregateId ? ' · selected group' : ''}`
+                  ? `Immutable global snapshot - ${investigation.selection.global.window}${investigation.selection.global.aggregateId ? ' - selected group' : ''}`
                   : analysisArea
-                    ? 'Confirmed area · detections are clipped to its boundary'
-                    : 'Generalized boundary · Caribbean Netherlands not included'}
+                    ? 'Confirmed area - detections are clipped to its boundary'
+                    : 'Generalized boundary - Caribbean Netherlands not included'}
               </span>
             )}
           </div>
           <div className="area-analytics-range">
             <div className="area-analytics-range-heading">
-              <label htmlFor="area-analytics-days">Selected interval</label>
+              {globalSelection ? (
+                <span>Available UTC interval</span>
+              ) : (
+                <label htmlFor="area-analytics-days">Selected interval</label>
+              )}
               <strong>
-                {days} {days === 1 ? 'day' : 'days'}
+                {globalSelection ? periodLabel : `${days} ${days === 1 ? 'day' : 'days'}`}
               </strong>
             </div>
-            <input
-              id="area-analytics-days"
-              type="range"
-              min="1"
-              max="30"
-              step="1"
-              value={Math.min(30, days)}
-              onChange={(event) => setDays(Number(event.currentTarget.value))}
-              aria-describedby="area-analytics-range-dates"
-            />
+            {!globalSelection && (
+              <input
+                id="area-analytics-days"
+                type="range"
+                min="1"
+                max="30"
+                step="1"
+                value={Math.min(30, days)}
+                onChange={(event) => setDays(Number(event.currentTarget.value))}
+                aria-describedby="area-analytics-range-dates"
+              />
+            )}
             <div className="area-analytics-range-foot">
-              <span>1 day</span>
+              <span>{globalSelection ? 'Fixed snapshot' : '1 day'}</span>
               <span id="area-analytics-range-dates">
                 {formatDay(windows.currentStart, { year: 'numeric' })} -{' '}
                 {formatDay(windows.endDate, { year: 'numeric' })} UTC
               </span>
-              <span>30 days</span>
+              <span>{globalSelection ? globalSelection.window : '30 days'}</span>
             </div>
             {investigation && (
               <p className="area-analytics-control-note">
                 {investigation.query.interval.start} → {investigation.query.interval.endExclusive}{' '}
                 (exclusive)
+              </p>
+            )}
+            {globalSelection && (
+              <div className="analytics-global-scope-note">
+                <p>Choose a regional area for another UTC period.</p>
+                {onChooseArea && (
+                  <Button variant="outline" size="sm" onClick={onChooseArea}>
+                    Choose a regional area
+                  </Button>
+                )}
+              </div>
+            )}
+            {currentPage?.meta && (
+              <p className="area-analytics-control-note">
+                {!['partial', 'mixed'].includes(currentPage.meta.freshness ?? '') && (
+                  <>
+                    Source: {currentPage.meta.freshness ?? 'freshness unavailable'}
+                    {' - '}
+                  </>
+                )}
+                Retrieved {formatAnalysisRetrieval(currentPage.meta.fetchedAt)}
               </p>
             )}
           </div>
@@ -1111,13 +1112,56 @@ export function AreaAnalytics({
               {currentPage && (
                 <>
                   {' '}
-                  · {formatNumber(currentPage.data.summary.selectedCount)} selected ·{' '}
+                  - {formatNumber(currentPage.data.summary.selectedCount)} selected -{' '}
                   {formatNumber(currentPage.data.summary.wholeAreaCount)} whole area
                 </>
               )}
             </span>
           </div>
         </section>
+
+        {error && tab !== 'records' && (
+          <div className="area-analytics-alert" role="alert">
+            <strong>Observations could not be loaded for this area and UTC interval.</strong>
+            <p>{error}</p>
+            {requiresObservationReselection(recordIssue) ? (
+              <Button variant="outline" size="sm" onClick={onRefreshSelection ?? onClose}>
+                {globalSelection ? 'Refresh worldwide observations' : 'Refresh selected group'}
+              </Button>
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  if (investigation)
+                    void queryClient.refetchQueries({
+                      queryKey: ['investigation-records'],
+                      type: 'active',
+                    })
+                  else {
+                    setError('')
+                    setRetryAttempt((value) => value + 1)
+                  }
+                }}
+              >
+                Retry observations
+              </Button>
+            )}
+          </div>
+        )}
+        {!error &&
+          currentPage?.meta &&
+          (currentPage.meta.freshness === 'stale' ||
+            currentPage.meta.completeness === 'unavailable') && (
+            <div className="area-analytics-alert" role="status">
+              <p>
+                {currentPage.meta.freshness === 'stale'
+                  ? 'Stored observations are stale.'
+                  : 'Reporting coverage is unavailable for this interval.'}{' '}
+                Retrieved {formatAnalysisRetrieval(currentPage.meta.fetchedAt)}.
+              </p>
+            </div>
+          )}
 
         {investigation && (
           <div className="analytics-filter-chips" aria-label="Investigation filters">
@@ -1165,13 +1209,13 @@ export function AreaAnalytics({
 
         <div hidden={tab !== 'overview'} className="analytics-overview-section">
           <section
-            className={`area-analytics-glance ${partial ? 'is-incomplete' : ''}`}
+            className="area-analytics-glance"
             aria-labelledby="area-analytics-glance-title"
             aria-busy={loading}
           >
             <div className="area-analytics-glance-main">
               <p className="area-analytics-eyebrow">
-                {areaLabel.toUpperCase()} · {days} DAYS ·{' '}
+                {areaLabel.toUpperCase()} - {periodLabel.toUpperCase()} -{' '}
                 {formatDay(windows.currentStart, { year: 'numeric' })} -{' '}
                 {formatDay(windows.endDate, { year: 'numeric' })} UTC
               </p>
@@ -1185,11 +1229,15 @@ export function AreaAnalytics({
               ) : partial && data ? (
                 <div>
                   <p className="area-analytics-glance-status">
-                    {data.count > 0 ? 'Satellite activity observed' : 'No observations returned'}
+                    {data.count > 0
+                      ? 'Satellite activity observed'
+                      : chips.length || investigation?.focusedDay
+                        ? 'No matching observations'
+                        : 'No observations returned'}
                   </p>
                   <p className="area-analytics-glance-copy">
-                    {formatNumber(data.count)} hotspot detections returned for the selected {days}-day
-                    interval.
+                    {formatNumber(data.count)} hotspot detections returned for the selected{' '}
+                    {periodAdjective} interval.
                   </p>
                 </div>
               ) : data && data.count === 0 ? (
@@ -1216,10 +1264,10 @@ export function AreaAnalytics({
                           : 'Same detection count as the previous interval'}
                   </p>
                   <p className="area-analytics-glance-copy">
-                    {formatNumber(data.count)} hotspot detections in the selected {days}-day
+                    {formatNumber(data.count)} hotspot detections in the selected {periodAdjective}
                     interval
                     {comparison &&
-                      ` · ${comparison.difference > 0 ? '+' : ''}${formatNumber(comparison.difference)} (${comparison.percentage === null ? 'percentage unavailable: previous count was zero' : `${comparison.percentage > 0 ? '+' : ''}${comparison.percentage.toFixed(1)}%`}) versus the preceding ${days} days`}
+                      ` - ${comparison.difference > 0 ? '+' : ''}${formatNumber(comparison.difference)} (${comparison.percentage === null ? 'percentage unavailable: previous count was zero' : `${comparison.percentage > 0 ? '+' : ''}${comparison.percentage.toFixed(1)}%`}) versus the preceding ${days} days`}
                   </p>
                 </div>
               ) : (
@@ -1234,7 +1282,7 @@ export function AreaAnalytics({
                 <span>Last observation in this window</span>
                 <strong>
                   {latest
-                    ? `${formatObservationAge(latest.properties.acquired_at)} · ${new Intl.DateTimeFormat(
+                    ? `${formatObservationAge(latest.properties.acquired_at)} - ${new Intl.DateTimeFormat(
                         'en-GB',
                         {
                           dateStyle: 'medium',
@@ -1247,24 +1295,26 @@ export function AreaAnalytics({
                       : 'Unavailable'}
                 </strong>
               </div>
-              <div>
-                <span>Data status</span>
-                <strong>
-                  {error
-                    ? 'Unavailable'
-                    : loading && !data
-                      ? 'Loading'
-                      : partial
-                        ? 'Partial results'
-                        : data && data.sources.every((source) => source.status === 'ok')
-                          ? 'All queried products returned'
-                          : 'Not confirmed'}
-                </strong>
-              </div>
+              {!partial && (
+                <div>
+                  <span>Data status</span>
+                  <strong>
+                    {error
+                      ? 'Unavailable'
+                      : loading && !data
+                        ? 'Loading'
+                        : !data
+                          ? 'Unavailable'
+                          : data && data.sources.every((source) => source.status === 'ok')
+                            ? 'All queried products returned'
+                            : 'Not confirmed'}
+                  </strong>
+                </div>
+              )}
               <div>
                 <span>Filters applied</span>
                 <strong>
-                  {sensor === 'all' ? 'All sensors' : sensor} ·{' '}
+                  {sensor === 'all' ? 'All sensors' : sensor} -{' '}
                   {daynight === 'all' ? 'Day and night' : daynight}
                 </strong>
               </div>
@@ -1272,7 +1322,7 @@ export function AreaAnalytics({
                 <span>Compared with</span>
                 <strong>
                   {comparison
-                    ? `${formatNumber(previousData?.count ?? 0)} detections · ${formatDay(windows.previousStart, { year: 'numeric' })}-${formatDay(shiftUtcDate(windows.currentStart, -1), { year: 'numeric' })} UTC`
+                    ? `${formatNumber(previousData?.count ?? 0)} detections - ${formatDay(windows.previousStart, { year: 'numeric' })}-${formatDay(shiftUtcDate(windows.currentStart, -1), { year: 'numeric' })} UTC`
                     : comparisonLoading
                       ? 'Loading equal-length comparison…'
                       : 'Previous interval unavailable'}
@@ -1281,7 +1331,7 @@ export function AreaAnalytics({
               <p className="area-analytics-glance-caveat">
                 Satellite observations for the selected interval are not a fire-threat rating.
                 Overpass, cloud, and processing gaps apply; a lack of detections is not an
-                all-clear. {includesCurrentDay && 'The current UTC day may be incomplete.'}
+                all-clear.
               </p>
             </div>
           </section>
@@ -1290,9 +1340,9 @@ export function AreaAnalytics({
             <article className="area-analytics-card">
               <span className="area-analytics-card-label">Hotspot detections</span>
               <strong className="area-analytics-card-value">
-                {data ? formatNumber(data.count) : loading ? '…' : '—'}
+                {data ? formatNumber(data.count) : loading ? '…' : '-'}
               </strong>
-              <span className="area-analytics-card-note">Satellite observations · {days} days</span>
+              <span className="area-analytics-card-note">Satellite observations - {days} days</span>
             </article>
             <article className="area-analytics-card">
               <span className="area-analytics-card-label">Change vs prior period</span>
@@ -1303,11 +1353,11 @@ export function AreaAnalytics({
                     : `${comparison.percentage > 0 ? '+' : ''}${comparison.percentage.toFixed(1)}%`
                   : loading
                     ? '…'
-                    : '—'}
+                    : '-'}
               </strong>
               <span className="area-analytics-card-note">
                 {comparison
-                  ? `${formatNumber(Math.abs(comparison.difference))} detections ${comparison.difference >= 0 ? 'more' : 'fewer'} · previous ${days} days`
+                  ? `${formatNumber(Math.abs(comparison.difference))} detections ${comparison.difference >= 0 ? 'more' : 'fewer'} - previous ${days} days`
                   : 'Equal-length period immediately before the selected interval'}
               </span>
               {comparison?.percentage === null && (
@@ -1319,11 +1369,11 @@ export function AreaAnalytics({
             <article className="area-analytics-card">
               <span className="area-analytics-card-label">Peak activity day</span>
               <strong className="area-analytics-card-value">
-                {peak ? formatDay(peak.date) : data ? 'No detections' : loading ? '…' : '—'}
+                {peak ? formatDay(peak.date) : data ? 'No detections' : loading ? '…' : '-'}
               </strong>
               <span className="area-analytics-card-note">
                 {peak
-                  ? `${formatNumber(peak.count)} detections · UTC`
+                  ? `${formatNumber(peak.count)} detections - UTC`
                   : 'Highest daily total in this interval'}
               </span>
             </article>
@@ -1355,11 +1405,11 @@ export function AreaAnalytics({
                     ? 'None in interval'
                     : loading
                       ? '…'
-                      : '—'}
+                      : '-'}
               </strong>
               <span className="area-analytics-card-note">
                 {latest
-                  ? `${formatObservationAge(latest.properties.acquired_at)} · ${latest.properties.sensor} · ${latest.properties.satellite} · UTC`
+                  ? `${formatObservationAge(latest.properties.acquired_at)} - ${latest.properties.sensor} - ${latest.properties.satellite} - UTC`
                   : 'Latest observation time in the selected interval'}
               </span>
             </article>
@@ -1372,11 +1422,11 @@ export function AreaAnalytics({
                     ? 'Not reported'
                     : loading
                       ? '…'
-                      : '—'}
+                      : '-'}
               </strong>
               <span className="area-analytics-card-note">
                 {highestFrpDetection
-                  ? `${highestFrpDetection.properties.sensor} · ${new Intl.DateTimeFormat('en-GB', {
+                  ? `${highestFrpDetection.properties.sensor} - ${new Intl.DateTimeFormat('en-GB', {
                       dateStyle: 'medium',
                       timeStyle: 'short',
                       timeZone: 'UTC',
@@ -1395,7 +1445,7 @@ export function AreaAnalytics({
                 <h2 id="area-analytics-activity-title">Recent activity</h2>
                 <p>
                   {chartScope
-                    ? `Full selected interval · ${investigation?.focusedDay ?? investigation?.filters.day} focused in records`
+                    ? `Full selected interval - ${investigation?.focusedDay ?? investigation?.filters.day} focused in records`
                     : data
                       ? `${formatNumber(data.count)} filtered detections from ${formatDay(windows.currentStart, { year: 'numeric' })} to ${formatDay(windows.endDate, { year: 'numeric' })}`
                       : 'Daily hotspot detections in the selected interval'}
@@ -1480,10 +1530,10 @@ export function AreaAnalytics({
                 </div>
               </div>
               <strong className="area-analytics-card-value">
-                {medianFrpValue === null ? '—' : `${medianFrpValue.toFixed(1)} MW`}
+                {medianFrpValue === null ? '-' : `${medianFrpValue.toFixed(1)} MW`}
               </strong>
               <span className="area-analytics-card-note">
-                Median FRP · {formatNumber(data?.summary.frpReported ?? 0)} of{' '}
+                Median FRP - {formatNumber(data?.summary.frpReported ?? 0)} of{' '}
                 {formatNumber(data?.count ?? 0)} observations reported FRP
               </span>
               <p className="area-analytics-footnote">
@@ -1500,11 +1550,13 @@ export function AreaAnalytics({
             <div className="area-analytics-section-heading">
               <div>
                 <h2 id="area-analytics-coverage-title">Data coverage</h2>
-                <p>NASA FIRMS near-real-time products · query dates use UTC calendar days</p>
+                <p>NASA FIRMS near-real-time products - query dates use UTC calendar days</p>
               </div>
-              <span className={`area-analytics-status ${partial ? 'is-partial' : ''}`}>
-                {data ? (partial ? 'Partial' : 'Complete') : loading ? 'Loading' : 'Unavailable'}
-              </span>
+              {!partial && (
+                <span className="area-analytics-status">
+                  {data ? 'Complete' : loading ? 'Loading' : 'Unavailable'}
+                </span>
+              )}
             </div>
             {data ? (
               <ul className="area-analytics-source-list">
@@ -1512,11 +1564,15 @@ export function AreaAnalytics({
                   <li key={source.source}>
                     <span>{source.source}</span>
                     <span>
-                      {investigation
-                        ? `${source.status === 'ok' ? 'Complete' : source.status === 'partial' ? 'Partial / stale' : 'Unavailable'} reporting${source.oldest_fetched_at ? ` · retrieved ${source.oldest_fetched_at}` : ''}`
-                        : source.status === 'ok'
-                          ? `${source.successful_days}/${days} days`
-                          : `${source.status} · ${source.successful_days}/${days} days`}
+                      {source.status === 'partial'
+                        ? source.oldest_fetched_at
+                          ? `Retrieved ${source.oldest_fetched_at}`
+                          : ''
+                        : investigation
+                          ? `${source.status === 'ok' ? 'Complete' : 'Unavailable'} reporting${source.oldest_fetched_at ? ` - retrieved ${source.oldest_fetched_at}` : ''}`
+                          : source.status === 'ok'
+                            ? `${source.successful_days}/${days} days`
+                            : `${source.status} - ${source.successful_days}/${days} days`}
                     </span>
                   </li>
                 ))}
@@ -1565,10 +1621,11 @@ export function AreaAnalytics({
               onScopeChange={updateInvestigation}
               onHighlight={onHighlight}
               onResponse={receivePage}
-              onReturnToMap={onClose}
-              onStatus={(busy, message) => {
+              onReturnToMap={onRefreshSelection ?? onClose}
+              onStatus={(busy, message, issue) => {
                 setLoading(busy)
                 setError(message)
+                setRecordIssue(issue)
               }}
             />
             {(tab === 'history' || tab === 'method') && (

@@ -141,18 +141,18 @@ test('diagnostic opacity, navigation and unchanged collections never resend data
     map.emit('moveend')
   }
   assert.equal(source.updates, 0)
-  assert.equal(map.insertions.length, 2)
+  assert.equal(map.insertions.length, 1)
   assert.equal(map.sourceRemovals, 0)
   assert.equal(map.layerRemovals, 0)
-  assert.deepEqual(map.insertions, [FIRE_MAP_LAYERS.observations, FIRE_MAP_LAYERS.observations])
+  assert.deepEqual(map.insertions, [FIRE_MAP_LAYERS.observations])
   controller.setData({ ...data, recurrenceEnabled: false })
   assert.equal(map.layers.get(DIAGNOSTIC_LAYERS[0])!.layout.visibility, 'none')
   assert.equal(source.updates, 0)
   controller.setData({ ...data, recurrence: { ...collection } })
   assert.equal(source.updates, 1)
   controller.destroy()
-  assert.equal(map.sourceRemovals, 2)
-  assert.equal(map.layerRemovals, 2)
+  assert.equal(map.sourceRemovals, 1)
+  assert.equal(map.layerRemovals, 1)
   assert.equal(map.events.get('style.load')!.size, 0)
 })
 
@@ -204,7 +204,7 @@ test('diagnostics stay below observations restored by a later style.load listene
     outlookEnabled: false,
     forecastValidated: false,
   })
-  // Register after the diagnostic listener, matching the React hook/controller effect order.
+  
   map.on('style.load', () => {
     map.hasFireLayer = true
     map.layerOrder.push(FIRE_MAP_LAYERS.observations)

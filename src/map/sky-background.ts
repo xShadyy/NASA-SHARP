@@ -6,7 +6,7 @@ export const SKY_BACKGROUND_IMAGE = '/sky/starmap-2020-4k.webp'
 export const SKY_BACKGROUND_ERROR =
   'The sky image could not load. Earth is still available; you can retry.'
 export const SKY_BACKGROUND_CAPTURE_CREDIT =
-  'Sky: NASA/Goddard Space Flight Center Scientific Visualization Studio · Gaia DR2: ESA/Gaia/DPAC · display-converted panorama'
+  'Sky: NASA/Goddard Space Flight Center Scientific Visualization Studio - Gaia DR2: ESA/Gaia/DPAC - display-converted panorama'
 
 const vertexSource = `#version 300 es
 out vec2 screen;
@@ -25,15 +25,9 @@ in vec2 screen;
 out vec4 color;
 const float PI = 3.141592653589793;
 void main() {
-  // A wide, fixed 90-degree vertical view presents the supplied panorama.
-  // Infinite-distance scenery changes orientation, not scale, as Earth zooms.
   vec3 direction = normalize(camera * vec3(screen.x * aspect, screen.y, 1.0));
   vec2 uv = vec2(0.5 + atan(direction.y, direction.x) / (2.0 * PI),
                  0.5 - asin(clamp(direction.z, -1.0, 1.0)) / PI);
-  // atan wraps longitude from 1 to 0. Implicit derivatives treat that
-  // continuous sky edge as an entire panorama per pixel, select its coarsest
-  // mip, and draw a thin dark/dotted line. Unwrap only those derivatives;
-  // retain normal mip filtering and the original panorama coordinates.
   vec2 dx = dFdx(uv);
   vec2 dy = dFdy(uv);
   dx.x -= round(dx.x);
@@ -122,8 +116,8 @@ export function createSkyBackgroundLayer(options: {
   }
 
   function restored() {
-    // Context restoration invalidates every GL handle. Recreate once, rather
-    // than synchronously validating programs on every navigation frame.
+    
+    
     resources = null
     uploadPending = true
     map?.triggerRepaint()

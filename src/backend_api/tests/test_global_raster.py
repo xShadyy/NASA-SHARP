@@ -1,4 +1,4 @@
-"""Offline PNG and immutable-snapshot regressions; no NASA requests."""
+
 import concurrent.futures
 import os
 import struct
@@ -70,7 +70,7 @@ class GlobalRasterTests(unittest.TestCase):
         self.assertEqual(pixel(pixels, 427, 256), b"\xff\x00\x00\xff")
         self.assertEqual(pixel(pixels, 84, 255), b"\xff\x00\x00\xff")
         self.assertEqual(pixel(pixels, 10, 10), b"\x00\x00\x00\x00")
-        self.assertEqual(sum(pixels[index] > 0 for index in range(3, len(pixels), 4)), 12)
+        self.assertEqual(sum(pixels[index] > 0 for index in range(3, len(pixels), 4)), 48)
         self.assertTrue(all(pixel(pixels, x, y) in (b"\xff\x00\x00\xff", b"\x00\x00\x00\x00") for y in range(512) for x in range(512)))
 
     def test_dense_records_are_all_processed_without_sampling_or_symbol_limits(self):
@@ -87,13 +87,14 @@ class GlobalRasterTests(unittest.TestCase):
         self.assertEqual(empty[2]["observations"], 0)
         self.assertFalse(any(rgba(empty[0])))
 
-    def test_pixels_get_smaller_with_zoom_and_do_not_fabricate_footprints(self):
+    def test_zoom_specific_crisp_display_marks_do_not_fabricate_footprints(self):
         snapshot = publish(self.store, [observation(longitude=0, latitude=0)])
         overview = self.tile(snapshot)
         detail = self.tile(snapshot, 4, 8, 8)
-        self.assertEqual(overview[2]["pixelSize"], 2)
-        self.assertEqual(detail[2]["pixelSize"], 1)
-        self.assertEqual(sum(value > 0 for value in rgba(detail[0])[3::4]), 1)
+        self.assertEqual(overview[2]["pixelSize"], 4)
+        self.assertEqual(detail[2]["pixelSize"], 4)
+        self.assertEqual(sum(value > 0 for value in rgba(detail[0])[3::4]), 4)
+        self.assertEqual(self.tile(snapshot, 13, 4096, 4096)[2]["pixelSize"], 14)
         self.assertEqual(pixel(rgba(detail[0]), 0, 0), b"\xff\x00\x00\xff")
 
     def test_antimeridian_buffering_seam_ownership_and_polar_extent(self):

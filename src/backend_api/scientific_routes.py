@@ -1,10 +1,10 @@
-"""Scientific routes; recent diagnostics reuse the existing acquisition boundary."""
+
 import asyncio
 from datetime import timedelta
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from historical_activity import history_document, method_evidence, recurrence_document, load_query_archive, supports_geometry
-from historical_preparation import prepare_history
+from historical_preparation import prepare_history, history_status
 from weather_context import weather_context
 from observation_explorer import cached_snapshot, SelectionInvalid, source_generation
 from harmonize import filters_from_query, parse_utc_interval, prepared_area
@@ -16,6 +16,8 @@ def validate_query(body):
     query = body["query"]
     if not isinstance(query.get("id"), str) or not query["id"] or query.get("processingMode") != "harmonized":
         raise ValueError("A harmonized investigation query identity is required.")
+    if body.get("options") is not None and not isinstance(body["options"], dict):
+        raise ValueError("Investigation options must be an object.")
     parse_utc_interval(query.get("interval"))
     filters_from_query(query.get("filters", {}))
     if not isinstance(query.get("aoi"), dict) or not isinstance(query["aoi"].get("geometry"), dict):
@@ -25,24 +27,20 @@ def validate_query(body):
 
 
 async def cached_diagnostic(request, build):
-    """Overlay controls and method inspection never trigger observation acquisition."""
+    
     try:
         body = await request.json()
         query = validate_query(body)
-        store = await asyncio.to_thread(stored_diagnostic_snapshot, query, body.get("options") or {}, request.app.state.global_store.path.parent / "history")
+        store = await asyncio.to_thread(stored_diagnostic_snapshot, query, body.get("options") or {}, history_root(request.app))
         return await asyncio.to_thread(build, query, store)
     except SelectionInvalid as exc:
-        return JSONResponse({"message": str(exc)}, status_code=409)
+        return JSONResponse({"message": str(exc), "code": exc.code, "action": exc.action, "recoverable": False}, status_code=409)
     except (ValueError, KeyError, TypeError) as exc:
         return JSONResponse({"message": str(exc)}, status_code=422)
 
 
 def stored_diagnostic_snapshot(query, options, root=None):
-    """Use the exact stored historical interval when no map snapshot exists.
-
-    Frozen groups never recover through a newer archive. This fallback performs
-    no acquisition and requires registered geometry, dates and input generation.
-    """
+    
     try:
         return cached_snapshot(query, options)
     except SelectionInvalid:
@@ -61,6 +59,11 @@ def stored_diagnostic_snapshot(query, options, root=None):
         return store
 
 
+def history_root(app):
+    storage = getattr(app.state, "global_store", None)
+    return storage.path.parent / "history" if storage is not None else None
+
+
 def register_scientific_routes(app, analysis_document):
     router = APIRouter()
 
@@ -77,8 +80,8 @@ def register_scientific_routes(app, analysis_document):
             body = await request.json()
             query = validate_query(body)
             options = body.get("options") or {}
-            progress = await prepare_history(request.app, query, options)
-            archive = await asyncio.to_thread(load_query_archive, query, request.app.state.global_store.path.parent / "history")
+            progress = await asyncio.to_thread(history_status, request.app, query)
+            archive = await asyncio.to_thread(load_query_archive, query, history_root(request.app))
             result = await asyncio.to_thread(history_document, query, options, archive=archive)
             return {**result, "preparation": progress}
         except (ValueError, KeyError, TypeError) as exc:
@@ -90,6 +93,14 @@ def register_scientific_routes(app, analysis_document):
             body = await request.json()
             query = validate_query(body)
             return await prepare_history(request.app, query, body.get("options") or {})
+        except (ValueError, KeyError, TypeError) as exc:
+            return JSONResponse({"message": str(exc)}, status_code=422)
+
+    @router.post("/analysis/history/status")
+    async def preparation_status(request: Request):
+        try:
+            query = validate_query(await request.json())
+            return await asyncio.to_thread(history_status, request.app, query)
         except (ValueError, KeyError, TypeError) as exc:
             return JSONResponse({"message": str(exc)}, status_code=422)
 

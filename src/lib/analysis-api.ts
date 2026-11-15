@@ -323,7 +323,9 @@ async function postAnalysis(
     })
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') throw error
-    throw new Error('The analysis service is not running.', { cause: error })
+    throw new Error('The analysis service could not be reached. Check your connection and retry.', {
+      cause: error,
+    })
   }
   const body: unknown = await response.json().catch(() => null)
   if (!response.ok) throw new Error(messageFrom(body, response.status))
@@ -336,7 +338,8 @@ function messageFrom(body: unknown, status: number) {
     if (typeof record.message === 'string' && record.message) return record.message
     if (typeof record.detail === 'string' && record.detail) return record.detail
   }
-  if (status === 503) return 'Set FIRMS_MAP_KEY before using FIRMS routes.'
+  if (status === 503)
+    return 'Satellite observations are temporarily unavailable. Please retry later.'
   return `Analysis request failed (${status}).`
 }
 

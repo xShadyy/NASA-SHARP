@@ -1,8 +1,4 @@
-"""Durable, immutable global FIRMS partitions; no network work in readers.
 
-All timestamps concern reports. Complete extraction does not imply cloud-free
-observation coverage or confirmed absence of fire. Snapshot rows never mutate.
-"""
 from __future__ import annotations
 
 import hashlib
@@ -98,7 +94,7 @@ class GlobalStore:
             db.execute("DELETE FROM global_leases WHERE name=? AND owner=?", (name, owner))
 
     def update_ingestion_status(self, owner, **state):
-        """Only the shared acquisition owner can publish operational progress."""
+        
         with closing(self.connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
             lease = db.execute("SELECT owner,expires FROM global_leases WHERE name='global-ingestion'").fetchone()
@@ -125,12 +121,7 @@ class GlobalStore:
             db.execute("INSERT OR REPLACE INTO global_sources VALUES(?,?)", (source, json.dumps(state, separators=(",", ":"))))
 
     def replace_source(self, source, rows, start, end, retrieved=None, metadata=None):
-        """Replace whole retrieved windows atomically, retaining immutable old versions.
-
-        Canonical ID = satellite+acquisition+original coordinate. For a collision,
-        SP supersedes NRT supersedes RT supersedes URT; distinct satellites stay.
-        Shifted-coordinate revisions cannot safely be inferred and are retained.
-        """
+        
         start, end = instant(start), instant(end)
         retrieved = time.time() if retrieved is None else retrieved
         grouped = {}
@@ -170,7 +161,7 @@ class GlobalStore:
                         my = min(math.nextafter(1., 0.), max(0., (1 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2))
                         cursor = db.execute("INSERT INTO global_observations(version,observation_id,acquired,longitude,latitude,platform,frp,payload,mx,my) VALUES(?,?,?,?,?,?,?,?,?,?)", (digest, key, row.acquired_at.timestamp(), row.longitude, row.latitude, row.platform, row.frp_mw, payload, mx, my))
                         db.execute("INSERT INTO global_spatial VALUES(?,?,?,?,?)", (cursor.lastrowid, row.longitude, row.longitude, row.latitude, row.latitude))
-                # Never replace a fully stored UTC day with a later partial download.
+                
                 old = db.execute("SELECT p.start,p.end FROM global_current_partitions c JOIN global_partition_versions p ON p.version=c.version WHERE c.source=? AND c.day=?", (source, day)).fetchone()
                 if old and old["start"] < lower.timestamp() and old["end"] >= upper.timestamp():
                     continue
@@ -207,9 +198,9 @@ class GlobalStore:
                     if state.get("status") != "ok" or cursor < anchor.timestamp():
                         complete = False
                 available = any(p["end"] > start.timestamp() for p in partitions)
-                # A 24h bootstrap must not masquerade as a partial seven-day
-                # extract. A genuine longer download or accumulated extraction
-                # span is required before displaying that interval.
+                
+                
+                
                 supported = False
                 for state in states:
                     target_hours = state.get("downloadWindowHours")
@@ -243,7 +234,7 @@ class GlobalStore:
         return manifest
 
     def prune(self, anchor=None):
-        """Bound retained immutable snapshots and unreferenced partition history."""
+        
         with closing(self.connect()) as db, db:
             db.execute("DELETE FROM global_snapshots WHERE snapshot IN (SELECT snapshot FROM global_snapshots ORDER BY published DESC,rowid DESC LIMIT -1 OFFSET ?)", (max(2, int(os.environ.get("SHARP_GLOBAL_RETAIN_SNAPSHOTS", "8"))),))
             db.execute("DELETE FROM global_snapshot_partitions WHERE snapshot NOT IN (SELECT snapshot FROM global_snapshots)")
@@ -283,8 +274,8 @@ class GlobalStore:
         params = [snapshot_id, start, end]
         where = ["s.snapshot=?", "o.acquired>=?", "o.acquired<?"]
         if partition_version is not None:
-            # Analytical source/day ownership is immutable and independent of the
-            # rolling presentation interval and cross-product revision selection.
+            
+            
             where[0] = "o.version=?"
             params[0] = partition_version
         filters = filters or {}
@@ -307,8 +298,8 @@ class GlobalStore:
             params += [south, north]
             params += [south, north]
         with closing(self.connect()) as db:
-            # Snapshot partitions are disjoint source/day windows; ID tie collapse
-            # prevents exact cross-product duplicates while preserving platforms.
+            
+            
             source = "global_observations o"
             if partition_version is None:
                 source += " JOIN global_snapshot_observations s ON s.row_id=o.id"
@@ -359,7 +350,7 @@ class GlobalStore:
                 if interval is not None and (p["end"] <= instant(interval[0]).timestamp() or p["start"] >= instant(interval[1]).timestamp()):
                     continue
                 platforms = {row.platform for row in rows if row.source_product == p["source"]}
-                # Explicit source identity supplies coverage even for valid zeroes.
+                
                 platforms.update({"MODIS_NRT": {"terra", "aqua"}, "VIIRS_NOAA20_NRT": {"noaa-20"}, "VIIRS_NOAA21_NRT": {"noaa-21"}, "VIIRS_SNPP_NRT": {"suomi-npp"}}.get(p["source"], set()))
                 coverage.extend(Coverage(datetime.fromisoformat(p["day"]).date(), platform, p["coverage"]) for platform in platforms)
         selected_sources = {row.source_product for row in rows}

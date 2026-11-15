@@ -1,4 +1,4 @@
-"""Offline regression cases from the audited data paths; no NASA quota consumed."""
+
 import asyncio
 import json
 import os
@@ -138,7 +138,7 @@ class AuditDataTests(unittest.TestCase):
         next_day=historical_query('2024-01-02','2024-01-03')
         whole=historical_query('2024-01-01','2024-04-01')
         options={'sourceGeneration':manifest['generation']}
-        with patch.dict(os.environ,{'FIRMS_MAP_KEY':'','SHARP_GLOBAL_INGEST_ENABLED':'0','SHARP_GLOBAL_DB_PATH':str(self.store.path)}), patch('scientific_routes.load_archive',return_value=(manifest,stored)) as loaded, patch.object(api,'shared_firms_store',side_effect=AssertionError('Historical navigation must not acquire NASA data')), TestClient(api.app) as client:
+        with patch.dict(os.environ,{'FIRMS_MAP_KEY':'','SHARP_GLOBAL_INGEST_ENABLED':'0','SHARP_GLOBAL_DB_PATH':str(self.store.path)}), patch('scientific_routes.load_query_archive',return_value=(manifest,stored)) as loaded, patch.object(api,'shared_firms_store',side_effect=AssertionError('Historical navigation must not acquire NASA data')), TestClient(api.app) as client:
             focused=client.post('/analysis/observations',json={'query':next_day,'options':options})
             self.assertEqual(focused.status_code,200,focused.text)
             self.assertEqual(focused.json()['data']['total'],1)
@@ -155,7 +155,7 @@ class AuditDataTests(unittest.TestCase):
             loaded.reset_mock()
             self.assertEqual(client.post('/analysis/observations',json={'query':next_day,'options':{'selectionToken':'expired-token','sourceGeneration':manifest['generation']}}).status_code,409)
             loaded.assert_not_called()
-            # A token for the original focused day cannot silently become another day's group.
+            
             self.assertEqual(client.post('/analysis/observations',json={'query':next_day,'options':{**options,'selectionToken':token}}).status_code,409)
 
     def test_failed_source_keeps_old_retrieval_and_conservative_analytical_expiry(self):

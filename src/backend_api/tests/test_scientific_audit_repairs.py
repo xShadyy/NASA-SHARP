@@ -1,4 +1,4 @@
-"""Offline regressions for authoritative coverage, atomic archives and support."""
+
 import json
 import os
 import sqlite3
@@ -128,7 +128,7 @@ class ScientificAuditRepairsTests(unittest.TestCase):
             self.assertNotEqual(tomorrow["validEnd"], first["validEnd"])
             self.assertTrue(all(feature["properties"]["probability"] is None for feature in tomorrow["features"]["features"]))
 
-    def test_unavailable_forecast_does_not_silently_map_recurrence(self):
+    def test_removed_forecast_route_does_not_silently_substitute_recurrence(self):
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
         from scientific_routes import register_scientific_routes
@@ -138,14 +138,12 @@ class ScientificAuditRepairsTests(unittest.TestCase):
         remember_snapshot(selected, stored)
         app = FastAPI()
         register_scientific_routes(app, None)
-        with TestClient(app) as client, patch("scientific_routes.outlook_document", return_value={"state": "unavailable", "reason": "No validated model", "features": {"type": "FeatureCollection", "features": []}}):
-            forecast = client.post("/analysis/outlook", json={"query": selected}).json()
-            self.assertEqual(forecast["state"], "unavailable")
-            self.assertFalse(forecast["features"]["features"])
-            explicit = client.post("/analysis/outlook", json={"query": selected, "options": {"mode": "historical-activity"}}).json()
-            self.assertEqual(explicit["state"], "historical-activity")
-            self.assertTrue(explicit["features"]["features"])
-            self.assertTrue(all(feature["properties"]["probability"] is None for feature in explicit["features"]["features"]))
+        with TestClient(app) as client:
+            self.assertEqual(client.post("/analysis/outlook", json={"query": selected}).status_code, 404)
+            explicit = client.post("/analysis/recurrence", json={"query": selected})
+            self.assertEqual(explicit.status_code, 200, explicit.text)
+            self.assertTrue(explicit.json()["features"])
+            self.assertTrue(all("probability" not in feature["properties"] for feature in explicit.json()["features"]))
 
     def test_historical_recurrence_uses_full_stored_interval_and_never_revives_expired_selection(self):
         from fastapi import FastAPI
@@ -157,7 +155,7 @@ class ScientificAuditRepairsTests(unittest.TestCase):
         selected = query("2024-01-01", "2024-04-01")
         app = FastAPI()
         register_scientific_routes(app, None)
-        with TestClient(app) as client, patch("scientific_routes.cached_snapshot", side_effect=SelectionInvalid("No full interval cached")), patch("scientific_routes.load_archive", return_value=(manifest, stored)) as loaded:
+        with TestClient(app) as client, patch("scientific_routes.cached_snapshot", side_effect=SelectionInvalid("No full interval cached")), patch("scientific_routes.load_query_archive", return_value=(manifest, stored)) as loaded:
             response = client.post("/analysis/recurrence", json={"query": selected, "options": {"sourceGeneration": manifest["generation"]}})
             self.assertEqual(response.status_code, 200)
             cell = response.json()["features"][0]["properties"]

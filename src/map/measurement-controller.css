@@ -27,8 +27,6 @@
   touch-action: none;
 }
 
-/* GeoJSON symbols use Mercator tiles and clip beyond 85°. These few polar
-   labels use MapLibre's coordinate-anchored Marker at the exact true point. */
 .measurement-polar-label {
   z-index: 5;
   color: #fff;

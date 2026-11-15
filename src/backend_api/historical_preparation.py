@@ -34,6 +34,33 @@ def _save(db, manifest):
     db.execute("INSERT OR REPLACE INTO metadata VALUES(1,?)", (json.dumps(manifest),))
 
 
+def merge_sources(*collections):
+    records = {}
+    for values in collections:
+        for value in values:
+            if not isinstance(value, (str, dict)):
+                raise ValueError("Historical sources must be product names or structured provenance records.")
+            key = json.dumps(value, sort_keys=True, separators=(",", ":"))
+            records[key] = value
+    return [records[key] for key in sorted(records)]
+
+
+def history_status(app, query):
+    storage = getattr(app.state, "global_store", None)
+    root = storage.path.parent / "history" if storage is not None else None
+    path = automatic_archive_path(query, root)
+    progress = {"state": "idle", "message": "Load historical data to prepare this region's seasonal comparison."}
+    if path.is_file():
+        with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=30)) as db:
+            manifest = _metadata(db)
+            progress = dict(manifest.get("preparation") or progress)
+    task = getattr(app.state, "history_tasks", {}).get(str(path))
+    active = task is not None and not task.done()
+    retry_at = max(progress.get("retryAt") or 0, progress.get("refreshAfter") or 0)
+    return {**progress, "active": active, "retryAfterSeconds": max(0, int(retry_at - time.time()) + 1) if retry_at else 0,
+            "explicitRetry": not active and progress.get("state") in {"queued", "loading", "waiting", "partial", "unavailable", "failed"}}
+
+
 def _months(query, options):
     start, end = parse_utc_interval(query["interval"])
     today = datetime.now(UTC).date()
@@ -132,7 +159,7 @@ def _seed(path, query):
         manifest = _metadata(db)
         manifest["seededMonths"] = list({tuple(value) for value in manifest.get("seededMonths", [])} | wanted)
         if rows or records:
-            manifest["sources"] = sorted(set(manifest["sources"]) | set(imported.get("sources", [])))
+            manifest["sources"] = merge_sources(manifest["sources"], imported.get("sources", []))
             manifest["generation"] = hashlib.sha256((manifest["generation"] + imported["generation"]).encode()).hexdigest()
         _save(db, manifest)
 
@@ -150,7 +177,7 @@ def _commit(path, key, rows, day, covered, coverage_state, product, complete):
             db.executemany("INSERT OR REPLACE INTO coverage VALUES(?,?,?)", [(day.isoformat(), platform, coverage_state) for platform in covered])
         db.execute("INSERT OR REPLACE INTO history_requests VALUES(?,?,?,?)", (key, coverage_state, time.time(), 0))
         manifest = _metadata(db)
-        manifest["sources"] = sorted(set(manifest["sources"]) | {product})
+        manifest["sources"] = merge_sources(manifest["sources"], [product])
         manifest["generation"] = hashlib.sha256((manifest["generation"] + key + str(time.time_ns())).encode()).hexdigest()
         manifest["importedAt"] = datetime.now(UTC).isoformat()
         _save(db, manifest)
@@ -267,7 +294,7 @@ async def _run(app, query, path):
             message = "Historical data loading is waiting for the configured data service."
             if isinstance(error, ValueError):
                 message = str(error)
-            await asyncio.to_thread(_progress, path, state="unavailable", message=message)
+            await asyncio.to_thread(_progress, path, state="failed", message=message, retryAt=time.time()+60)
         finally:
             pulse.cancel()
             await asyncio.gather(pulse, return_exceptions=True)
@@ -302,7 +329,7 @@ async def prepare_history(app, query, options=None):
         return {"state": "unavailable", "message": str(error)}
     progress = manifest.get("preparation", {})
     if progress.get("retryAt", 0) > time.time():
-        return progress
+        return await asyncio.to_thread(history_status, app, query)
     tasks = getattr(app.state, "history_tasks", None)
     if tasks is None:
         app.state.history_tasks = tasks = {}
@@ -321,6 +348,7 @@ async def prepare_history(app, query, options=None):
                 for day in range(1, calendar.monthrange(year, month)[1]+1) if date(year, month, day) <= today]
             if requested and all(any(states.get((day, platform)) == "complete" for platform in AFTERNOON_IDS) for day in requested):
                 return await asyncio.to_thread(_progress, path, state="complete", message="Stored seasonal reporting data is ready.")
-            return await asyncio.to_thread(_progress, path, state="unavailable", message="Historical loading needs an available server data connection.")
+            await asyncio.to_thread(_progress, path, state="unavailable", message="Historical loading needs an available server data connection.", retryAt=time.time()+60)
+            return await asyncio.to_thread(history_status, app, query)
         tasks[key] = asyncio.create_task(_run(app, query, path))
-    return progress
+    return await asyncio.to_thread(history_status, app, query)
